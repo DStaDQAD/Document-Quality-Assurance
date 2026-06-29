@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Fact-Checker</title>
+<style>
+  :root {
+    --accent: #3a5a9c;
+    --accent-hover: #2f4a82;
+    --accent-soft: #eaeefa;
+    --green: #1a7f37;
+    --red: #cf222e;
+    --amber: #9a6700;
+    --gray: #6e7781;
+    --border: #d8dee4;
+    --bg-page: #eef0f3;
+    --bg-surface: #ffffff;
+    --bg-soft: #f6f8fa;
+    --text: #1f2328;
+    --text-soft: #6e7781;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(31, 35, 40, 0.04), 0 10px 30px rgba(31, 35, 40, 0.08);
+    --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.06);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 2.5rem 1rem;
+    color: var(--text);
+    background: var(--bg-page);
+  }
+
+  .app-shell {
+    max-width: 800px;
+    margin: 0 auto;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: calc(var(--radius) + 6px);
+    box-shadow: var(--shadow);
+    padding: 2rem 2.25rem 2.25rem;
+  }
+
+  .app-header { margin-bottom: 1.5rem; }
+  h1 { font-size: 1.45rem; letter-spacing: -0.01em; margin: 0 0 0.3rem; }
+  p.subtitle { color: var(--text-soft); margin: 0; font-size: 0.95rem; }
+
+  .tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.25rem;
+    background: var(--bg-soft);
+    border: 1px solid var(--border);
+    padding: 0.3rem;
+    border-radius: calc(var(--radius) + 4px);
+    margin-bottom: 1.5rem;
+  }
+  .tab-btn {
+    background: none;
+    border: none;
+    padding: 0.55rem 0.4rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.86rem;
+    font-weight: 500;
+    color: var(--text-soft);
+    transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .tab-btn:hover:not(.active) { color: var(--text); }
+  .tab-btn.active {
+    background: var(--bg-surface);
+    color: var(--accent);
+    font-weight: 600;
+    box-shadow: var(--shadow-sm);
+  }
+  .tab-btn:focus-visible, button:focus-visible, select:focus-visible,
+  textarea:focus-visible, input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  @media (max-width: 480px) {
+    .tabs { grid-template-columns: repeat(2, 1fr); }
+  }
+
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  textarea, input[type="file"], select.table-select {
+    width: 100%;
+    padding: 0.65rem 0.75rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-family: inherit;
+    font-size: 0.95rem;
+    margin-bottom: 0.75rem;
+    background: var(--bg-surface);
+    color: var(--text);
+  }
+  textarea { min-height: 120px; resize: vertical; }
+  textarea::placeholder { color: var(--text-soft); }
+  textarea:focus, select.table-select:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  button.submit {
+    background: var(--accent);
+    color: #fff;
+    border: none;
+    padding: 0.6rem 1.2rem;
+    border-radius: var(--radius);
+    cursor: pointer;
+    font-size: 0.95rem;
+    font-weight: 500;
+    transition: background-color 0.15s ease, transform 0.05s ease;
+  }
+  button.submit:hover:not(:disabled) { background: var(--accent-hover); }
+  button.submit:active:not(:disabled) { transform: scale(0.98); }
+  button.submit:disabled { background: var(--gray); cursor: not-allowed; }
+
+  .result-box { margin-top: 1.25rem; }
+
+  .error-banner {
+    background: var(--bg-soft);
+    border-left: 3px solid var(--red);
+    color: var(--red);
+    padding: 0.65rem 0.85rem;
+    border-radius: var(--radius);
+    margin-top: 1rem;
+    font-size: 0.9rem;
+  }
+
+  .summary-line {
+    font-size: 0.95rem;
+    margin-bottom: 1rem;
+    padding: 0.7rem 0.9rem;
+    background: var(--accent-soft);
+    border-radius: var(--radius);
+    color: var(--text);
+  }
+
+  .claim-card {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.95rem 1.1rem;
+    margin-bottom: 0.8rem;
+    background: var(--bg-soft);
+  }
+  .claim-text { font-weight: 600; margin-bottom: 0.55rem; }
+
+  .badge {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    color: #fff;
+    margin-bottom: 0.55rem;
+  }
+  .badge.Entailed { background: var(--green); }
+  .badge.Refuted { background: var(--red); }
+  .badge.Inconclusive { background: var(--amber); }
+  .badge.Error { background: var(--gray); }
+
+  .reasoning { font-size: 0.9rem; line-height: 1.5; margin: 0.4rem 0; }
+
+  pre.sql {
+    position: relative;
+    background: #0d1117;
+    color: #c9d1d9;
+    font-family: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    padding: 1.6rem 0.8rem 0.7rem;
+    border-radius: var(--radius);
+    font-size: 0.82rem;
+    overflow-x: auto;
+    margin: 0.5rem 0 0;
+  }
+  pre.sql::before {
+    content: "SQL";
+    position: absolute;
+    top: 0.5rem;
+    left: 0.8rem;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: rgba(201, 209, 217, 0.5);
+  }
+
+  .loading {
+    color: var(--text-soft);
+    font-size: 0.9rem;
+    margin-top: 0.75rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+  .loading::before {
+    content: "";
+    width: 0.85rem;
+    height: 0.85rem;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .loading::before { animation: none; }
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .table-meta { font-size: 0.85rem; color: var(--text-soft); margin-bottom: 0.5rem; }
+  .table-scroll { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); }
+  table.data-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; white-space: nowrap; }
+  table.data-table th, table.data-table td {
+    padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--border); text-align: left;
+  }
+  table.data-table th {
+    background: var(--bg-soft);
+    position: sticky;
+    top: 0;
+    font-weight: 600;
+    color: var(--text-soft);
+    text-transform: uppercase;
+    font-size: 0.72rem;
+    letter-spacing: 0.03em;
+  }
+  table.data-table tbody tr:hover { background: var(--bg-soft); }
+
+  .pager { display: flex; justify-content: space-between; margin-top: 0.6rem; }
+  .pager button.submit { padding: 0.45rem 0.9rem; font-size: 0.85rem; }
+  .pager button:disabled { background: var(--gray); cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<div class="app-shell">
+
+  <div class="app-header">
+    <h1>Fact-Checker</h1>
+    <p class="subtitle">Verifikasi klaim terhadap data indikator makroekonomi.</p>
+  </div>
+
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="claim">Klaim Tunggal</button>
+    <button class="tab-btn" data-tab="document">Dokumen (teks)</button>
+    <button class="tab-btn" data-tab="pdf">Dokumen (PDF)</button>
+    <button class="tab-btn" data-tab="data">Lihat Data</button>
+  </div>
+
+  <div class="panel active" id="panel-claim">
+    <textarea id="claim-input" placeholder="Contoh: Inflasi pada Q1 2024 sebesar 3.05%"></textarea>
+    <button class="submit" data-action="claim">Verifikasi</button>
+    <div class="result-box" id="claim-result"></div>
+  </div>
+
+  <div class="panel" id="panel-document">
+    <textarea id="document-input" placeholder="Tempel teks dokumen di sini..."></textarea>
+    <button class="submit" data-action="document">Verifikasi Dokumen</button>
+    <div class="result-box" id="document-result"></div>
+  </div>
+
+  <div class="panel" id="panel-pdf">
+    <input type="file" id="pdf-input" accept="application/pdf">
+    <button class="submit" data-action="pdf">Verifikasi PDF</button>
+    <div class="result-box" id="pdf-result"></div>
+  </div>
+
+  <div class="panel" id="panel-data">
+    <select class="table-select" id="table-select"></select>
+    <div class="result-box" id="data-result"></div>
+  </div>
+
+</div>
+
+<script>
+  const STATUS_LABEL = { Entailed: "Benar", Refuted: "Salah", Inconclusive: "Tidak Cukup Data", Error: "Error" };
+
+  document.querySelectorAll(".tab-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById(`panel-${btn.dataset.tab}`).classList.add("active");
+      if (btn.dataset.tab === "data" && !tableListLoaded) {
+        tableListLoaded = true;
+        loadTableList();
+      }
+    });
+  });
+
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+
+  function renderClaimCard(result) {
+    const badgeText = STATUS_LABEL[result.status] || result.status;
+    const sqlBlock = result.sql_query_used
+      ? `<pre class="sql">${escapeHtml(result.sql_query_used)}</pre>`
+      : "";
+    return `
+      <div class="claim-card">
+        <div class="claim-text">${escapeHtml(result.claim)}</div>
+        <span class="badge ${result.status}">${badgeText}</span>
+        <div class="reasoning">${escapeHtml(result.reasoning)}</div>
+        ${sqlBlock}
+      </div>`;
+  }
+
+  function renderDocumentResponse(data) {
+    const cards = data.results.map(renderClaimCard).join("");
+    return `
+      <div class="summary-line">${escapeHtml(data.summary)}</div>
+      ${cards || "<p>Tidak ada klaim yang ditemukan.</p>"}`;
+  }
+
+  async function callApi(url, options, resultEl, renderFn) {
+    resultEl.innerHTML = `<div class="loading">Memproses...</div>`;
+    try {
+      const res = await fetch(url, options);
+      const data = await res.json();
+      if (!res.ok) {
+        resultEl.innerHTML = `<div class="error-banner">${escapeHtml(data.detail || "Terjadi kesalahan.")}</div>`;
+        return;
+      }
+      resultEl.innerHTML = renderFn(data);
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-banner">Gagal menghubungi server: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function withDisabledButton(button, fn) {
+    button.disabled = true;
+    const original = button.textContent;
+    button.textContent = "Memproses...";
+    return fn().finally(() => {
+      button.disabled = false;
+      button.textContent = original;
+    });
+  }
+
+  document.querySelector('[data-action="claim"]').addEventListener("click", (e) => {
+    const claim = document.getElementById("claim-input").value.trim();
+    const resultEl = document.getElementById("claim-result");
+    if (!claim) return;
+    withDisabledButton(e.target, () =>
+      callApi(
+        "/api/verify-claim",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ claim }),
+        },
+        resultEl,
+        (data) => renderClaimCard({ ...data, claim })
+      )
+    );
+  });
+
+  document.querySelector('[data-action="document"]').addEventListener("click", (e) => {
+    const document_ = document.getElementById("document-input").value.trim();
+    const resultEl = document.getElementById("document-result");
+    if (!document_) return;
+    withDisabledButton(e.target, () =>
+      callApi(
+        "/api/verify-document",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ document: document_ }),
+        },
+        resultEl,
+        renderDocumentResponse
+      )
+    );
+  });
+
+  document.querySelector('[data-action="pdf"]').addEventListener("click", (e) => {
+    const fileInput = document.getElementById("pdf-input");
+    const resultEl = document.getElementById("pdf-result");
+    if (!fileInput.files.length) return;
+    const formData = new FormData();
+    formData.append("file", fileInput.files[0]);
+    withDisabledButton(e.target, () =>
+      callApi("/api/verify-document-pdf", { method: "POST", body: formData }, resultEl, renderDocumentResponse)
+    );
+  });
+
+  // --- "Lihat Data" tab: browse raw table contents, including rows ingested from Excel uploads ---
+  let tableListLoaded = false;
+  let currentTable = null;
+  let currentOffset = 0;
+  const TABLE_PAGE_SIZE = 100;
+
+  async function loadTableList() {
+    const select = document.getElementById("table-select");
+    const resultEl = document.getElementById("data-result");
+    try {
+      const res = await fetch("/api/tables");
+      const data = await res.json();
+      if (!res.ok) {
+        resultEl.innerHTML = `<div class="error-banner">${escapeHtml(data.detail || "Terjadi kesalahan.")}</div>`;
+        return;
+      }
+      select.innerHTML = data.tables.map((t) => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join("");
+      if (data.tables.length) {
+        currentTable = data.tables[0];
+        currentOffset = 0;
+        loadTableData();
+      } else {
+        resultEl.innerHTML = "<p>Tidak ada tabel di database.</p>";
+      }
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-banner">Gagal menghubungi server: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function renderTableData(data) {
+    const head = `<tr>${data.columns.map((c) => `<th>${escapeHtml(c)}</th>`).join("")}</tr>`;
+    const body = data.rows
+      .map(
+        (row) =>
+          `<tr>${row.map((cell) => `<td>${cell === null ? "" : escapeHtml(String(cell))}</td>`).join("")}</tr>`
+      )
+      .join("");
+    const from = data.total_rows === 0 ? 0 : data.offset + 1;
+    const to = Math.min(data.offset + data.limit, data.total_rows);
+    return `
+      <div class="table-meta">Menampilkan ${from}-${to} dari ${data.total_rows} baris</div>
+      <div class="table-scroll">
+        <table class="data-table"><thead>${head}</thead><tbody>${body}</tbody></table>
+      </div>
+      <div class="pager">
+        <button class="submit" id="data-prev" ${data.offset === 0 ? "disabled" : ""}>&laquo; Sebelumnya</button>
+        <button class="submit" id="data-next" ${to >= data.total_rows ? "disabled" : ""}>Berikutnya &raquo;</button>
+      </div>`;
+  }
+
+  async function loadTableData() {
+    const resultEl = document.getElementById("data-result");
+    resultEl.innerHTML = `<div class="loading">Memuat...</div>`;
+    try {
+      const res = await fetch(
+        `/api/tables/${encodeURIComponent(currentTable)}?limit=${TABLE_PAGE_SIZE}&offset=${currentOffset}`
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        resultEl.innerHTML = `<div class="error-banner">${escapeHtml(data.detail || "Terjadi kesalahan.")}</div>`;
+        return;
+      }
+      resultEl.innerHTML = renderTableData(data);
+      document.getElementById("data-prev").addEventListener("click", () => {
+        currentOffset = Math.max(0, currentOffset - TABLE_PAGE_SIZE);
+        loadTableData();
+      });
+      document.getElementById("data-next").addEventListener("click", () => {
+        currentOffset += TABLE_PAGE_SIZE;
+        loadTableData();
+      });
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-banner">Gagal menghubungi server: ${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  document.getElementById("table-select").addEventListener("change", (e) => {
+    currentTable = e.target.value;
+    currentOffset = 0;
+    loadTableData();
+  });
+</script>
+
+</body>
+</html>

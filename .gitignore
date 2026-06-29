@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+statistik_makro.db
+.pytest_cache/
+~$*.xlsx
