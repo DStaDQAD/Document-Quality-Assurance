@@ -630,19 +630,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 
   <nav class="sidebar-nav">
     <div class="nav-section-label">Verifikasi</div>
-    <a class="nav-item active-nav" data-tab="claim" title="Klaim Tunggal">
-      <span class="material-symbols-outlined">fact_check</span>
-      <span class="nav-text">Klaim Tunggal</span>
-    </a>
-    <a class="nav-item inactive-nav" data-tab="document" title="Dokumen (Teks)">
-      <span class="material-symbols-outlined">description</span>
-      <span class="nav-text">Dokumen (Teks)</span>
-    </a>
-    <a class="nav-item inactive-nav" data-tab="pdf" title="Dokumen (PDF)">
-      <span class="material-symbols-outlined">picture_as_pdf</span>
-      <span class="nav-text">Dokumen (PDF)</span>
-    </a>
-    <a class="nav-item inactive-nav" data-tab="paired" title="Verifikasi Berpasangan">
+    <a class="nav-item active-nav" data-tab="paired" title="Verifikasi Berpasangan">
       <span class="material-symbols-outlined">compare_arrows</span>
       <span class="nav-text">Verifikasi Berpasangan</span>
     </a>
@@ -664,80 +652,15 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 <!-- ═══ MAIN ═══ -->
 <div class="main">
   <header class="topbar">
-    <span class="topbar-title" id="header-title">Klaim Tunggal</span>
+    <span class="topbar-title" id="header-title">Verifikasi Berpasangan</span>
     <div class="topbar-divider"></div>
     <span class="topbar-sub">Document Quality Assurance</span>
   </header>
 
   <main class="content">
 
-    <!-- Panel: Klaim Tunggal -->
-    <div class="panel active" id="panel-claim">
-      <div class="panel-wrap">
-        <div class="card">
-          <div class="card-header">
-            <label class="form-label">Klaim yang akan diverifikasi</label>
-            <textarea id="claim-input" rows="3" placeholder="Contoh: Inflasi pada Q1 2024 sebesar 3.05%"></textarea>
-          </div>
-          <div class="card-footer">
-            <button class="run-btn" data-action="claim">
-              <span class="material-symbols-outlined">search</span>
-              Verifikasi
-            </button>
-          </div>
-        </div>
-        <div id="claim-result"></div>
-      </div>
-    </div>
-
-    <!-- Panel: Dokumen Teks -->
-    <div class="panel" id="panel-document">
-      <div class="panel-wrap">
-        <div class="card">
-          <div class="card-header">
-            <label class="form-label">Teks Dokumen</label>
-            <textarea id="document-input" rows="8" placeholder="Tempel teks dokumen di sini..." style="min-height:160px"></textarea>
-          </div>
-          <div class="card-footer">
-            <button class="run-btn" data-action="document">
-              <span class="material-symbols-outlined">search</span>
-              Verifikasi Dokumen
-            </button>
-          </div>
-        </div>
-        <div id="document-result"></div>
-      </div>
-    </div>
-
-    <!-- Panel: Dokumen PDF -->
-    <div class="panel" id="panel-pdf">
-      <div class="panel-wrap">
-        <div class="card">
-          <div class="card-header">
-            <label class="form-label">Upload PDF</label>
-            <div class="dropzone" id="pdf-dropzone">
-              <div class="dz-icon">
-                <span class="material-symbols-outlined">upload_file</span>
-              </div>
-              <div class="dz-title">Pilih atau drop file PDF</div>
-              <div class="dz-sub">Format: .pdf</div>
-              <div class="dz-filename" id="pdf-filename">Belum ada file dipilih</div>
-              <input type="file" id="pdf-input" accept="application/pdf" style="display:none">
-            </div>
-          </div>
-          <div class="card-footer">
-            <button class="run-btn" data-action="pdf">
-              <span class="material-symbols-outlined">search</span>
-              Verifikasi PDF
-            </button>
-          </div>
-        </div>
-        <div id="pdf-result"></div>
-      </div>
-    </div>
-
     <!-- Panel: Verifikasi Berpasangan -->
-    <div class="panel" id="panel-paired">
+    <div class="panel active" id="panel-paired">
       <div class="paired-container" id="paired-container">
         <div class="paired-form-area">
           <div class="card" style="margin-bottom:0">
@@ -792,8 +715,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 </div><!-- .app -->
 
 <script>
-  const STATUS_LABEL = { Entailed: "Benar", Refuted: "Salah", Inconclusive: "Tidak Cukup Data", Error: "Error" };
-  const PANEL_TITLES = { claim: "Klaim Tunggal", document: "Dokumen (Teks)", pdf: "Dokumen (PDF)", paired: "Verifikasi Berpasangan", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi Berpasangan", data: "Lihat Data" };
 
   document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
     item.addEventListener("click", () => {
@@ -820,27 +742,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
     return div.innerHTML;
   }
 
-  function renderClaimCard(result) {
-    const badgeText = STATUS_LABEL[result.status] || result.status;
-    const sqlBlock = result.sql_query_used
-      ? `<pre class="sql">${escapeHtml(result.sql_query_used)}</pre>`
-      : "";
-    return `
-      <div class="claim-card ${result.status}">
-        <div class="claim-text">${escapeHtml(result.claim)}</div>
-        <span class="badge ${result.status}">${badgeText}</span>
-        <div class="reasoning">${escapeHtml(result.reasoning)}</div>
-        ${sqlBlock}
-      </div>`;
-  }
-
-  function renderDocumentResponse(data) {
-    const cards = data.results.map(renderClaimCard).join("");
-    return `
-      <div class="summary-line">${escapeHtml(data.summary)}</div>
-      ${cards || "<p class='muted-text'>Tidak ada klaim yang ditemukan.</p>"}`;
-  }
-
   async function callApi(url, options, resultEl, renderFn) {
     resultEl.innerHTML = `<div class="loading">Memproses...</div>`;
     try {
@@ -865,58 +766,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
       button.innerHTML = origHTML;
     });
   }
-
-  // Claim
-  document.querySelector('[data-action="claim"]').addEventListener("click", (e) => {
-    const claim = document.getElementById("claim-input").value.trim();
-    const resultEl = document.getElementById("claim-result");
-    if (!claim) return;
-    withDisabledButton(e.currentTarget, () =>
-      callApi("/api/verify-claim",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ claim }) },
-        resultEl, (data) => renderClaimCard({ ...data, claim }))
-    );
-  });
-
-  // Document
-  document.querySelector('[data-action="document"]').addEventListener("click", (e) => {
-    const document_ = document.getElementById("document-input").value.trim();
-    const resultEl = document.getElementById("document-result");
-    if (!document_) return;
-    withDisabledButton(e.currentTarget, () =>
-      callApi("/api/verify-document",
-        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ document: document_ }) },
-        resultEl, renderDocumentResponse)
-    );
-  });
-
-  // PDF dropzone
-  (function () {
-    const dz = document.getElementById("pdf-dropzone");
-    const inp = document.getElementById("pdf-input");
-    const fn  = document.getElementById("pdf-filename");
-    dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => { fn.textContent = inp.files[0]?.name || "Belum ada file dipilih"; });
-    dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
-    dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
-    dz.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dz.classList.remove("drag-over");
-      const file = e.dataTransfer.files[0];
-      if (file) { const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files; fn.textContent = file.name; }
-    });
-  })();
-
-  document.querySelector('[data-action="pdf"]').addEventListener("click", (e) => {
-    const inp = document.getElementById("pdf-input");
-    const resultEl = document.getElementById("pdf-result");
-    if (!inp.files.length) return;
-    const formData = new FormData();
-    formData.append("file", inp.files[0]);
-    withDisabledButton(e.currentTarget, () =>
-      callApi("/api/verify-document-pdf", { method: "POST", body: formData }, resultEl, renderDocumentResponse)
-    );
-  });
 
   // Paired dropzones
   function setupDropzone(dzId, inpId, fnId) {
