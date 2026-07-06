@@ -45,15 +45,27 @@ touches a number:
 1. **Excel parsing** (`excel_parser_bi.py`) - fully deterministic. Uses `openpyxl` + cell style
    heuristics to locate headers, data rows, unit label, and column periods.
 2. **PDF text extraction** (`pdf_extraction.py`) - `pypdf` first, falling back to Gemini vision
-   OCR if the extracted text is too sparse.
-3. **Structured fact extraction** (`structured_extractor.py`) - the *only* LLM step. The model
-   extracts `(metric_label, year, month, value_raw, unit, claim_type, context_quote)` tuples from
-   the narrative, anchored to the Excel's own row labels. It may only copy `value_raw` verbatim
-   from the source text - all numeric parsing happens afterward in Python
-   (`_parse_indonesian_number`), so a hallucinated or misformatted number can never reach the
-   comparison step.
-4. **Comparison and verdict** (`paired_verifier.py`) - fully deterministic fuzzy label lookup,
-   unit conversion, and delta/YoY checks against the Excel. No LLM judges the result.
+   OCR if the extracted text is too sparse. The extracted narrative text is shared between fact
+   verification and the typo/grammar check below, so the vision fallback only ever runs once.
+3. **Structured fact extraction** (`structured_extractor.py`) - the *only* LLM step in fact
+   verification. Claims are represented as an **operation** (`value`, `yoy_growth`, `average`,
+   `sum`, `diff`, `ratio`, `is_increasing`, `is_decreasing`, `is_stable`) over one or more
+   `(metric_label, year, month, value_raw, unit)` data points, anchored to the Excel's own row
+   labels - so claims more complex than a single point-in-time value (multi-period averages,
+   cross-metric ratios, trend statements) are supported without a schema change per pattern. The
+   model may only copy `value_raw` verbatim from the source text - all numeric parsing happens
+   afterward in Python (`_parse_indonesian_number`), so a hallucinated or misformatted number can
+   never reach the comparison step.
+4. **Comparison and verdict** (`paired_verifier.py`) - fully deterministic. Every data point is a
+   direct dict lookup into the parsed Excel tables (fuzzy label matching, unit conversion); the
+   operation itself (average, sum, diff, ratio, monotonic-trend check, YoY growth) is computed in
+   plain Python, never by an LLM, to avoid hallucination risk in the comparison step.
+5. **Typo/grammar check** (`typo_checker.py`) - runs on the same extracted narrative text,
+   independent of fact verification. A free, deterministic dictionary/rule pass (`phunspell`
+   id_ID + a curated tidak-baku word list + reduplication detection) handles clear-cut cases;
+   only genuinely ambiguous words are escalated to a single batched LLM call, deduplicated by
+   unique word so the call is bounded by vocabulary size rather than document length. Returned
+   as `typo_check` alongside the fact-verification results.
 
 ## Setup
 
@@ -81,8 +93,11 @@ pip install -r requirements.txt
    uvicorn main:app --reload
    ```
 
-A small web UI is served at `http://127.0.0.1:8000/` (claim/document verification, Excel upload,
-and a raw table browser). Interactive API docs: `http://127.0.0.1:8000/docs`.
+A small web UI is served at `http://127.0.0.1:8000/` with two tabs: **Verifikasi Berpasangan**
+(Mode 2 - upload a PDF + Excel, see fact-check and typo/grammar results) and **Lihat Data** (a
+raw browser over every table in the SQLite database, including any `.xlsx` sources ingested via
+`/api/upload-excel-source`). Mode 1's single-claim/document verification has no UI form - it is
+reachable only via the API endpoints below. Interactive API docs: `http://127.0.0.1:8000/docs`.
 
 ## API
 
@@ -92,7 +107,7 @@ and a raw table browser). Interactive API docs: `http://127.0.0.1:8000/docs`.
 | `/api/verify-document` | POST | Extract every checkable claim from a block of text, verify each, return a per-claim report plus an aggregate summary. |
 | `/api/verify-document-pdf` | POST | Same as above, but the document is an uploaded digital PDF (falls back to Gemini vision OCR if extracted text is too sparse). |
 | `/api/upload-excel-source` | POST | Upload a `.xlsx` file to ingest as a new data source into `excel_facts`. Trusted-uploader endpoint, no auth - meant for a developer/small team, not arbitrary public users. |
-| `/api/verify-paired` | POST | Mode 2. Upload a PDF report plus its companion BI-format Excel file; verifies every quantitative claim in the PDF narrative against the Excel's authoritative values. |
+| `/api/verify-paired` | POST | Mode 2. Upload a PDF report plus its companion BI-format Excel file; verifies every quantitative claim in the PDF narrative against the Excel's authoritative values, plus an Indonesian typo/grammar check on the same narrative text. |
 | `/api/tables` | GET | List every table in the database. |
 | `/api/tables/{table_name}` | GET | Paginated raw rows for one table (`?limit=&offset=`). |
 | `/health` | GET | Liveness check. |
@@ -156,6 +171,53 @@ curl -X POST http://127.0.0.1:8000/api/verify-paired \
 
 `excel_file` accepts multiple files (repeat the `-F "excel_file=@..."` flag); `sheet_names` is a
 comma-separated list, one sheet name per file, and is reused for any remaining files if shorter.
+
+```json
+{
+  "pdf_filename": "laporan.pdf",
+  "excel_filenames": ["TABEL1_1.xls"],
+  "excel_sheets": ["I.1"],
+  "excel_units": ["triliun Rp"],
+  "total_facts": 2,
+  "entailed_count": 1,
+  "refuted_count": 1,
+  "inconclusive_count": 0,
+  "results": [
+    {
+      "operation": "value",
+      "metric_label": "Uang Kartal",
+      "matched_excel_source": "TABEL1_1.xls / I.1",
+      "periods": [{"metric_label": "Uang Kartal", "year": 2024, "month": "Maret", "excel_value": 123.4}],
+      "claimed_value": 123.4, "claimed_unit": "triliun Rp",
+      "computed_value": 123.4, "computed_unit": "triliun Rp",
+      "delta": 0.0, "verdict": "Entailed",
+      "reasoning": "...", "context_quote": "...", "page_number": 1
+    },
+    {
+      "operation": "yoy_growth",
+      "metric_label": "M2",
+      "matched_excel_source": "TABEL1_1.xls / I.1",
+      "periods": [
+        {"metric_label": "M2", "year": 2024, "month": "Maret", "excel_value": 8900.0},
+        {"metric_label": "M2", "year": 2023, "month": "Maret", "excel_value": 8500.0}
+      ],
+      "claimed_value": 6.0, "claimed_unit": "persen_yoy",
+      "computed_value": 4.7, "computed_unit": "persen_yoy",
+      "delta": 1.3, "verdict": "Refuted",
+      "reasoning": "...", "context_quote": "...", "page_number": 2
+    }
+  ],
+  "typo_check": {
+    "total_issues": 1,
+    "ejaan_count": 1, "tidak_baku_count": 0, "grammar_count": 0,
+    "summary": "1 issue found: 1 spelling.",
+    "issues": [
+      {"word": "inflsi", "start": 120, "end": 126, "category": "ejaan",
+       "suggestion": "inflasi", "explanation": "...", "page_number": 1}
+    ]
+  }
+}
+```
 
 ## Tests
 
