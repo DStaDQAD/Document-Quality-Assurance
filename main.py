@@ -55,14 +55,19 @@ Pipeline:
 """
 
 import asyncio
+import hashlib
+import hmac
 import logging
+import os
 import re
+import secrets
+import time
 from pathlib import Path
 
 from typing import List
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
 from excel_ingestion import ingest_bytes
@@ -99,12 +104,120 @@ app = FastAPI(
     description="Text-to-SQL + LLM-as-a-Judge fact-checking pipeline over a structured statistical database.",
 )
 
+# --- Access control (cookie session, login overlay lives in the shell) -----
+# Only the data APIs require a session; the app shell (index.html) is served
+# openly so the frontend can render the real UI *blurred* behind a login card
+# and reveal it in place once the user logs in (no page redirect). Credentials
+# come from the environment (APP_USERNAME / APP_PASSWORD) - never hard-code
+# them, since this repo is public. If either is unset, auth is OFF (handy for
+# local dev and tests); set both as Secrets on the host to enable it in prod.
+#
+# /api/login sets a signed, HttpOnly session cookie; the middleware then lets
+# /api/* calls through only if that cookie is present and valid (else 401).
+# The shell, /health, and the auth endpoints themselves stay open.
+SESSION_COOKIE = "dqa_session"
+SESSION_MAX_AGE = 12 * 3600  # re-login required after 12 hours
+_OPEN_API_PATHS = {"/api/auth-status", "/api/login", "/api/logout"}
+
+
+def _auth_enabled() -> bool:
+    return bool(os.getenv("APP_USERNAME") and os.getenv("APP_PASSWORD"))
+
+
+def _session_secret() -> bytes:
+    """Key used to sign session cookies. Uses SESSION_SECRET if set, otherwise a
+    stable value derived from the credentials, so no extra Secret is required
+    (changing the password invalidates existing sessions, which is fine)."""
+    explicit = os.getenv("SESSION_SECRET")
+    if explicit:
+        return explicit.encode()
+    seed = f"{os.getenv('APP_USERNAME', '')}:{os.getenv('APP_PASSWORD', '')}"
+    return hashlib.sha256(seed.encode()).digest()
+
+
+def _issue_session() -> str:
+    payload = f"{os.getenv('APP_USERNAME', '')}:{int(time.time())}"
+    sig = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{payload}.{sig}"
+
+
+def _valid_session(cookie: str) -> bool:
+    payload, sep, sig = cookie.rpartition(".")
+    if not sep:
+        return False
+    expected = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(sig, expected):
+        return False
+    user, sep, issued = payload.partition(":")
+    if not sep or user != os.getenv("APP_USERNAME", ""):
+        return False
+    try:
+        return (time.time() - int(issued)) < SESSION_MAX_AGE
+    except ValueError:
+        return False
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    path = request.url.path
+    # Everything except the data APIs is open (the shell page, /health, static,
+    # and the auth endpoints). Only gate /api/* that isn't an auth endpoint.
+    if not _auth_enabled() or not path.startswith("/api/") or path in _OPEN_API_PATHS:
+        return await call_next(request)
+    if _valid_session(request.cookies.get(SESSION_COOKIE, "")):
+        return await call_next(request)
+    return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+# --------------------------------------------------------------------------
+
 STATIC_DIR = Path(__file__).parent / "static"
 
 
 @app.get("/")
 async def ui_root() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/api/auth-status")
+async def auth_status(request: Request) -> dict:
+    """Lets the shell decide whether to show the login overlay. Open endpoint."""
+    authed = (not _auth_enabled()) or _valid_session(request.cookies.get(SESSION_COOKIE, ""))
+    return {"auth_required": _auth_enabled(), "authenticated": authed}
+
+
+@app.post("/api/login")
+async def api_login(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    ok = (
+        _auth_enabled()
+        and secrets.compare_digest(username, os.getenv("APP_USERNAME", ""))
+        and secrets.compare_digest(password, os.getenv("APP_PASSWORD", ""))
+    )
+    if not ok:
+        return JSONResponse({"ok": False, "detail": "Invalid credentials"}, status_code=401)
+
+    # Behind the host's TLS proxy the internal scheme is http, so trust the
+    # forwarded proto to decide whether the cookie may be marked Secure.
+    is_https = request.headers.get("x-forwarded-proto", request.url.scheme) == "https"
+    resp = JSONResponse({"ok": True})
+    resp.set_cookie(
+        SESSION_COOKIE,
+        _issue_session(),
+        max_age=SESSION_MAX_AGE,
+        httponly=True,
+        samesite="lax",
+        secure=is_https,
+    )
+    return resp
+
+
+@app.post("/api/logout")
+async def api_logout() -> JSONResponse:
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(SESSION_COOKIE)
+    return resp
 
 
 @app.post("/api/verify-claim", response_model=VerifyClaimResponse)
@@ -229,26 +342,38 @@ async def extract_pdf_text_endpoint(
     }
 
 
-@app.post("/api/upload-excel-source", response_model=UploadExcelSourceResponse)
-async def upload_excel_source_endpoint(file: UploadFile = File(...)) -> UploadExcelSourceResponse:
-    file_bytes = await file.read()
-    filename = file.filename or "upload.xlsx"
-
-    try:
-        summary = ingest_bytes(file_bytes, filename, llm=get_llm(temperature=0.0))
-    except Exception as exc:
-        logger.warning("Excel ingestion failed for upload %r: %s", filename, exc)
-        raise HTTPException(status_code=400, detail=f"Could not ingest Excel file: {exc}") from exc
-
-    return UploadExcelSourceResponse(
-        filename=filename,
-        n_sheets=summary.n_sheets,
-        n_facts=summary.n_facts,
-        auto_aggregate=summary.auto_aggregate,
-        auto_not_aggregate=summary.auto_not_aggregate,
-        llm_escalated=summary.llm_escalated,
-        defaulted=summary.defaulted,
-    )
+# --- DISABLED for shared/multi-division deployment ------------------------
+# /api/upload-excel-source writes uploaded workbooks into the shared "ground
+# truth" database (excel_facts), i.e. the reference data every later fact-check
+# is compared against. With the app exposed to other divisions and no auth,
+# any caller could alter that reference data ("data poisoning"), so the
+# endpoint is intentionally turned off. The everyday PDF+Excel flow
+# (/api/verify-paired) is unaffected - it never touches this DB.
+#
+# To restore (ideally gate behind an admin-only token first), uncomment below.
+# The imports it needs (ingest_bytes, UploadExcelSourceResponse) are kept.
+#
+# @app.post("/api/upload-excel-source", response_model=UploadExcelSourceResponse)
+# async def upload_excel_source_endpoint(file: UploadFile = File(...)) -> UploadExcelSourceResponse:
+#     file_bytes = await file.read()
+#     filename = file.filename or "upload.xlsx"
+#
+#     try:
+#         summary = ingest_bytes(file_bytes, filename, llm=get_llm(temperature=0.0))
+#     except Exception as exc:
+#         logger.warning("Excel ingestion failed for upload %r: %s", filename, exc)
+#         raise HTTPException(status_code=400, detail=f"Could not ingest Excel file: {exc}") from exc
+#
+#     return UploadExcelSourceResponse(
+#         filename=filename,
+#         n_sheets=summary.n_sheets,
+#         n_facts=summary.n_facts,
+#         auto_aggregate=summary.auto_aggregate,
+#         auto_not_aggregate=summary.auto_not_aggregate,
+#         llm_escalated=summary.llm_escalated,
+#         defaulted=summary.defaulted,
+#     )
+# --------------------------------------------------------------------------
 
 
 @app.post("/api/verify-paired", response_model=PairedVerificationResponse)

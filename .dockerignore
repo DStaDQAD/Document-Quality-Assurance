@@ -1,0 +1,15 @@
+# Keep the image small and never bake secrets or local junk into it.
+.git/
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.env.example
+*.db
+sample_data/
+tests/
+.claude/
+*.drawio
+*.md

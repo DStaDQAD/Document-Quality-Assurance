@@ -53,9 +53,11 @@ def test_extract_text_from_pdf_returns_empty_string_when_no_pages_at_all(mock_pd
 # extract_narrative_text (pypdf, falling back to vision when too short)
 # ---------------------------------------------------------------------------
 
+@patch("pdf_extraction._count_total_pages")
 @patch("pdf_extraction.extract_text_from_pdf")
-def test_extract_narrative_text_skips_vision_when_pypdf_text_is_long_enough(mock_extract_text):
+def test_extract_narrative_text_skips_vision_when_pypdf_text_is_long_enough(mock_extract_text, mock_count_pages):
     mock_extract_text.return_value = "[== Halaman 1 ==]\n" + "x" * 250
+    mock_count_pages.return_value = 1
 
     result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
 
@@ -84,3 +86,24 @@ def test_extract_narrative_text_skips_vision_fallback_when_no_vision_llm_provide
 
     mock_vision.assert_not_called()
     assert result == "too short"
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_extract_narrative_text_falls_back_to_vision_when_most_pages_are_blank(
+    mock_extract_text, mock_vision, mock_count_pages
+):
+    # Chart-only PDF: pypdf clears MIN_USEFUL_CHARS in aggregate from just 2 of 10 pages
+    # (stray chart-axis numbers), but 8 of 10 pages produced no text at all.
+    mock_extract_text.return_value = (
+        "[== Halaman 1 ==]\n" + "a" * 150 + "\n\n[== Halaman 5 ==]\n" + "b" * 150
+    )
+    mock_count_pages.return_value = 10
+    mock_vision.return_value = "[== Halaman 1 ==]\nReal narrative text."
+
+    vision_llm = Mock()
+    result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=vision_llm))
+
+    mock_vision.assert_called_once_with(b"%PDF-1.4 fake", vision_llm)
+    assert result == mock_vision.return_value

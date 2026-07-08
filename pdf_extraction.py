@@ -78,6 +78,17 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     return "\n\n".join(parts)
 
 
+def _count_total_pages(file_bytes: bytes) -> int:
+    """Total page count, used to detect PDFs where most pages have no text layer at all.
+
+    A document can clear MIN_USEFUL_CHARS in aggregate while still being almost entirely
+    image/chart pages with no extractable text (e.g. a handful of stray chart-axis numbers
+    on 2 of 10 pages) - that case needs the vision fallback just as much as a uniformly
+    short document does, but a pure char-count check over the whole document can't see it.
+    """
+    return len(PdfReader(io.BytesIO(file_bytes)).pages)
+
+
 def extract_text_from_pdf_vision(
     file_bytes: bytes,
     vision_llm: BaseChatModel,
@@ -348,17 +359,35 @@ async def extract_narrative_text(file_bytes: bytes, vision_llm: Optional[BaseCha
     """
     text = extract_text_from_pdf(file_bytes)
     content_chars = len(PAGE_MARKER_RE.sub('', text).strip())
-    if content_chars < MIN_USEFUL_CHARS:
+    too_short = content_chars < MIN_USEFUL_CHARS
+
+    # A document can clear MIN_USEFUL_CHARS in aggregate while still being almost entirely
+    # image/chart pages - only checked when the char count alone looks fine, so fake/short
+    # bytes in the too-short branch never reach a second real PdfReader parse.
+    mostly_blank_pages = False
+    if not too_short:
+        pages_with_text = len(PAGE_MARKER_RE.findall(text))
+        total_pages = _count_total_pages(file_bytes)
+        mostly_blank_pages = total_pages > 0 and pages_with_text / total_pages < 0.5
+
+    if too_short or mostly_blank_pages:
         if vision_llm is None:
             logger.warning(
-                "PDF content too short (%d chars excl. markers) and no vision_llm provided — "
-                "pass vision_llm=get_vision_llm() to enable the fallback.",
+                "PDF content too short or mostly blank pages (%d chars excl. markers) and no "
+                "vision_llm provided — pass vision_llm=get_vision_llm() to enable the fallback.",
                 content_chars,
             )
         else:
             logger.info(
-                "PDF content too short (%d chars excl. markers), falling back to vision extraction",
+                "PDF content too short or mostly blank pages (%d chars excl. markers), "
+                "falling back to vision extraction",
                 content_chars,
             )
             text = await extract_text_from_pdf_vision_async(file_bytes, vision_llm)
+    else:
+        # pypdf faithfully reproduces the wide inter-character spacing PDF generators use to
+        # justify table columns (e.g. "Uang El ektroni k"), which fragments words and floods
+        # downstream consumers like typo_checker with bogus candidates. The vision path already
+        # runs this per-page (see extract_text_from_pdf_vision_async); the pypdf path needs it too.
+        text = _strip_tabular_content(text)
     return text

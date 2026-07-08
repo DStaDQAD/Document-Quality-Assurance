@@ -1,3 +1,13 @@
+---
+title: Document Quality Assurance
+emoji: 📊
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Fact-Checker
 
 Verifies natural-language claims about statistical data. The project has two independent
