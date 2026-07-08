@@ -306,6 +306,26 @@ def _read_xlsx(data: bytes, sheet_name: str):
 # Public API
 # ---------------------------------------------------------------------------
 
+def list_sheet_names(data: bytes) -> List[str]:
+    """Return the worksheet names in an .xls/.xlsx workbook (format by magic bytes).
+
+    Used to populate the sheet picker in the UI so users choose from the actual
+    sheets instead of typing a name. Reads only workbook metadata (fast).
+    """
+    if data[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+        import xlrd  # optional dependency, only needed for legacy .xls
+        return list(xlrd.open_workbook(file_contents=data, on_demand=True).sheet_names())
+    elif data[:4] == b'PK\x03\x04':
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
+        try:
+            return list(wb.sheetnames)
+        finally:
+            wb.close()
+    else:
+        raise ValueError("Unrecognized file format: expected .xls or .xlsx bytes.")
+
+
 def parse_bi_table(data: bytes, sheet_name: str) -> BITableData:
     """Parse a BI statistical table from .xls or .xlsx bytes.
 

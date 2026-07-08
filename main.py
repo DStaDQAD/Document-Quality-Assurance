@@ -70,6 +70,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
+from excel_parser_bi import list_sheet_names
 from excel_ingestion import ingest_bytes
 from llm_provider import get_llm, get_vision_llm
 from orchestrator import verify_document
@@ -222,6 +223,17 @@ async def api_logout() -> JSONResponse:
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(SESSION_COOKIE)
     return resp
+
+
+@app.post("/api/excel-sheets")
+async def excel_sheets_endpoint(file: UploadFile = File(...)) -> dict:
+    """List the worksheet names in an uploaded .xls/.xlsx file, for the sheet picker."""
+    data = await file.read()
+    try:
+        return {"sheets": list_sheet_names(data)}
+    except Exception as exc:
+        logger.warning("Could not list sheets for %r: %s", file.filename, exc)
+        raise HTTPException(status_code=400, detail=f"Tidak bisa membaca sheet Excel: {exc}") from exc
 
 
 @app.post("/api/verify-claim", response_model=VerifyClaimResponse)

@@ -373,6 +373,15 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .source-sheet-row { display: flex; align-items: center; gap: 8px; }
 .source-sheet-row label { font-size: 11px; color: var(--text-500); white-space: nowrap; }
 .source-sheet-row input { width: 72px; }
+.source-sheet-row select {
+  flex: 1; min-width: 0; max-width: 240px;
+  font-size: 12px; font-family: inherit; color: var(--text-900);
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r);
+  background: var(--white); cursor: pointer;
+  transition: border-color .12s, box-shadow .12s;
+}
+.source-sheet-row select:focus { outline: none; border-color: var(--blue-400); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.source-sheet-row select:disabled { color: var(--text-400); background: #F4F7FC; cursor: default; }
 .add-excel-btn {
   display: flex; align-items: center; gap: 4px; margin-top: 8px;
   font-size: 12px; color: var(--blue-500); cursor: pointer;
@@ -986,19 +995,53 @@ body.auth-locked .app {
 
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  let excelSources = []; // [{container, inp, sheetInp}]
+  let excelSources = []; // [{container, inp, sheetSelect}]
 
-  function attachDropzoneBehavior(dz, inp, fn) {
+  function attachDropzoneBehavior(dz, inp, fn, onFile) {
     dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => setFilenameText(fn, inp.files[0]?.name || "Pilih file Excel"));
+    inp.addEventListener("change", () => {
+      const file = inp.files[0];
+      setFilenameText(fn, file?.name || "Pilih file Excel");
+      if (file && onFile) onFile(file);
+    });
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
     dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
     dz.addEventListener("drop", (e) => {
       e.preventDefault();
       dz.classList.remove("drag-over");
       const file = e.dataTransfer.files[0];
-      if (file) { const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files; setFilenameText(fn, file.name); }
+      if (file) {
+        const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files;
+        setFilenameText(fn, file.name);
+        if (onFile) onFile(file);
+      }
     });
+  }
+
+  // Ask the backend which sheets the chosen workbook has, and fill the dropdown.
+  async function loadSheetsIntoSelect(file, select) {
+    select.disabled = true;
+    select.innerHTML = `<option value="">Memuat daftar sheet…</option>`;
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/excel-sheets", { method: "POST", body: fd });
+      if (!res.ok) throw new Error("bad response");
+      const sheets = (await res.json()).sheets || [];
+      if (sheets.length === 0) throw new Error("no sheets");
+      select.innerHTML = "";
+      sheets.forEach((name) => {
+        const opt = document.createElement("option");
+        opt.value = name; opt.textContent = name;
+        select.appendChild(opt);
+      });
+      // Default to a BI-style "I.1" sheet when present, otherwise the first one.
+      select.value = sheets.includes("I.1") ? "I.1" : sheets[0];
+      select.disabled = false;
+    } catch (_) {
+      select.innerHTML = `<option value="">Gagal memuat sheet</option>`;
+      select.disabled = true;
+    }
   }
 
   function updateRemoveButtons() {
@@ -1025,21 +1068,23 @@ body.auth-locked .app {
       </div>
       <div class="source-sheet-row">
         <label>Sheet:</label>
-        <input type="text" class="excel-sheet-inp" value="I.1" spellcheck="false">
+        <select class="excel-sheet-select" disabled>
+          <option value="">—</option>
+        </select>
       </div>`;
     const inp     = container.querySelector(`#excel-inp-${uid}`);
     const fn      = container.querySelector(`#excel-fn-${uid}`);
     const dz      = container.querySelector(`#excel-dz-${uid}`);
-    const sheetInp = container.querySelector(".excel-sheet-inp");
+    const sheetSelect = container.querySelector(".excel-sheet-select");
     const removeBtn = container.querySelector(".remove-excel-btn");
-    attachDropzoneBehavior(dz, inp, fn);
+    attachDropzoneBehavior(dz, inp, fn, (file) => loadSheetsIntoSelect(file, sheetSelect));
     removeBtn.addEventListener("click", () => {
       if (excelSources.length <= 1) return;
       excelSources = excelSources.filter(s => s.container !== container);
       container.remove();
       updateRemoveButtons();
     });
-    excelSources.push({ container, inp, sheetInp });
+    excelSources.push({ container, inp, sheetSelect });
     document.getElementById("excel-sources-container").appendChild(container);
     updateRemoveButtons();
   }
@@ -1389,7 +1434,7 @@ body.auth-locked .app {
     }
     const formData = new FormData();
     formData.append("pdf_file", pdfInp.files[0]);
-    const sheetNames = filledSources.map(s => s.sheetInp.value.trim() || "I.1").join(",");
+    const sheetNames = filledSources.map(s => s.sheetSelect.value || "I.1").join(",");
     filledSources.forEach(s => formData.append("excel_file", s.inp.files[0]));
     withDisabledButton(e.currentTarget, () =>
       callApi(`/api/verify-paired?sheet_names=${encodeURIComponent(sheetNames)}`,
