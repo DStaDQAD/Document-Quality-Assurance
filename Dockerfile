@@ -17,7 +17,7 @@ RUN pip install --no-cache-dir --user -r requirements.txt
 # Copy the application code.
 COPY --chown=user . .
 
-# Hugging Face Spaces routes external traffic to this port.
+# Hugging Face Spaces routes external traffic to this port; Render assigns its own via $PORT.
 EXPOSE 7860
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD uvicorn main:app --host 0.0.0.0 --port ${PORT:-7860}
