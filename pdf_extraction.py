@@ -109,7 +109,7 @@ def extract_text_from_pdf_vision(
         Narrative text extracted from the PDF pages, or empty string on failure.
     """
     try:
-        import pypdfium2 as pdfium  # installed as pdfplumber dependency
+        import pypdfium2 as pdfium
     except ImportError:
         raise RuntimeError(
             "pypdfium2 is required for vision-based PDF extraction. "
