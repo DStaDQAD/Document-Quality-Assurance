@@ -93,7 +93,7 @@ class BITableData:
         q_lower = query.lower()
         for label in self.row_labels:
             l_lower = label.lower()
-            if q_lower in l_lower or l_lower.startswith(q_lower[:12]):
+            if q_lower in l_lower or l_lower in q_lower:
                 return label
         if self.title and self._query_matches_table_subject(query):
             for label in self.row_labels:
@@ -114,12 +114,16 @@ class BITableData:
         v = self._data.get((query, year, month))
         if v is not None:
             return query, v
-        # Substring (case-insensitive, longest match wins)
+        # Tier 2: one name is contained in the other, either direction (shortest match wins).
+        # Containment both ways — rather than a shared fixed-length prefix — is what keeps
+        # distinct metrics that merely start alike apart: "Uang Beredar Digital" must NOT bind
+        # to "Uang Beredar Luas(M2)" (neither contains the other), whereas "Tota"→"Total" and a
+        # verbose query ending in an exact label name still resolve correctly.
         q_lower = query.lower()
         best_label: Optional[str] = None
         for label in self.row_labels:
             l_lower = label.lower()
-            if q_lower in l_lower or l_lower.startswith(q_lower[:12]):
+            if q_lower in l_lower or l_lower in q_lower:
                 v = self._data.get((label, year, month))
                 if v is not None:
                     if best_label is None or len(label) < len(best_label):

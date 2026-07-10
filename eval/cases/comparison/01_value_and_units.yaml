@@ -77,6 +77,27 @@
   expected:
     verdict: Inconclusive
 
+- id: value_prefix_collision_not_matched_inconclusive
+  description: >
+    Regression guard: a claim about a DIFFERENT metric that merely shares a long prefix with a
+    real row ("Uang Beredar Digital" vs "Uang Beredar Luas(M2)") must NOT be mis-bound and
+    Refuted — neither name contains the other, so the verdict is Inconclusive. Guards the
+    lookup_fuzzy prefix-collision fix (was Refuted under the old startswith[:12] rule).
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 500.0
+    context_quote: "Uang Beredar Digital sebesar Rp500 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Digital", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive
+
 - id: value_unit_incompatible_inconclusive
   description: "Rupiah claim against a USD-denominated table → no conversion factor → Inconclusive"
   table:

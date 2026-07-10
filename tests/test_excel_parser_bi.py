@@ -83,6 +83,27 @@ def test_lookup_fuzzy_returns_none_when_nothing_matches():
     assert value is None
 
 
+def test_lookup_fuzzy_does_not_bind_distinct_metric_sharing_a_prefix():
+    # A distinct metric that merely shares a long prefix with a real row must NOT be matched:
+    # neither name contains the other. (Regression for the old startswith(query[:12]) rule that
+    # mis-bound e.g. "Uang Beredar Digital" to "Uang Beredar Luas(M2)" and reported it Refuted.)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "I.1"
+    ws.append(["Uang Beredar dan faktor-faktor yang mempengaruhinya"])
+    ws.append(["(Miliar Rp)"])
+    ws.append([])
+    ws.append([None, None, None, 2026])
+    ws.append([None, None, None, "Jan"])
+    ws.append([1, None, "Uang Beredar Luas(M2)", 10116181.856])
+    result = parse_bi_table(_save(wb), "I.1")
+
+    matched_label, value = result.lookup_fuzzy("Uang Beredar Digital", 2026, "Jan")
+
+    assert matched_label is None
+    assert value is None
+
+
 def test_available_periods_returns_all_periods_for_matched_label():
     result = parse_bi_table(_build_bi_workbook_bytes(), "I.1")
 
