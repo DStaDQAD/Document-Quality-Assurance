@@ -1,0 +1,34 @@
+# Layer-2 (end-to-end) EXAMPLE case.
+#
+# This runs the WHOLE pipeline (LLM extraction + verdict) on a real PDF + Excel, so it needs
+# API keys in .env and the referenced files present locally. The BI sample files are gitignored
+# (not committed), so this case runs on the reviewer's machine, not from a fresh clone.
+#
+# The two claims below are REAL and verified against sample_data/TABEL1_1.xls (sheet I.1):
+# the PDF states "Posisi M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun atau tumbuh
+# sebesar 9,2% (yoy)"; Excel gives 10.253,6519 triliun and 9,2221% yoy → both Entailed.
+#
+# To extend: add Refuted claims (a number the PDF gets wrong vs Excel) and Inconclusive claims
+# (a metric/period the Excel source doesn't cover) so the verdict metrics exercise all 3 classes.
+# 'metric' is matched tolerantly (containment) against the LLM's extracted label, so a short,
+# distinctive form like "M2" is usually the safest.
+
+- id: m2_april_2026_narrative
+  description: "BI M2 April 2026 report vs TABEL1_1.xls sheet I.1"
+  pdf: "sample_data/test case_Analisis Uang Beredar Posisi April 2026.pdf"
+  excel: "sample_data/TABEL1_1.xls"
+  sheets: "I.1"
+  claims:
+    - metric: "M2"
+      operation: value
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      note: "Rp10.253,7 triliun vs Excel 10.253,6519 triliun (within tolerance)"
+
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      note: "9,2% (yoy) vs Excel 9,2221%"

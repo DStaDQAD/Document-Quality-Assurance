@@ -19,7 +19,7 @@ Scoring both with one number hides which half is at fault. So the harness is spl
 | Layer | Scores | LLM? | Reproducible | Runner |
 |------|--------|------|--------------|--------|
 | **1** | comparison engine only | no | yes (CI-safe) | `run_comparison_eval.py` |
-| **2** | full pipeline (extraction + verdict) | yes | no (snapshot) | `run_e2e_eval.py` *(planned)* |
+| **2** | full pipeline (extraction + verdict) | yes | no (snapshot) | `run_e2e_eval.py` |
 
 ## Layer 1 — comparison-engine eval (available now)
 
@@ -72,9 +72,51 @@ Notes:
 - Keep labelled verdicts *aspirational* (what a correct verifier should do). A case that
   fails is the harness earning its keep — investigate the engine, don't just relabel it.
 
-## Layer 2 — end-to-end eval (planned)
+## Layer 2 — end-to-end eval
 
 Document-level labels: for a real PDF + Excel, list the claims that should be extracted and
-their expected verdicts. The runner runs the full `verify_paired`, matches extracted facts to
-labels, and reports extraction recall, spurious-fact count (hallucination proxy), and verdict
-accuracy. Requires API keys and is run on demand, not in CI.
+their expected verdicts. The runner runs the full pipeline (`extract_narrative_text` +
+`verify_paired`, i.e. real LLM extraction), matches the returned facts to the labels, and
+reports three separate axes:
+
+- **Extraction recall** — of the labelled claims, how many the pipeline actually found.
+- **Spurious facts** — extracted facts matching no label (a proxy for hallucinated claims).
+- **Verdict accuracy** — precision/recall/F1 + confusion matrix, computed *only over matched
+  claims* (extraction quality and verdict quality are different failures, kept apart).
+
+Matching (`matching.py`) is tolerant but anchored: same operation, the claim's periods present
+among the result's periods (a subset — `yoy_growth` adds the prior-year point), and containment
+on the metric name. It is unit-tested deterministically (`tests/test_eval_e2e.py`); only the
+runner needs a provider.
+
+### Run it (needs API keys + local files)
+
+```bash
+python -m eval.run_e2e_eval                     # runs eval/cases/e2e/*.yaml
+python -m eval.run_e2e_eval --json out.json
+```
+
+Requires `LLM_PROVIDER` + the matching `*_API_KEY` in `.env`; without them the runner prints a
+clear message and exits rather than throwing. Cases point at **local** PDF/Excel files (the BI
+samples are gitignored), so this runs on the reviewer's machine, not from a fresh clone.
+
+### Label a document
+
+See `eval/cases/e2e/example_m2_april_2026.yaml` for a worked, verified example. Each case:
+
+```yaml
+- id: unique_id
+  pdf: "sample_data/report.pdf"       # local path (relative to repo root)
+  excel: "sample_data/TABEL1_1.xls"   # a string, or a list for multiple sources
+  sheets: "I.1"                        # a string, or one per Excel file
+  claims:
+    - metric: "M2"                     # matched tolerantly against the LLM's extracted label
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      note: "optional reviewer note"
+```
+
+Aim for a mix of Entailed, Refuted, and Inconclusive claims so the verdict metrics mean
+something — especially Refuted, the class that proves the tool catches wrong numbers.
