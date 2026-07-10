@@ -1,0 +1,88 @@
+# Layer-1 comparison cases: operation=average / sum / diff.
+# Real M2 2026 (miliar Rp): Jan 10.116.181,856 | Feb 10.088.126,602 | Mar 10.355.718,157 | Apr 10.253.651,888
+
+- id: average_m2_jan_apr_entailed
+  description: "Average of M2 Jan–Apr 2026 in triliun (real = 10.203,4196)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Jan, value: 10116181.856}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Feb, value: 10088126.602}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Mar, value: 10355718.157}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: average
+    unit: "triliun Rp"
+    claimed_value: 10203.4
+    context_quote: "rata-rata M2 Januari–April 2026 sebesar Rp10.203,4 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Jan}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Feb}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Mar}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10203.4196
+
+- id: average_one_month_missing_inconclusive
+  description: "One month of the averaged range absent from the table → Inconclusive"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Jan, value: 10116181.856}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Feb, value: 10088126.602}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Mar, value: 10355718.157}
+  fact:
+    operation: average
+    unit: "triliun Rp"
+    claimed_value: 10203.4
+    context_quote: "rata-rata M2 Januari–April 2026"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Jan}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Feb}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Mar}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive
+
+- id: sum_m2_jan_feb_entailed
+  description: "Sum of M2 Jan+Feb 2026 in triliun (real = 20.204,3085)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Jan, value: 10116181.856}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Feb, value: 10088126.602}
+  fact:
+    operation: sum
+    unit: "triliun Rp"
+    claimed_value: 20204.3
+    context_quote: "total M2 Januari dan Februari 2026 sebesar Rp20.204,3 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Jan}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Feb}
+  expected:
+    verdict: Entailed
+    computed_value: 20204.3085
+
+- id: diff_m2_mar_apr_entailed
+  description: "Selisih M2 Apr − Mar 2026 in triliun (real = −102,0663, a decline)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Mar, value: 10355718.157}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: diff
+    unit: "triliun Rp"
+    claimed_value: -102.1
+    context_quote: "M2 turun Rp102,1 triliun dari Maret ke April 2026"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Mar}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: -102.0663

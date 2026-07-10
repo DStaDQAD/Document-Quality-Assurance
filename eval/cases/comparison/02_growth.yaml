@@ -1,0 +1,59 @@
+# Layer-1 comparison cases: operation=yoy_growth.
+# Prior-year same-month point is fetched automatically by the engine, so the fact lists
+# only the current point. Real M2: Apr-2026 = 10.253.651,888 | Apr-2025 = 9.387.895,1895 (miliar Rp)
+# → true yoy = 9,2221%.
+
+- id: yoy_m2_apr_entailed
+  description: "M2 yoy growth Apr-2026 (real ≈ 9,2%) stated correctly"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+      - {label: "Uang Beredar Luas(M2)", year: 2025, month: Apr, value: 9387895.1895}
+  fact:
+    operation: yoy_growth
+    unit: "persen_yoy"
+    claimed_value: 9.2
+    context_quote: "M2 tumbuh 9,2% (yoy) pada April 2026"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 9.2221
+
+- id: yoy_m2_apr_refuted
+  description: "Overstated yoy growth (10,8% vs real 9,2%)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+      - {label: "Uang Beredar Luas(M2)", year: 2025, month: Apr, value: 9387895.1895}
+  fact:
+    operation: yoy_growth
+    unit: "persen_yoy"
+    claimed_value: 10.8
+    context_quote: "M2 tumbuh 10,8% (yoy)"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Refuted
+    computed_value: 9.2221
+
+- id: yoy_prior_year_missing_inconclusive
+  description: "No prior-year datapoint for the yoy denominator → Inconclusive"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: yoy_growth
+    unit: "persen_yoy"
+    claimed_value: 9.2
+    context_quote: "M2 tumbuh 9,2% (yoy)"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive

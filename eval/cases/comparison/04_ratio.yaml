@@ -1,0 +1,41 @@
+# Layer-1 comparison cases: operation=ratio (numerator point / denominator point).
+# Real Apr-2026 (miliar Rp): M1 = 3.342.386,4215 | M2 = 10.253.651,888 → M1/M2 = 32,597%.
+
+- id: ratio_m1_to_m2_entailed
+  description: "M1-to-M2 ratio Apr-2026 as a percentage (real = 32,597%)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Sempit (M1)", year: 2026, month: Apr, value: 3342386.4215}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: ratio
+    unit: "persen"
+    claimed_value: 32.6
+    context_quote: "rasio M1 terhadap M2 sebesar 32,6%"
+    periods:
+      - {metric_label: "Uang Beredar Sempit (M1)", year: 2026, month: Apr}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 32.597
+
+- id: ratio_denominator_zero_inconclusive
+  description: "Denominator datapoint is zero → ratio undefined → Inconclusive"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Sempit (M1)", year: 2026, month: Apr, value: 3342386.4215}
+      - {label: "Dana Pihak Ketiga", year: 2026, month: Apr, value: 0.0}
+  fact:
+    operation: ratio
+    unit: "persen"
+    claimed_value: 40.0
+    context_quote: "rasio M1 terhadap DPK sebesar 40%"
+    periods:
+      - {metric_label: "Uang Beredar Sempit (M1)", year: 2026, month: Apr}
+      - {metric_label: "Dana Pihak Ketiga", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive

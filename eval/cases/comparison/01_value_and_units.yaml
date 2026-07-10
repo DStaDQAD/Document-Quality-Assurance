@@ -1,0 +1,97 @@
+# Layer-1 comparison cases: operation=value, plus unit conversion and the two
+# inconclusive paths (metric not found, unit conversion unsupported).
+# Table values are REAL Bank Indonesia M2 figures (TABEL1_1.xls, sheet I.1, Miliar Rp).
+
+- id: value_m2_apr_triliun_entailed
+  description: "M2 level Apr-2026 stated in triliun matches Excel (miliar) after ÷1000 conversion"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    filename: "TABEL1_1.xls"
+    sheet: "I.1"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519
+
+- id: value_m2_apr_triliun_refuted
+  description: "Claimed M2 level is materially wrong (10.250 vs real 10.253,7 triliun)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10250.0
+    context_quote: "M2 sebesar Rp10.250,0 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Refuted
+    computed_value: 10253.6519
+
+- id: value_m2_apr_miliar_entailed
+  description: "Same value stated directly in miliar Rp (no conversion, factor=1)"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "miliar Rp"
+    claimed_value: 10253651.9
+    context_quote: "M2 sebesar Rp10.253.651,9 miliar"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253651.888
+
+- id: value_metric_not_found_inconclusive
+  description: >
+    Claim references a metric absent from the table AND sharing no prefix with any row
+    (so the fuzzy matcher can't mis-bind it) → Inconclusive.
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 500.0
+    context_quote: "Kredit Perbankan sebesar Rp500 triliun"
+    periods:
+      - {metric_label: "Kredit Perbankan", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive
+
+- id: value_unit_incompatible_inconclusive
+  description: "Rupiah claim against a USD-denominated table → no conversion factor → Inconclusive"
+  table:
+    title: "Posisi Cadangan Devisa"
+    unit: "Juta USD"
+    filename: "TABEL5_9 (1).xls"
+    sheet: "5.9"
+    data:
+      - {label: "Emas Moneter", year: 2026, month: Apr, value: 12872.75}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 200.0
+    context_quote: "Emas moneter senilai Rp200 triliun"
+    periods:
+      - {metric_label: "Emas Moneter", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive

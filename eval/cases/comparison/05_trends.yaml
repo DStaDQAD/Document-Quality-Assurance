@@ -1,0 +1,96 @@
+# Layer-1 comparison cases: operation=is_increasing / is_decreasing / is_stable.
+# These are directional claims with no explicit number (claimed_value/unit omitted → null).
+# Uang Kartal 2026 (miliar Rp): Jan 1.156.846,7184 | Feb 1.159.800,0482 | Mar 1.206.116,3638 (rising)
+
+- id: is_increasing_kartal_entailed
+  description: "Uang Kartal genuinely rises Jan→Feb→Mar 2026"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Jan, value: 1156846.7184}
+      - {label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Feb, value: 1159800.0482}
+      - {label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Mar, value: 1206116.3638}
+  fact:
+    operation: is_increasing
+    context_quote: "uang kartal terus meningkat dari Januari hingga Maret 2026"
+    periods:
+      - {metric_label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Jan}
+      - {metric_label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Feb}
+      - {metric_label: "Uang Kartal di Luar Bank Umum dan BPR", year: 2026, month: Mar}
+  expected:
+    verdict: Entailed
+
+- id: is_increasing_m2_refuted
+  description: "M2 dips Jan→Feb (10.116→10.088) so a 'terus meningkat' claim is Refuted"
+  table:
+    title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+    unit: "Miliar Rp"
+    data:
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Jan, value: 10116181.856}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Feb, value: 10088126.602}
+      - {label: "Uang Beredar Luas(M2)", year: 2026, month: Mar, value: 10355718.157}
+  fact:
+    operation: is_increasing
+    context_quote: "M2 terus meningkat sepanjang triwulan pertama 2026"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Jan}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Feb}
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Mar}
+  expected:
+    verdict: Refuted
+
+- id: is_decreasing_reserves_entailed
+  description: "'Cadangan Devisa Lainnya' falls Mar→Apr 2026 (126.772 → 124.650)"
+  table:
+    title: "Posisi Cadangan Devisa"
+    unit: "Juta USD"
+    data:
+      - {label: "Cadangan Devisa Lainnya", year: 2026, month: Mar, value: 126772.28}
+      - {label: "Cadangan Devisa Lainnya", year: 2026, month: Apr, value: 124650.04}
+  fact:
+    operation: is_decreasing
+    context_quote: "cadangan devisa lainnya menurun dari Maret ke April 2026"
+    periods:
+      - {metric_label: "Cadangan Devisa Lainnya", year: 2026, month: Mar}
+      - {metric_label: "Cadangan Devisa Lainnya", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+
+- id: is_stable_rate_entailed
+  description: "Policy rate held flat at 6,00% across three months → stable within tolerance"
+  table:
+    title: "Suku Bunga Kebijakan"
+    unit: "persen"
+    data:
+      - {label: "BI-Rate", year: 2026, month: Jan, value: 6.0}
+      - {label: "BI-Rate", year: 2026, month: Feb, value: 6.0}
+      - {label: "BI-Rate", year: 2026, month: Mar, value: 6.0}
+  fact:
+    operation: is_stable
+    context_quote: "BI-Rate dipertahankan stabil di level 6,00%"
+    periods:
+      - {metric_label: "BI-Rate", year: 2026, month: Jan}
+      - {metric_label: "BI-Rate", year: 2026, month: Feb}
+      - {metric_label: "BI-Rate", year: 2026, month: Mar}
+  expected:
+    verdict: Entailed
+
+- id: is_stable_rate_refuted
+  description: "Rate actually cut 6,00 → 5,50 → 5,00, so a 'stable' claim is Refuted"
+  table:
+    title: "Suku Bunga Kebijakan"
+    unit: "persen"
+    data:
+      - {label: "BI-Rate", year: 2026, month: Jan, value: 6.0}
+      - {label: "BI-Rate", year: 2026, month: Feb, value: 5.5}
+      - {label: "BI-Rate", year: 2026, month: Mar, value: 5.0}
+  fact:
+    operation: is_stable
+    context_quote: "BI-Rate relatif stabil sepanjang triwulan pertama"
+    periods:
+      - {metric_label: "BI-Rate", year: 2026, month: Jan}
+      - {metric_label: "BI-Rate", year: 2026, month: Feb}
+      - {metric_label: "BI-Rate", year: 2026, month: Mar}
+  expected:
+    verdict: Refuted
