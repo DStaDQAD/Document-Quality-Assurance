@@ -96,6 +96,12 @@ class TypoCheckResponse(BaseModel):
     issues: List[TypoIssue]
 
 
+class TableSuggestion(BaseModel):
+    """A BI table family that likely contains the data for claims found Inconclusive."""
+    table: str            # human-readable table family, e.g. "Uang Primer (M0) — SEKI Tabel I.2"
+    metrics: List[str]    # the inconclusive metric labels that point at this family
+
+
 class PairedVerificationResponse(BaseModel):
     pdf_filename: str
     excel_filenames: List[str]
@@ -107,6 +113,9 @@ class PairedVerificationResponse(BaseModel):
     inconclusive_count: int
     results: List[FactVerificationResult]
     typo_check: Optional[TypoCheckResponse] = None
+    # Populated when Inconclusive claims match a known BI table family the user did not
+    # upload — tells them WHICH statistical table would make those claims checkable.
+    table_suggestions: List[TableSuggestion] = Field(default_factory=list)
 
 
 class TableListResponse(BaseModel):

@@ -94,6 +94,32 @@
     verdict: Entailed
     computed_value: 7.0757
 
+- id: yoy_dpk_binds_to_jumlah_row_via_subject_synonym
+  description: >
+    Regression guard for the Jumlah fallback: the M2 report says "Penghimpunan DPK" but the
+    matching table is titled 'Posisi Simpanan Masyarakat ...' and its aggregate row is
+    'Jumlah', not 'Total'. The subject-synonym bridge (dpk→simpanan) plus recognising
+    'Jumlah' as a total-row spelling must connect them. Real TABEL1_19 values: yoy 9,4909%
+    vs the report's 9,5% → Entailed.
+  table:
+    title: "I.19 POSISI SIMPANAN MASYARAKAT RUPIAH DAN VALAS BANK UMUM DAN BPR MENURUT PROVINSI"
+    unit: "Miliar Rp"
+    filename: "TABEL1_19.xls"
+    sheet: "1.19"
+    data:
+      - {label: "Jumlah", year: 2026, month: Apr, value: 9566972.7347}
+      - {label: "Jumlah", year: 2025, month: Apr, value: 8737690.5627}
+  fact:
+    operation: yoy_growth
+    unit: "persen_yoy"
+    claimed_value: 9.5
+    context_quote: "Penghimpunan DPK pada April 2026 tercatat sebesar Rp9.567,7 triliun atau tumbuh 9,5% (yoy)"
+    periods:
+      - {metric_label: "Penghimpunan DPK", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 9.4909
+
 - id: yoy_prior_year_missing_inconclusive
   description: "No prior-year datapoint for the yoy denominator → Inconclusive"
   table:

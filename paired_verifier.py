@@ -20,7 +20,12 @@ from typing import Dict, List, Optional, Tuple
 from langchain_core.language_models import BaseChatModel
 
 from excel_parser_bi import BITableData, parse_bi_table
-from schemas import FactVerificationResult, PairedVerificationResponse, PeriodResult
+from schemas import (
+    FactVerificationResult,
+    PairedVerificationResponse,
+    PeriodResult,
+    TableSuggestion,
+)
 from structured_extractor import (
     ExtractedFact,
     PeriodPoint,
@@ -356,6 +361,57 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
 
 # ---------------------------------------------------------------------------
+# Table-family suggestions for Inconclusive claims
+# ---------------------------------------------------------------------------
+
+# Known BI statistical-table families and the metric keywords that point at them. A BI M2
+# report cites series from ~4 different SEKI tables; users typically upload only I.1 and then
+# see the rest come back Inconclusive with no hint of WHICH table would cover them. Keyword
+# matching is on the extracted metric label (lowercased substring), deterministic on purpose.
+_TABLE_FAMILY_HINTS: List[Tuple[str, Tuple[str, ...]]] = [
+    (
+        "Uang Primer / M0 (SEKI Tabel 1.2)",
+        ("m0", "uang primer", "uang kartal yang diedarkan", "uyd", "giro bank umum"),
+    ),
+    (
+        "Posisi Simpanan Masyarakat / DPK (mis. TABEL1_19 — SEKI Tabel 1.19)",
+        ("dpk", "dana pihak ketiga", "deposito", "tabungan masyarakat"),
+    ),
+    (
+        "Posisi Kredit Bank Umum & BPR (SEKI Tabel 1.5 dst — KMK/KI/KK per jenis penggunaan)",
+        (
+            "kredit", "kmk", "kredit modal kerja", "kredit investasi", "kredit konsumsi",
+            "kepemilikan rumah", "kendaraan bermotor", "multiguna", "debitur",
+        ),
+    ),
+]
+
+
+def _build_table_suggestions(results: List[FactVerificationResult]) -> List[TableSuggestion]:
+    """Map Inconclusive claims to the BI table family that likely carries their data.
+
+    Only claims that resolved against NO source at all (matched_excel_source is None) are
+    considered — an Inconclusive caused by e.g. a unit mismatch already found its table.
+    """
+    metrics_by_family: Dict[str, List[str]] = {}
+    for r in results:
+        if r.verdict != "Inconclusive" or r.matched_excel_source is not None:
+            continue
+        label_lower = r.metric_label.lower()
+        for family, keywords in _TABLE_FAMILY_HINTS:
+            if any(kw in label_lower for kw in keywords):
+                bucket = metrics_by_family.setdefault(family, [])
+                if r.metric_label not in bucket:
+                    bucket.append(r.metric_label)
+                break  # first matching family wins; families are ordered specific-first
+
+    return [
+        TableSuggestion(table=family, metrics=metrics)
+        for family, metrics in metrics_by_family.items()
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -469,4 +525,5 @@ async def verify_paired(
         refuted_count=refuted,
         inconclusive_count=inconclusive,
         results=results,
+        table_suggestions=_build_table_suggestions(results),
     )

@@ -6,11 +6,13 @@ import pytest
 from excel_parser_bi import BITableData
 from paired_verifier import (
     _ExcelSource,
+    _build_table_suggestions,
     _deduplicate_facts,
     _evaluate_fact,
     _unit_factor,
     verify_paired,
 )
+from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint
 
 
@@ -341,6 +343,62 @@ def test_deduplicate_facts_keeps_first_occurrence_for_same_key():
     assert len(result) == 2
     assert result[0].context_quote == "first"
     assert result[1].periods[0].month == "May"
+
+
+# ---------------------------------------------------------------------------
+# _build_table_suggestions
+# ---------------------------------------------------------------------------
+
+def _make_result(metric_label, verdict="Inconclusive", matched_source=None):
+    return FactVerificationResult(
+        operation="yoy_growth",
+        metric_label=metric_label,
+        matched_excel_source=matched_source,
+        verdict=verdict,
+        reasoning="",
+        context_quote="q",
+    )
+
+
+def test_build_table_suggestions_groups_unfound_metrics_by_family():
+    results = [
+        _make_result("M0 adjusted"),
+        _make_result("uang kartal yang diedarkan"),
+        _make_result("Penghimpunan DPK"),
+        _make_result("Kredit Modal Kerja (KMK)"),
+        _make_result("kredit kendaraan bermotor"),
+        _make_result("metrik tak dikenal sama sekali"),  # no family → no suggestion
+    ]
+
+    suggestions = _build_table_suggestions(results)
+
+    by_table = {s.table: s.metrics for s in suggestions}
+    assert len(by_table) == 3
+    m0 = next(t for t in by_table if "Uang Primer" in t)
+    dpk = next(t for t in by_table if "DPK" in t)
+    kredit = next(t for t in by_table if "Kredit" in t)
+    assert by_table[m0] == ["M0 adjusted", "uang kartal yang diedarkan"]
+    assert by_table[dpk] == ["Penghimpunan DPK"]
+    assert by_table[kredit] == ["Kredit Modal Kerja (KMK)", "kredit kendaraan bermotor"]
+
+
+def test_build_table_suggestions_skips_non_inconclusive_and_sourced_results():
+    results = [
+        _make_result("Kredit Modal Kerja (KMK)", verdict="Entailed"),
+        # Inconclusive but a source WAS found (e.g. unit mismatch) → data isn't missing.
+        _make_result("penyaluran kredit", matched_source="TABEL1_1.xls / I.1"),
+    ]
+
+    assert _build_table_suggestions(results) == []
+
+
+def test_build_table_suggestions_deduplicates_repeated_metrics():
+    results = [_make_result("Penghimpunan DPK"), _make_result("Penghimpunan DPK")]
+
+    suggestions = _build_table_suggestions(results)
+
+    assert len(suggestions) == 1
+    assert suggestions[0].metrics == ["Penghimpunan DPK"]
 
 
 # ---------------------------------------------------------------------------

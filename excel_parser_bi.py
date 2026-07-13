@@ -29,7 +29,7 @@ figures for a claim about total bank credit.
 import io
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import ClassVar, Dict, List, Optional, Tuple
 
 MONTH_ABBREVS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -73,25 +73,51 @@ class BITableData:
         return self._data.get((row_label, year, month))
 
     # Words too generic to indicate semantic overlap between a query and the table title.
-    _TITLE_STOP_WORDS: frozenset = frozenset({
+    # Includes report-speak verbs ("penghimpunan DPK", "penyaluran kredit") that describe an
+    # action on the subject rather than naming a different subject.
+    _TITLE_STOP_WORDS: ClassVar[frozenset] = frozenset({
         "dan", "di", "ke", "dari", "untuk", "yang", "pada", "atau", "dalam",
-        "dengan", "oleh", "atas", "total", "posisi", "indonesia", "bank",
+        "dengan", "oleh", "atas", "total", "jumlah", "posisi", "indonesia", "bank",
+        "penghimpunan", "penyaluran", "pertumbuhan", "perkembangan", "tercatat",
         "the", "of", "a", "an", "and", "in", "for",
     })
 
-    def _query_matches_table_subject(self, query: str) -> bool:
-        """Return True when significant words in query overlap with the table title.
+    # Report terminology whose official table titles use a different wording — e.g. the M2
+    # report says "DPK" while the corresponding table is titled "Posisi Simpanan Masyarakat".
+    # A query word counts as covered by the title when the word itself OR any synonym is there.
+    _SUBJECT_SYNONYMS: ClassVar[Dict[str, frozenset]] = {
+        "dpk": frozenset({"simpanan", "dana", "pihak", "ketiga"}),
+    }
 
-        Used to decide whether a generic 'Total' row is the right aggregate for
-        a query that names the table's overall subject (e.g. query='Cadangan Devisa'
-        against a table titled 'Cadangan Devisa Indonesia').
+    # Row labels that represent the table-wide aggregate; BI uses both spellings.
+    _TOTAL_ROW_NAMES: ClassVar[frozenset] = frozenset({"total", "jumlah"})
+
+    def _query_matches_table_subject(self, query: str) -> bool:
+        """Return True when the query names this table's overall subject (per the title).
+
+        Used to decide whether a generic 'Total'/'Jumlah' row is the right aggregate for
+        the query (e.g. query='Cadangan Devisa' against a table titled 'Cadangan Devisa
+        Indonesia', or query='Penghimpunan DPK' against 'Posisi Simpanan Masyarakat ...').
+
+        EVERY significant query word must be covered by the title (directly or via
+        _SUBJECT_SYNONYMS) — mere overlap is not enough, because a query with an extra
+        uncovered word ('DPK korporasi') names a BREAKDOWN of the subject, and answering
+        it with the table-wide total row would compare against the wrong series.
         """
         def sig_words(text: str) -> set:
             return {
                 w.lower() for w in re.findall(r'\w+', text)
                 if len(w) > 2 and w.lower() not in self._TITLE_STOP_WORDS
             }
-        return bool(sig_words(query) & sig_words(self.title))
+        # Canonicalise multi-word report terms to the abbreviation the synonym map keys on.
+        q_words = sig_words(query.lower().replace("dana pihak ketiga", "dpk"))
+        if not q_words:
+            return False
+        title_words = sig_words(self.title)
+        return all(
+            w in title_words or (self._SUBJECT_SYNONYMS.get(w, frozenset()) & title_words)
+            for w in q_words
+        )
 
     def available_periods(self, query: str) -> List[Tuple[int, str]]:
         """Return all (year, month) pairs that have data for the label closest matching query.
@@ -157,7 +183,7 @@ class BITableData:
                 return min(tier, key=lambda t: t[1])[0]
         if self.title and self._query_matches_table_subject(query):
             for label in self.row_labels:
-                if label.strip().lower() == "total":
+                if label.strip().lower() in self._TOTAL_ROW_NAMES:
                     return label
         return None
 
@@ -185,10 +211,11 @@ class BITableData:
             if with_data:
                 best = min(with_data, key=lambda t: t[1])[0]
                 return best, self._data[(best, year, month)]
-        # Title-aware Total fallback: query describes this table's subject → return 'Total' row
+        # Title-aware total-row fallback: query describes this table's subject → return the
+        # aggregate row (BI labels it 'Total' or 'Jumlah' depending on the table).
         if self.title and self._query_matches_table_subject(query):
             for label in self.row_labels:
-                if label.strip().lower() == "total":
+                if label.strip().lower() in self._TOTAL_ROW_NAMES:
                     v = self._data.get((label, year, month))
                     if v is not None:
                         return label, v

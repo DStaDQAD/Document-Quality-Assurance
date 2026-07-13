@@ -75,6 +75,44 @@ def test_lookup_fuzzy_falls_back_to_total_row_when_query_matches_table_subject()
     assert value == 100.0
 
 
+def _build_dpk_workbook_bytes():
+    """Mimics TABEL1_19: deposits-by-province table whose aggregate row is 'Jumlah'."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "1.19"
+    ws.append(["I.19 POSISI SIMPANAN MASYARAKAT RUPIAH DAN VALAS BANK UMUM DAN BPR MENURUT PROVINSI"])
+    ws.append(["(Miliar Rp)"])
+    ws.append([])
+    ws.append([None, None, None, 2026])
+    ws.append([None, None, None, "Jan"])
+    ws.append([1, None, "Sumatera Utara", 350000.0])
+    ws.append([2, None, "Jumlah", 9566972.0])
+    return _save(wb)
+
+
+def test_lookup_fuzzy_falls_back_to_jumlah_row_for_dpk_queries():
+    # The M2 report says "Penghimpunan DPK"; the matching table is titled 'Posisi Simpanan
+    # Masyarakat ...' and its aggregate row is 'Jumlah' (not 'Total'). The subject-synonym
+    # bridge (dpk→simpanan) plus the Jumlah spelling must connect them.
+    result = parse_bi_table(_build_dpk_workbook_bytes(), "1.19")
+
+    for query in ("Penghimpunan DPK", "DPK", "dana pihak ketiga", "simpanan masyarakat"):
+        matched_label, value = result.lookup_fuzzy(query, 2026, "Jan")
+        assert matched_label == "Jumlah", query
+        assert value == 9566972.0
+
+
+def test_lookup_fuzzy_does_not_answer_dpk_breakdowns_with_the_total_row():
+    # 'DPK korporasi' names a BREAKDOWN (by holder) that this table does not carry —
+    # answering it with the table-wide 'Jumlah' row would compare against the wrong series.
+    result = parse_bi_table(_build_dpk_workbook_bytes(), "1.19")
+
+    for query in ("DPK korporasi", "DPK nasabah lainnya", "pertumbuhan giro"):
+        matched_label, value = result.lookup_fuzzy(query, 2026, "Jan")
+        assert matched_label is None, query
+        assert value is None
+
+
 def test_lookup_fuzzy_returns_none_when_nothing_matches():
     result = parse_bi_table(_build_bi_workbook_bytes(), "I.1")
 
