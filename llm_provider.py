@@ -14,6 +14,14 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "groq").lower()
 
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+# Gemini 2.5 models spend "thinking" tokens on internal reasoning by default, which
+# multiplies per-call latency several-fold. Every Gemini call in this pipeline (reading
+# text off page images, extracting facts to a schema, typo verdicts) is pattern matching
+# rather than multi-step reasoning, so thinking is disabled by default for speed.
+# Set GEMINI_THINKING_BUDGET=-1 to restore the model's default dynamic thinking, or a
+# positive token cap. NOTE: gemini-2.5-pro rejects 0 (it cannot disable thinking) — use
+# -1 or >=128 if GEMINI_MODEL is ever pointed at pro.
+GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
@@ -47,6 +55,13 @@ if LLM_PROVIDER != "ollama":
         )
 
 
+def _gemini_thinking_kwargs() -> dict:
+    """thinking_budget kwarg for ChatGoogleGenerativeAI, or {} when -1 (model default)."""
+    if GEMINI_THINKING_BUDGET >= 0:
+        return {"thinking_budget": GEMINI_THINKING_BUDGET}
+    return {}
+
+
 def get_llm(temperature: float = 0.0) -> BaseChatModel:
     if LLM_PROVIDER == "groq":
         return ChatGroq(model=GROQ_MODEL, temperature=temperature, groq_api_key=GROQ_API_KEY)
@@ -56,6 +71,7 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
         model=GEMINI_MODEL,
         temperature=temperature,
         google_api_key=GOOGLE_API_KEY,
+        **_gemini_thinking_kwargs(),
     )
 
 
@@ -87,7 +103,7 @@ def get_vision_llm() -> BaseChatModel:
             "VISION_PROVIDER=google requires GOOGLE_API_KEY in .env. "
             "Set VISION_PROVIDER=groq to use Groq llama-4-scout instead."
         )
-    gemini_kwargs = {}
+    gemini_kwargs = _gemini_thinking_kwargs()
     if GEMINI_VISION_MAX_OUTPUT_TOKENS > 0:
         gemini_kwargs["max_output_tokens"] = GEMINI_VISION_MAX_OUTPUT_TOKENS
     return ChatGoogleGenerativeAI(
