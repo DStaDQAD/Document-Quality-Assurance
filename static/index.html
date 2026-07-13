@@ -795,16 +795,16 @@ body.auth-locked .app {
       <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1,'wght' 500,'opsz' 24">analytics</span>
     </div>
     <div class="brand-text">
-      <div class="brand-name">DocAudit QA</div>
+      <div class="brand-name">Document QA</div>
       <div class="brand-sub">Document Quality</div>
     </div>
   </div>
 
   <nav class="sidebar-nav">
     <div class="nav-section-label">Verifikasi</div>
-    <a class="nav-item active-nav" data-tab="paired" title="Verifikasi Berpasangan">
+    <a class="nav-item active-nav" data-tab="paired" title="Verifikasi">
       <span class="material-symbols-outlined">compare_arrows</span>
-      <span class="nav-text">Verifikasi Berpasangan</span>
+      <span class="nav-text">Verifikasi</span>
     </a>
     <!-- "Lihat Data" browses /api/tables (the ground-truth SQLite DB). That DB is
          not shipped to the deployment (only synthetic sample data), so the tab is
@@ -829,14 +829,14 @@ body.auth-locked .app {
 <!-- ═══ MAIN ═══ -->
 <div class="main">
   <header class="topbar">
-    <span class="topbar-title" id="header-title">Verifikasi Berpasangan</span>
+    <span class="topbar-title" id="header-title">Verifikasi</span>
     <div class="topbar-divider"></div>
     <span class="topbar-sub">Document Quality Assurance</span>
   </header>
 
   <main class="content">
 
-    <!-- Panel: Verifikasi Berpasangan -->
+    <!-- Panel: Verifikasi -->
     <div class="panel active" id="panel-paired">
       <div class="paired-container" id="paired-container">
         <div class="paired-form-area">
@@ -900,7 +900,7 @@ body.auth-locked .app {
         <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1,'wght' 500,'opsz' 24">analytics</span>
       </div>
       <div>
-        <div class="auth-brand-name">DocAudit QA</div>
+        <div class="auth-brand-name">Document QA</div>
         <div class="auth-brand-sub">Document Quality Assurance</div>
       </div>
     </div>
@@ -929,7 +929,7 @@ body.auth-locked .app {
 </div>
 
 <script>
-  const PANEL_TITLES = { paired: "Verifikasi Berpasangan", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi", data: "Lihat Data" };
 
   document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
     item.addEventListener("click", () => {
