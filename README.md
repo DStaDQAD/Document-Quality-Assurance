@@ -238,3 +238,8 @@ pytest
 ```
 
 All LLM calls are mocked, so the suite needs no real API keys or network access.
+
+Accuracy (not just plumbing) is checked separately by the eval harness in `eval/` - see
+`eval/README.md`. CI runs the deterministic Layer-1 comparison-engine eval
+(`python -m eval.run_comparison_eval --fail-under 1.0`) on every push to `main`, gating on
+100% verdict accuracy against the fixed cases in `eval/cases/`.
