@@ -9,6 +9,8 @@ from paired_verifier import (
     _build_table_suggestions,
     _deduplicate_facts,
     _evaluate_fact,
+    _parse_scale_unit,
+    _parse_table_with_fallback,
     _unit_factor,
     verify_paired,
 )
@@ -60,6 +62,38 @@ def test_unit_factor_returns_none_for_unknown_pair():
 
 def test_unit_factor_is_case_and_whitespace_insensitive():
     assert _unit_factor(" Triliun Rp ", "Miliar Rp") == 1000.0
+
+
+def test_unit_factor_identical_units_need_no_conversion():
+    assert _unit_factor("juta Rp", "juta Rp") == 1.0
+
+
+def test_unit_factor_derives_ratio_for_unlisted_same_currency_pair():
+    # ('ribu Rp', 'miliar Rp') is not in the explicit table — the scale-word fallback
+    # must derive pdf * factor = excel, i.e. 1e3 / 1e9.
+    assert _unit_factor("ribu Rp", "miliar Rp") == pytest.approx(1e-6)
+    assert _unit_factor("Rp", "juta Rp") == pytest.approx(1e-6)
+
+
+def test_unit_factor_does_not_cross_currencies():
+    assert _unit_factor("juta Rp", "juta USD") is None
+
+
+@pytest.mark.parametrize(
+    "unit,expected",
+    [
+        ("juta Rp", (1e6, "rp")),
+        ("Rp", (1.0, "rp")),
+        ("miliar dolar AS", (1e9, "usd")),
+        ("miliar", (1e9, None)),
+        ("persen", None),
+        ("persen_yoy", None),
+        ("%", None),
+        ("unit", None),
+    ],
+)
+def test_parse_scale_unit(unit, expected):
+    assert _parse_scale_unit(unit) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -448,3 +482,216 @@ def test_verify_paired_returns_no_facts_when_narrative_has_nothing_extractable(m
 
     assert response.total_facts == 0
     assert response.results == []
+
+
+# ---------------------------------------------------------------------------
+# Categorical (non-time-series) sources
+# ---------------------------------------------------------------------------
+
+def _make_cat_table(title="Daftar Barang", unit="", data=None):
+    """data: {(row_label, col_label): value}"""
+    table = BITableData(title=title, unit=unit, row_labels=[], axis_type="categorical")
+    for (row, col), value in (data or {}).items():
+        if row not in table.row_labels:
+            table.row_labels.append(row)
+        if col not in table.col_labels:
+            table.col_labels.append(col)
+        table._data[(row, col)] = value
+    return table
+
+
+def _make_cat_period(**overrides):
+    base = dict(metric_label="Laptop ASUS", col_label="Harga")
+    base.update(overrides)
+    return PeriodPoint(**base)
+
+
+def test_evaluate_value_categorical_entailed():
+    table = _make_cat_table(data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=7_500_000.0, unit="Rp")
+
+    result = _evaluate_fact(fact, [_make_source(table, filename="barang.xlsx", sheet="S")])
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].col_label == "Harga"
+    assert result.periods[0].year is None
+    assert result.matched_excel_source == "barang.xlsx / S"
+
+
+def test_evaluate_value_categorical_refuted_outside_tolerance():
+    table = _make_cat_table(data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=8_000_000.0, unit="Rp")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"
+
+
+def test_evaluate_categorical_without_declared_source_unit_compares_raw_numbers():
+    # Categorical tables usually declare no table-wide unit (it lives in column names like
+    # 'Harga (Rp)') — the level-value comparison must not die on unit conversion.
+    table = _make_cat_table(unit="", data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=7_500_000.0, unit="Rp")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
+def test_evaluate_categorical_scaled_claim_against_unitless_source():
+    # PDF says 'Rp7,5 juta' (claimed 7.5, unit 'juta Rp'); the source declares no unit and
+    # stores base rupiah (7 500 000). The claim's own scale word must bridge the gap —
+    # previously this produced a false Refuted (7.5 vs 7 500 000 raw).
+    table = _make_cat_table(unit="", data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=7.5, unit="juta Rp")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(7.5)
+
+
+def test_evaluate_categorical_scaled_claim_still_refutes_wrong_numbers():
+    table = _make_cat_table(unit="", data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=75.0, unit="juta Rp")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"
+    assert result.computed_value == pytest.approx(7.5)
+
+
+def test_evaluate_categorical_uses_unit_declared_in_column_name():
+    # 'Harga (juta Rp)' declares the column's unit — a claim in base 'Rp' must be
+    # converted with a real unit factor, not compared raw.
+    table = _make_cat_table(unit="", data={("Laptop ASUS", "Harga (juta Rp)"): 7.5})
+    fact = _make_fact(
+        periods=[_make_cat_period(col_label="Harga")], claimed_value=7_500_000.0, unit="Rp",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(7_500_000.0)
+
+
+def test_evaluate_categorical_non_currency_unit_compares_raw():
+    # 'Stok 10 unit' — no currency, no scale word: raw comparison is the only sane option.
+    table = _make_cat_table(unit="", data={("Laptop ASUS", "Stok"): 10.0})
+    fact = _make_fact(
+        periods=[_make_cat_period(col_label="Stok")], claimed_value=10.0, unit="unit",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
+def test_evaluate_ratio_between_two_categorical_points():
+    table = _make_cat_table(data={
+        ("Laptop ASUS", "Harga"): 7_500_000.0,
+        ("Mouse Logitech", "Harga"): 250_000.0,
+    })
+    fact = _make_fact(
+        operation="ratio",
+        periods=[
+            _make_cat_period(metric_label="Laptop ASUS"),
+            _make_cat_period(metric_label="Mouse Logitech"),
+        ],
+        claimed_value=30.0,
+        unit=None,
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(30.0)
+
+
+def test_evaluate_temporal_only_operation_on_categorical_points_is_inconclusive():
+    table = _make_cat_table(data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(operation="yoy_growth", periods=[_make_cat_period()], claimed_value=10.0)
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+    assert "deret waktu" in result.reasoning
+
+
+def test_temporal_fact_does_not_resolve_against_categorical_source():
+    table = _make_cat_table(data={("Total", "Harga"): 100.0})
+    fact = _make_fact()  # temporal: Total, Apr 2026
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+    assert "tidak ditemukan" in result.reasoning.lower()
+
+
+def test_categorical_fact_skips_temporal_source_and_matches_categorical_one():
+    temporal = _make_table(data={("Total", 2026, "Apr"): 10355.1})
+    categorical = _make_cat_table(data={("Laptop ASUS", "Harga"): 7_500_000.0})
+    fact = _make_fact(periods=[_make_cat_period()], claimed_value=7_500_000.0, unit="Rp")
+
+    result = _evaluate_fact(
+        fact,
+        [_make_source(temporal, filename="a.xls"), _make_source(categorical, filename="b.xlsx")],
+    )
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source == "b.xlsx / I.1"
+
+
+# ---------------------------------------------------------------------------
+# Parser cascade (_parse_table_with_fallback)
+# ---------------------------------------------------------------------------
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_prefers_bi_parser_when_it_extracts_data(mock_bi, mock_generic):
+    mock_bi.return_value = _make_table(data={("Total", 2026, "Apr"): 1.0})
+
+    table, parser = _parse_table_with_fallback(b"bytes", "I.1")
+
+    assert parser == "bi"
+    mock_generic.assert_not_called()
+
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_falls_back_to_generic_when_bi_parser_raises(mock_bi, mock_generic):
+    mock_bi.side_effect = ValueError("Could not auto-detect year/month header rows")
+    mock_generic.return_value = _make_cat_table(data={("Laptop ASUS", "Harga"): 1.0})
+
+    table, parser = _parse_table_with_fallback(b"bytes", "S")
+
+    assert parser == "generic"
+    assert table.axis_type == "categorical"
+
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_falls_back_to_generic_when_bi_parse_is_empty(mock_bi, mock_generic):
+    mock_bi.return_value = _make_table(data={})
+    mock_generic.return_value = _make_cat_table(data={("Laptop ASUS", "Harga"): 1.0})
+
+    table, parser = _parse_table_with_fallback(b"bytes", "S")
+
+    assert parser == "generic"
+
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_keeps_empty_bi_result_when_generic_also_fails(mock_bi, mock_generic):
+    mock_bi.return_value = _make_table(data={})
+    mock_generic.side_effect = ValueError("no structure")
+
+    table, parser = _parse_table_with_fallback(b"bytes", "S")
+
+    assert parser == "bi"
+    assert table.row_labels == []
+
+
+def test_cascade_raises_combined_error_when_both_parsers_fail():
+    with pytest.raises(ValueError, match="Parser BI.*Parser generik"):
+        _parse_table_with_fallback(b"not an excel file at all", "S")

@@ -61,17 +61,35 @@ class _PeriodRef(BaseModel):
         description=(
             "The metric name for this specific data point. If a label from the REFERENCE METRIC "
             "LIST clearly matches what the narrative is describing, copy it exactly. Otherwise use "
-            "the metric name as it appears in the narrative text."
+            "the metric name as it appears in the narrative text. For non-time-series tables this "
+            "is the ROW name (e.g. the item name in an item list)."
         ),
     )
-    year: int = Field(..., description="The year (e.g. 2026) this data point is about.")
-    month: str = Field(
-        ...,
+    year: Optional[int] = Field(
+        None,
+        description=(
+            "The year (e.g. 2026) this data point is about. REQUIRED for every time-series claim; "
+            "leave null ONLY for attribute claims that use col_label instead."
+        ),
+    )
+    month: Optional[str] = Field(
+        None,
         description=(
             "3-letter English month abbreviation: Jan/Feb/Mar/Apr/May/Jun/"
             "Jul/Aug/Sep/Oct/Nov/Dec. Use Indonesian month name equivalents: "
             "Januari=Jan, Februari=Feb, Maret=Mar, April=Apr, Mei=May, Juni=Jun, "
-            "Juli=Jul, Agustus=Aug, September=Sep, Oktober=Oct, November=Nov, Desember=Dec."
+            "Juli=Jul, Agustus=Aug, September=Sep, Oktober=Oct, November=Nov, Desember=Dec. "
+            "REQUIRED for every time-series claim; leave null ONLY for attribute claims "
+            "that use col_label instead."
+        ),
+    )
+    col_label: Optional[str] = Field(
+        None,
+        description=(
+            "ONLY for claims against a NON-time-series table (item lists, inventories, budgets): "
+            "the attribute/column name this data point refers to (e.g. 'Harga', 'Stok'). Copy the "
+            "column name from the source's column list when it clearly matches. Leave null for "
+            "time-series claims — never fill both col_label and year/month."
         ),
     )
 
@@ -155,10 +173,19 @@ Available operations:
   is_stable      : a claim that a metric stayed roughly flat/stable across several months.
                    claimed_value_raw = null.
 
+TWO KINDS OF REFERENCE TABLES:
+  - Time-series tables (e.g. BI monetary statistics): every data point is identified by
+    (metric_label, year, month). ALWAYS fill year and month; leave col_label null.
+  - Non-time-series tables (item lists, inventories, budgets — the source's column list shows
+    attribute names like 'Harga' or 'Stok' instead of time periods): for claims about such data
+    (e.g. "harga Laptop X adalah Rp7.500.000"), set metric_label to the ROW name (the item),
+    set col_label to the COLUMN/attribute name, and leave year and month null. Typical
+    operations here are value, diff, and ratio; yoy_growth and trend operations do not apply.
+
 For each claim, output a JSON object with these fields:
   operation        : one of the 9 values above
-  periods          : array of {{metric_label, year, month}} - see each operation's rule above for how
-                     many points and in what order
+  periods          : array of {{metric_label, year, month, col_label}} - see each operation's rule
+                     above for how many points and in what order
   claimed_value_raw: the number string EXACTLY as it appears in the text (no Rp, no unit word), or
                      null for is_increasing/is_decreasing/is_stable claims with no explicit number
   unit             : one of "triliun Rp", "miliar Rp", "persen_yoy", "persen", or null (matching
@@ -176,6 +203,8 @@ IMPORTANT RULES:
    a claim just because it has no reference list match.
 5. average/sum/is_increasing/is_decreasing/is_stable: list EVERY month individually in periods —
    never summarize a range as just its start and end.
+6. col_label is ONLY for non-time-series tables. If a claim mentions a time period, always use
+   year+month and leave col_label null — never fill both.
 """
 
 _HUMAN_TEMPLATE = """\
@@ -223,10 +252,16 @@ def _build_row_labels_block(
 
 @dataclass
 class PeriodPoint:
-    """Plain-Python equivalent of _PeriodRef, decoupled from LLM schema."""
+    """Plain-Python equivalent of _PeriodRef, decoupled from LLM schema.
+
+    Exactly one of the two column-axis forms is populated:
+      temporal    : year + month set, col_label None (BI time-series claims — unchanged).
+      categorical : col_label set, year/month None (attribute claims, e.g. 'Harga' of an item).
+    """
     metric_label: str
-    year: int
-    month: str
+    year: Optional[int] = None
+    month: Optional[str] = None
+    col_label: Optional[str] = None
 
 
 class ExtractedFact:
@@ -481,12 +516,24 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
         periods: List[PeriodPoint] = []
         valid = True
         for p in f.periods:
-            month = _MONTH_NORM.get(p.month.lower().strip())
-            if month is None:
-                logger.warning("Unrecognised month %r in extracted period, skipping fact", p.month)
+            raw_month = getattr(p, "month", None)
+            month = _MONTH_NORM.get(raw_month.lower().strip()) if raw_month else None
+            year = getattr(p, "year", None)
+            col_label = (getattr(p, "col_label", None) or "").strip() or None
+            # Temporal wins when both forms are present: a valid (year, month) means the claim
+            # is time-series and a stray col_label from the LLM must not reroute it to a
+            # categorical source.
+            if year is not None and month is not None:
+                periods.append(PeriodPoint(metric_label=p.metric_label, year=year, month=month))
+            elif col_label is not None:
+                periods.append(PeriodPoint(metric_label=p.metric_label, col_label=col_label))
+            else:
+                logger.warning(
+                    "Period without a usable (year, month) or col_label "
+                    "(month=%r, year=%r), skipping fact", raw_month, year,
+                )
                 valid = False
                 break
-            periods.append(PeriodPoint(metric_label=p.metric_label, year=p.year, month=month))
         if not valid or not periods:
             continue
 

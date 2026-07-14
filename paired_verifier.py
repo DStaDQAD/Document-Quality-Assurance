@@ -14,12 +14,14 @@ comparison step.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 
 from excel_parser_bi import BITableData, parse_bi_table
+from table_parser_generic import parse_generic_table
 from schemas import (
     FactVerificationResult,
     PairedVerificationResponse,
@@ -45,6 +47,11 @@ MATCH_TOLERANCE = 0.05
 # against the matched Excel source's unit. The rest (yoy_growth, ratio, trend checks) either
 # compare percentages directly or cancel/ignore units entirely.
 _LEVEL_OPS = {"value", "average", "sum", "diff"}
+
+# Operations that are only meaningful along a time axis: yoy needs the prior-year point,
+# trend checks need chronological ordering. A claim whose data points are categorical
+# (col_label instead of year/month) can never satisfy them.
+_TEMPORAL_ONLY_OPS = {"yoy_growth", "is_increasing", "is_decreasing", "is_stable"}
 
 
 # ---------------------------------------------------------------------------
@@ -86,10 +93,73 @@ _UNIT_FACTORS: Dict[Tuple[str, str], float] = {
 }
 
 
-def _unit_factor(pdf_unit: str, excel_unit: str) -> Optional[float]:
+# Decimal scale words and currency tokens for units the explicit _UNIT_FACTORS table does not
+# list. Parsing these keeps unit handling deterministic for arbitrary sources (the generic
+# parser can encounter any wording) without enumerating every pair by hand.
+_SCALE_WORDS: Dict[str, float] = {
+    "ribu": 1e3, "thousand": 1e3,
+    "juta": 1e6, "million": 1e6,
+    "miliar": 1e9, "milyar": 1e9, "billion": 1e9,
+    "triliun": 1e12, "trillion": 1e12,
+}
+_CURRENCY_TOKENS: Dict[str, str] = {
+    "rp": "rp", "rupiah": "rp", "idr": "rp",
+    "usd": "usd", "dolar": "usd", "dollar": "usd",
+}
+
+
+def _parse_scale_unit(unit: str) -> Optional[Tuple[float, Optional[str]]]:
+    """Parse a level unit into (decimal scale, currency token or None).
+
+    'juta Rp' -> (1e6, 'rp') | 'Rp' -> (1.0, 'rp') | 'miliar' -> (1e9, None).
+    Returns None for percentages and units with neither a scale word nor a currency
+    ('unit', 'buah'), where scaling would be meaningless.
+    """
+    if "%" in unit:
+        return None
+    words = re.findall(r"[a-z]+", unit.lower())
+    if "persen" in words:
+        return None
+    scale, currency, saw_scale = 1.0, None, False
+    for w in words:
+        if w in _SCALE_WORDS:
+            scale *= _SCALE_WORDS[w]
+            saw_scale = True
+        elif w in _CURRENCY_TOKENS and currency is None:
+            currency = _CURRENCY_TOKENS[w]
+    if not saw_scale and currency is None:
+        return None
+    return scale, currency
+
+
+def _unit_factor(pdf_unit: Optional[str], excel_unit: Optional[str]) -> Optional[float]:
     """Return the multiplier to convert a PDF absolute value to Excel units, or None if unknown."""
+    if not pdf_unit or not excel_unit:
+        return None
     key = (pdf_unit.lower().strip(), excel_unit.lower().strip())
-    return _UNIT_FACTORS.get(key)
+    factor = _UNIT_FACTORS.get(key)
+    if factor is not None:
+        return factor
+    # Identical units (after normalisation) never need conversion, whatever they are —
+    # keeps the explicit table for CROSS-unit pairs only.
+    if key[0] == key[1]:
+        return 1.0
+    # General fallback: both units parse to a decimal scale of the SAME currency
+    # ('ribu Rp' vs 'miliar Rp' -> 1e3/1e9). pdf * factor = excel, hence the ratio.
+    pdf_parsed, excel_parsed = _parse_scale_unit(key[0]), _parse_scale_unit(key[1])
+    if pdf_parsed and excel_parsed and pdf_parsed[1] and pdf_parsed[1] == excel_parsed[1]:
+        return pdf_parsed[0] / excel_parsed[0]
+    return None
+
+
+# Trailing parenthetical of a categorical column name, where such tables usually declare
+# the column's unit: 'Harga (Rp)' -> 'Rp', 'Omzet (juta Rp)' -> 'juta Rp'.
+_COL_UNIT_RE = re.compile(r"\(([^)]+)\)\s*$")
+
+
+def _col_unit(col_label: str) -> Optional[str]:
+    m = _COL_UNIT_RE.search(col_label)
+    return m.group(1).strip() if m else None
 
 
 # ---------------------------------------------------------------------------
@@ -98,32 +168,62 @@ def _unit_factor(pdf_unit: str, excel_unit: str) -> Optional[float]:
 
 def _try_resolve(
     periods: List[PeriodPoint], src: _ExcelSource
-) -> Tuple[List[Tuple[str, float]], List[PeriodPoint]]:
+) -> Tuple[List[Tuple[str, float]], List[PeriodPoint], List[Optional[str]]]:
     """Look up every period in one Excel source.
 
-    Returns (resolved, missing): resolved has (matched_label, raw_value) for periods found in
-    this source (in the same order as `periods`); missing has the PeriodPoint objects that
-    weren't found. A fact's periods must ALL resolve from the SAME source (kept unit-consistent) -
-    callers should treat a non-empty `missing` as "this source can't be used for this fact".
+    Returns (resolved, missing, col_units): resolved has (matched_label, raw_value) for periods
+    found in this source (in the same order as `periods`); missing has the PeriodPoint objects
+    that weren't found; col_units has, per resolved categorical point, the unit declared in the
+    matched column's trailing parenthetical ('Harga (Rp)' -> 'Rp'), or None. A fact's periods
+    must ALL resolve from the SAME source (kept unit-consistent) - callers should treat a
+    non-empty `missing` as "this source can't be used for this fact".
+
+    Each point only resolves against a source of the matching axis kind: temporal points
+    (year+month) against temporal tables, categorical points (col_label) against categorical
+    tables. A mismatched source simply counts the point as missing so the next source is tried.
     """
     resolved: List[Tuple[str, float]] = []
     missing: List[PeriodPoint] = []
+    col_units: List[Optional[str]] = []
     for p in periods:
-        label, raw = src.table.lookup_fuzzy(p.metric_label, p.year, p.month)
-        if raw is None:
-            missing.append(p)
+        if p.col_label is not None:
+            if src.table.axis_type != "categorical":
+                missing.append(p)
+                continue
+            row, col, raw = src.table.lookup_cell_fuzzy(p.metric_label, p.col_label)
+            if raw is None:
+                missing.append(p)
+            else:
+                resolved.append((f"{row} — {col}", raw))
+                col_units.append(_col_unit(col))
         else:
-            resolved.append((label, raw))
-    return resolved, missing
+            if src.table.axis_type != "temporal":
+                missing.append(p)
+                continue
+            label, raw = src.table.lookup_fuzzy(p.metric_label, p.year, p.month)
+            if raw is None:
+                missing.append(p)
+            else:
+                resolved.append((label, raw))
+                col_units.append(None)
+    return resolved, missing, col_units
 
 
 def _build_periods(
     fact_periods: List[PeriodPoint], resolved: List[Tuple[str, float]], values: List[float]
 ) -> List[PeriodResult]:
     return [
-        PeriodResult(metric_label=resolved[i][0], year=p.year, month=p.month, excel_value=round(values[i], 4))
+        PeriodResult(
+            metric_label=resolved[i][0], year=p.year, month=p.month,
+            col_label=p.col_label, excel_value=round(values[i], 4),
+        )
         for i, p in enumerate(fact_periods)
     ]
+
+
+def _point_desc(p: PeriodPoint) -> str:
+    """Short human-readable identity of a data point for reasoning strings."""
+    return p.col_label if p.col_label is not None else f"{p.month} {p.year}"
 
 
 def _numeric_verdict(claimed: float, computed: float) -> Tuple[float, str]:
@@ -282,7 +382,7 @@ def _compute_operation(
         periods = _build_periods(fact.periods, resolved, converted)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed)
         label = "rata-rata" if op == "average" else "total"
-        breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, v in zip(fact.periods, converted))
+        breakdown = ", ".join(f"{_point_desc(p)}={round(v, 4)}" for p, v in zip(fact.periods, converted))
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
@@ -318,7 +418,11 @@ def _inconclusive_result(
     if best_reason:
         reasoning = best_reason
     elif best_missing:
-        missing_str = ", ".join(f"{p.metric_label} {p.month} {p.year}" for p in best_missing)
+        missing_str = ", ".join(
+            f"{p.metric_label} ({p.col_label})" if p.col_label is not None
+            else f"{p.metric_label} {p.month} {p.year}"
+            for p in best_missing
+        )
         reasoning = f"Data tidak ditemukan di sumber Excel manapun untuk: {missing_str}."
     else:
         reasoning = f"Tidak ada sumber Excel yang cocok untuk operasi '{fact.operation}' pada '{fact.display_label}'."
@@ -333,12 +437,23 @@ def _inconclusive_result(
 # ---------------------------------------------------------------------------
 
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
+    # A time-only operation over categorical data points can never be computed — fail fast
+    # with an explanation instead of scanning sources for data that cannot qualify.
+    if fact.operation in _TEMPORAL_ONLY_OPS and any(p.col_label is not None for p in fact.periods):
+        return _make_result(
+            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            reasoning=(
+                f"Operasi '{fact.operation}' memerlukan data deret waktu (tahun/bulan), "
+                f"tetapi klaim ini merujuk atribut non-waktu ('{fact.display_label}')."
+            ),
+        )
+
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None
     best_reason: Optional[str] = None
 
     for src in sources:
-        resolved, missing = _try_resolve(fact.periods, src)
+        resolved, missing, col_units = _try_resolve(fact.periods, src)
         if missing:
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
@@ -346,11 +461,25 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
         factor = 1.0
         if needs_unit:
-            factor = _unit_factor(fact.unit, src.table.unit)
+            # Categorical tables usually declare their unit in the COLUMN name
+            # ('Harga (Rp)') rather than a table-wide unit row — prefer the matched
+            # column's declared unit when there is one.
+            excel_unit = src.table.unit
+            if src.table.axis_type == "categorical":
+                excel_unit = next((u for u in col_units if u), None) or src.table.unit
+            factor = _unit_factor(fact.unit, excel_unit)
+            if factor is None and src.table.axis_type == "categorical" and not excel_unit:
+                # Source declares no unit anywhere. Spreadsheet cells without a declared
+                # unit hold BASE-currency numbers (an item list stores 7500000, not 7.5) —
+                # so normalise the CLAIM to base units via its own scale word: a claim of
+                # 7,5 'juta Rp' becomes 7 500 000 before comparing. Claims whose unit has
+                # no scale to apply ('Rp', 'unit', or none) compare raw, as before.
+                parsed = _parse_scale_unit(fact.unit) if fact.unit else None
+                factor = parsed[0] if parsed else 1.0
             if factor is None:
                 if best_reason is None:
                     best_reason = (
-                        f"Unit conversion from '{fact.unit}' to '{src.table.unit}' "
+                        f"Unit conversion from '{fact.unit}' to '{excel_unit}' "
                         f"([{src.label}]) is not supported. Cannot compare."
                     )
                 continue
@@ -412,6 +541,40 @@ def _build_table_suggestions(results: List[FactVerificationResult]) -> List[Tabl
 
 
 # ---------------------------------------------------------------------------
+# Parser cascade: deterministic BI layout first, generic heuristic parser as fallback
+# ---------------------------------------------------------------------------
+
+def _parse_table_with_fallback(excel_bytes: bytes, sheet_name: str) -> Tuple[BITableData, str]:
+    """Return (table, parser_name) — BI parser first, generic heuristic parser on failure.
+
+    The BI parser stays the primary path so known SEKI files keep their exact current
+    behaviour. Its result is accepted only when it actually extracted data; a structurally
+    successful but EMPTY parse (or a ValueError) falls through to the generic parser.
+    If the generic parser also fails, any BI result we did get is returned even when empty
+    (claims then come back Inconclusive instead of the whole request failing); only when
+    both parsers raised is the combined error surfaced.
+    """
+    bi_table = None
+    bi_error: Optional[Exception] = None
+    try:
+        bi_table = parse_bi_table(excel_bytes, sheet_name)
+        if bi_table.row_labels and bi_table._data:
+            return bi_table, "bi"
+    except ValueError as exc:
+        bi_error = exc
+
+    try:
+        return parse_generic_table(excel_bytes, sheet_name), "generic"
+    except ValueError as generic_error:
+        if bi_table is not None:
+            return bi_table, "bi"
+        raise ValueError(
+            f"Tabel tidak dapat diparsing. Parser BI: {bi_error}. "
+            f"Parser generik: {generic_error}"
+        ) from generic_error
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -420,7 +583,7 @@ def _deduplicate_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
     seen = set()
     unique = []
     for f in facts:
-        key = (f.operation, tuple((p.metric_label, p.year, p.month) for p in f.periods))
+        key = (f.operation, tuple((p.metric_label, p.year, p.month, p.col_label) for p in f.periods))
         if key not in seen:
             seen.add(key)
             unique.append(f)
@@ -453,19 +616,28 @@ async def verify_paired(
     Returns:
         PairedVerificationResponse with per-fact verdicts.
     """
-    # Step 1: Parse all Excel sources
+    # Step 1: Parse all Excel sources (BI layout first, generic heuristic parser as fallback)
     parsed_sources: List[_ExcelSource] = []
     for excel_bytes, sheet_name, filename in excel_sources:
         logger.info("Parsing Excel sheet '%s' from '%s'", sheet_name, filename)
-        table = parse_bi_table(excel_bytes, sheet_name)
-        logger.info("Excel parsed: %d metrics, unit='%s'", len(table.row_labels), table.unit)
+        table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name)
+        logger.info(
+            "Excel parsed via %s parser (%s axis): %d rows, unit='%s'",
+            parser_used, table.axis_type, len(table.row_labels), table.unit,
+        )
         parsed_sources.append(_ExcelSource(table=table, filename=filename, sheet=sheet_name))
 
     # Per-source label groups with table title context (used by the LLM to understand
-    # what generic rows like 'Total' represent in each table).
+    # what generic rows like 'Total' represent in each table). Categorical sources also
+    # advertise their attribute columns so the LLM can fill col_label with a real name.
+    def _source_desc(src: _ExcelSource) -> str:
+        desc = f"{src.table.title} / {src.filename}"
+        if src.table.axis_type == "categorical" and src.table.col_labels:
+            desc += " — kolom atribut (non-waktu): " + ", ".join(src.table.col_labels)
+        return desc
+
     source_labels_for_extractor = [
-        (f"{src.table.title} / {src.filename}", src.table.row_labels)
-        for src in parsed_sources
+        (_source_desc(src), src.table.row_labels) for src in parsed_sources
     ]
 
     # Combined flat list for de-duplication (required by extract_structured_facts_async signature)

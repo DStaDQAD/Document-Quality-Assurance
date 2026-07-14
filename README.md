@@ -51,11 +51,17 @@ can never write to the database no matter what the model generates.
 ## Mode 2: Paired PDF + Excel verification
 
 Verifies every quantitative claim in a PDF report's narrative text directly against the
-authoritative values in a companion BI-format Excel file. No SQL is generated, and the LLM never
+authoritative values in a companion Excel file. No SQL is generated, and the LLM never
 touches a number:
 
-1. **Excel parsing** (`excel_parser_bi.py`) - fully deterministic. Uses `openpyxl` + cell style
-   heuristics to locate headers, data rows, unit label, and column periods.
+1. **Excel parsing** - fully deterministic, as a two-tier cascade. The BI wide-table parser
+   (`excel_parser_bi.py`, `openpyxl`/`xlrd` + cell-style heuristics for headers, data rows, unit
+   label, and column periods) is tried first; when it fails or extracts nothing, a generic
+   heuristic parser (`table_parser_generic.py`) takes over. The generic parser handles any table
+   with a single detectable header row: time-series tables with combined period headers
+   ("Apr 2026", "2026M04", real date cells) **and** non-time-series tables such as item lists or
+   budgets ("Nama Barang | Harga | Stok"). Both parsers emit the same two-axis `TableData`
+   container (`table_model.py`): rows × (periods **or** attribute columns) → value.
 2. **PDF text extraction** (`pdf_extraction.py`) - `pypdf` first, falling back to Gemini vision
    OCR if the extracted text is too sparse. The extracted narrative text is shared between fact
    verification and the typo/grammar check below, so the vision fallback only ever runs once.
@@ -63,7 +69,9 @@ touches a number:
    verification. Claims are represented as an **operation** (`value`, `yoy_growth`, `average`,
    `sum`, `diff`, `ratio`, `is_increasing`, `is_decreasing`, `is_stable`) over one or more
    `(metric_label, year, month, value_raw, unit)` data points, anchored to the Excel's own row
-   labels - so claims more complex than a single point-in-time value (multi-period averages,
+   labels. Against a non-time-series source, a data point carries a `col_label` (the attribute
+   column, e.g. "Harga") instead of year/month; time-only operations (`yoy_growth`, trends) are
+   gated to temporal sources. Claims more complex than a single point-in-time value (multi-period averages,
    cross-metric ratios, trend statements) are supported without a schema change per pattern. The
    model may only copy `value_raw` verbatim from the source text - all numeric parsing happens
    afterward in Python (`_parse_indonesian_number`), so a hallucinated or misformatted number can

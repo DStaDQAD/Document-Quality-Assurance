@@ -1272,10 +1272,13 @@ body.auth-locked .app {
           const verdict  = item.verdict;
           const badgeCls = verdict === "Entailed" ? "Entailed" : verdict === "Refuted" ? "Refuted" : "Inconclusive";
           const periods  = item.periods || [];
+          // Temporal points carry month/year; categorical points (non-time-series tables)
+          // carry col_label instead.
+          const pLabel   = (p) => p.col_label || [p.month, p.year].filter(Boolean).join(" ");
           const period   = periods.length === 1
-            ? [periods[0].month, periods[0].year].filter(Boolean).join(" ")
+            ? pLabel(periods[0])
             : periods.length > 1
-              ? `${periods[0].month} ${periods[0].year}–${periods[periods.length - 1].month} ${periods[periods.length - 1].year}`
+              ? `${pLabel(periods[0])}–${pLabel(periods[periods.length - 1])}`
               : "";
           const opLabel  = TYPE_LABEL[item.operation] || item.operation;
           const hasClaimed = item.claimed_value !== null && item.claimed_value !== undefined;
@@ -1295,7 +1298,7 @@ body.auth-locked .app {
                 const v = p.excel_value !== null && p.excel_value !== undefined
                   ? p.excel_value.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 4 })
                   : "—";
-                return `<span class="fact-period-chip">${escapeHtml(p.month)} ${p.year}: ${v}</span>`;
+                return `<span class="fact-period-chip">${escapeHtml(pLabel(p))}: ${v}</span>`;
               }).join("")}</div>`
             : "";
 

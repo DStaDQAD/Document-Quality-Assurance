@@ -51,10 +51,15 @@ class UploadExcelSourceResponse(BaseModel):
 
 
 class PeriodResult(BaseModel):
-    """One (metric, year, month) data point used to compute a FactVerificationResult."""
+    """One data point used to compute a FactVerificationResult.
+
+    Temporal points carry (year, month); categorical points (non-time-series tables,
+    e.g. an item list) carry col_label instead and leave year/month null.
+    """
     metric_label: str
-    year: int
-    month: str
+    year: Optional[int] = None
+    month: Optional[str] = None
+    col_label: Optional[str] = None
     excel_value: Optional[float] = None
 
 

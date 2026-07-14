@@ -241,6 +241,39 @@ def test_finalize_facts_normalizes_full_indonesian_month_name():
     assert facts[0].periods[0].month == "Apr"
 
 
+def test_finalize_facts_keeps_categorical_period_with_col_label():
+    raw = _fake_fact(
+        periods=[_fake_period(metric_label="Laptop ASUS", year=None, month=None, col_label="Harga")],
+        claimed_value_raw="7.500.000",
+        unit="Rp",
+    )
+    facts = _finalize_facts([raw], NARRATIVE)
+
+    assert len(facts) == 1
+    p = facts[0].periods[0]
+    assert p.col_label == "Harga"
+    assert p.year is None and p.month is None
+    assert facts[0].claimed_value == 7_500_000.0
+
+
+def test_finalize_facts_prefers_temporal_form_when_llm_fills_both():
+    # A valid (year, month) means the claim is time-series — a stray col_label from the LLM
+    # must not reroute it to a categorical source.
+    raw = _fake_fact(periods=[_fake_period(col_label="Harga")])
+    facts = _finalize_facts([raw], NARRATIVE)
+
+    p = facts[0].periods[0]
+    assert p.month == "Apr" and p.year == 2026
+    assert p.col_label is None
+
+
+def test_finalize_facts_skips_period_with_neither_time_nor_col_label():
+    raw = _fake_fact(periods=[_fake_period(year=None, month=None)])
+    facts = _finalize_facts([raw], NARRATIVE)
+
+    assert facts == []
+
+
 def test_finalize_facts_average_keeps_every_period_and_claimed_value():
     raw = _fake_fact(
         operation="average",
