@@ -22,6 +22,7 @@ from langchain_core.language_models import BaseChatModel
 
 from excel_parser_bi import BITableData, parse_bi_table
 from table_parser_generic import parse_generic_table
+from table_parser_llm import parse_table_with_llm
 from schemas import (
     FactVerificationResult,
     PairedVerificationResponse,
@@ -544,15 +545,19 @@ def _build_table_suggestions(results: List[FactVerificationResult]) -> List[Tabl
 # Parser cascade: deterministic BI layout first, generic heuristic parser as fallback
 # ---------------------------------------------------------------------------
 
-def _parse_table_with_fallback(excel_bytes: bytes, sheet_name: str) -> Tuple[BITableData, str]:
-    """Return (table, parser_name) — BI parser first, generic heuristic parser on failure.
+def _parse_table_with_fallback(
+    excel_bytes: bytes, sheet_name: str, llm: Optional[BaseChatModel] = None
+) -> Tuple[BITableData, str]:
+    """Return (table, parser_name) — three-tier cascade: BI → generic heuristic → LLM mapping.
 
     The BI parser stays the primary path so known SEKI files keep their exact current
     behaviour. Its result is accepted only when it actually extracted data; a structurally
-    successful but EMPTY parse (or a ValueError) falls through to the generic parser.
-    If the generic parser also fails, any BI result we did get is returned even when empty
-    (claims then come back Inconclusive instead of the whole request failing); only when
-    both parsers raised is the combined error surfaced.
+    successful but EMPTY parse (or a ValueError) falls through to the generic parser. When
+    that also fails and an llm is available, the LLM structure-mapping parser (tier 3) gets
+    a shot — it only maps structure; values are still extracted by code. As the last resort,
+    any BI result we did get is returned even when empty (claims then come back Inconclusive
+    instead of the whole request failing); only when every tier raised is the combined error
+    surfaced.
     """
     bi_table = None
     bi_error: Optional[Exception] = None
@@ -566,11 +571,19 @@ def _parse_table_with_fallback(excel_bytes: bytes, sheet_name: str) -> Tuple[BIT
     try:
         return parse_generic_table(excel_bytes, sheet_name), "generic"
     except ValueError as generic_error:
+        llm_error: Optional[Exception] = None
+        if llm is not None:
+            try:
+                return parse_table_with_llm(excel_bytes, sheet_name, llm), "llm"
+            except ValueError as exc:
+                llm_error = exc
+                logger.warning("LLM structure-mapping parser failed: %s", exc)
         if bi_table is not None:
             return bi_table, "bi"
         raise ValueError(
             f"Tabel tidak dapat diparsing. Parser BI: {bi_error}. "
-            f"Parser generik: {generic_error}"
+            f"Parser generik: {generic_error}."
+            + (f" Parser LLM: {llm_error}." if llm_error is not None else "")
         ) from generic_error
 
 
@@ -616,16 +629,18 @@ async def verify_paired(
     Returns:
         PairedVerificationResponse with per-fact verdicts.
     """
-    # Step 1: Parse all Excel sources (BI layout first, generic heuristic parser as fallback)
+    # Step 1: Parse all Excel sources (BI layout → generic heuristics → LLM structure mapping)
     parsed_sources: List[_ExcelSource] = []
+    excel_parsers: List[str] = []
     for excel_bytes, sheet_name, filename in excel_sources:
         logger.info("Parsing Excel sheet '%s' from '%s'", sheet_name, filename)
-        table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name)
+        table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name, llm=llm)
         logger.info(
             "Excel parsed via %s parser (%s axis): %d rows, unit='%s'",
             parser_used, table.axis_type, len(table.row_labels), table.unit,
         )
         parsed_sources.append(_ExcelSource(table=table, filename=filename, sheet=sheet_name))
+        excel_parsers.append(parser_used)
 
     # Per-source label groups with table title context (used by the LLM to understand
     # what generic rows like 'Total' represent in each table). Categorical sources also
@@ -673,6 +688,7 @@ async def verify_paired(
             excel_filenames=excel_filenames,
             excel_sheets=excel_sheets,
             excel_units=excel_units,
+            excel_parsers=excel_parsers,
             total_facts=0,
             entailed_count=0,
             refuted_count=0,
@@ -692,6 +708,7 @@ async def verify_paired(
         excel_filenames=excel_filenames,
         excel_sheets=excel_sheets,
         excel_units=excel_units,
+        excel_parsers=excel_parsers,
         total_facts=len(results),
         entailed_count=entailed,
         refuted_count=refuted,

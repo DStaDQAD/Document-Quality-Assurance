@@ -54,14 +54,20 @@ Verifies every quantitative claim in a PDF report's narrative text directly agai
 authoritative values in a companion Excel file. No SQL is generated, and the LLM never
 touches a number:
 
-1. **Excel parsing** - fully deterministic, as a two-tier cascade. The BI wide-table parser
-   (`excel_parser_bi.py`, `openpyxl`/`xlrd` + cell-style heuristics for headers, data rows, unit
-   label, and column periods) is tried first; when it fails or extracts nothing, a generic
-   heuristic parser (`table_parser_generic.py`) takes over. The generic parser handles any table
-   with a single detectable header row: time-series tables with combined period headers
-   ("Apr 2026", "2026M04", real date cells) **and** non-time-series tables such as item lists or
-   budgets ("Nama Barang | Harga | Stok"). Both parsers emit the same two-axis `TableData`
-   container (`table_model.py`): rows × (periods **or** attribute columns) → value.
+1. **Excel parsing** - a three-tier cascade. The BI wide-table parser (`excel_parser_bi.py`,
+   `openpyxl`/`xlrd` + cell-style heuristics for headers, data rows, unit label, and column
+   periods) is tried first; when it fails or extracts nothing, a generic heuristic parser
+   (`table_parser_generic.py`) takes over, handling any table with a single detectable header
+   row: time-series tables with combined period headers ("Apr 2026", "2026M04", real date
+   cells) **and** non-time-series tables such as item lists or budgets
+   ("Nama Barang | Harga | Stok"). Tiers 1-2 are fully deterministic. When both fail, tier 3
+   (`table_parser_llm.py`) shows the LLM a coordinate snapshot of the grid and asks for a
+   structure **spec** (header row, label column, each column's period/attribute meaning) - the
+   spec is validated against the grid and all values are then extracted by code, so the LLM
+   still never touches a number. Validated specs are cached per layout fingerprint, so repeat
+   uploads of the same layout parse without another LLM call, and the UI flags LLM-mapped
+   sources for review. All parsers emit the same two-axis `TableData` container
+   (`table_model.py`): rows × (periods **or** attribute columns) → value.
 2. **PDF text extraction** (`pdf_extraction.py`) - `pypdf` first, falling back to Gemini vision
    OCR if the extracted text is too sparse. The extracted narrative text is shared between fact
    verification and the typo/grammar check below, so the vision fallback only ever runs once.

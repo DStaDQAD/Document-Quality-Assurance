@@ -1348,6 +1348,20 @@ body.auth-locked .app {
       </button>
     </div>`;
 
+    // Flag sources whose structure was mapped by the LLM (cascade tier 3) — the numbers are
+    // still extracted by code, but the header interpretation deserves a reviewer's glance.
+    const parsers = data.excel_parsers || [];
+    const llmParsedFiles = (data.excel_filenames || []).filter((_, idx) => parsers[idx] === "llm");
+    const llmParserNotice = llmParsedFiles.length
+      ? `<div class="table-suggestions">
+          <div class="table-suggestions-title">
+            <span class="material-symbols-outlined">smart_toy</span>
+            Struktur tabel berikut dipetakan oleh AI karena formatnya tidak dikenali secara otomatis
+            — periksa apakah interpretasi kolomnya masuk akal: ${llmParsedFiles.map(escapeHtml).join(", ")}
+          </div>
+        </div>`
+      : "";
+
     // Suggest which BI table families to upload when claims came back Inconclusive
     // because no uploaded source carries their data (populated by the backend).
     const tableSuggestions = data.table_suggestions || [];
@@ -1365,7 +1379,7 @@ body.auth-locked .app {
       : "";
 
     const factPanel = `<div class="report-tab-panel active" data-report-panel="fact">
-      ${suggestionsBox}${toolbarRow}${filterBar}<div class="fact-cards">${cards}</div>
+      ${llmParserNotice}${suggestionsBox}${toolbarRow}${filterBar}<div class="fact-cards">${cards}</div>
     </div>`;
 
     const typoPanel = `<div class="report-tab-panel" data-report-panel="typo">

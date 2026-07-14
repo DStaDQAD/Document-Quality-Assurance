@@ -112,6 +112,9 @@ class PairedVerificationResponse(BaseModel):
     excel_filenames: List[str]
     excel_sheets: List[str]
     excel_units: List[str]
+    # Which cascade tier parsed each source: "bi" | "generic" | "llm" (aligned with
+    # excel_filenames). "llm" means the structure was LLM-mapped — worth a reviewer's glance.
+    excel_parsers: List[str] = Field(default_factory=list)
     total_facts: int
     entailed_count: int
     refuted_count: int

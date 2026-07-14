@@ -695,3 +695,43 @@ def test_cascade_keeps_empty_bi_result_when_generic_also_fails(mock_bi, mock_gen
 def test_cascade_raises_combined_error_when_both_parsers_fail():
     with pytest.raises(ValueError, match="Parser BI.*Parser generik"):
         _parse_table_with_fallback(b"not an excel file at all", "S")
+
+
+@patch("paired_verifier.parse_table_with_llm")
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_uses_llm_tier_when_deterministic_parsers_fail(mock_bi, mock_generic, mock_llm_parse):
+    mock_bi.side_effect = ValueError("no year header")
+    mock_generic.side_effect = ValueError("no structure")
+    mock_llm_parse.return_value = _make_cat_table(data={("Laptop ASUS", "Harga"): 1.0})
+
+    table, parser = _parse_table_with_fallback(b"bytes", "S", llm=Mock())
+
+    assert parser == "llm"
+    assert table.axis_type == "categorical"
+
+
+@patch("paired_verifier.parse_table_with_llm")
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_llm_tier_not_called_without_an_llm(mock_bi, mock_generic, mock_llm_parse):
+    mock_bi.side_effect = ValueError("no year header")
+    mock_generic.return_value = _make_cat_table(data={("Laptop ASUS", "Harga"): 1.0})
+
+    _parse_table_with_fallback(b"bytes", "S")
+
+    mock_llm_parse.assert_not_called()
+
+
+@patch("paired_verifier.parse_table_with_llm")
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_keeps_empty_bi_result_when_llm_tier_also_fails(mock_bi, mock_generic, mock_llm_parse):
+    mock_bi.return_value = _make_table(data={})
+    mock_generic.side_effect = ValueError("no structure")
+    mock_llm_parse.side_effect = ValueError("spec rejected")
+
+    table, parser = _parse_table_with_fallback(b"bytes", "S", llm=Mock())
+
+    assert parser == "bi"
+    assert table.row_labels == []
