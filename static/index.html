@@ -338,13 +338,22 @@ pre.sql::before {
 
 /* ── Table-family suggestions for unfound (Inconclusive) claims ── */
 .table-suggestions {
+  position: relative;
   background: linear-gradient(135deg, #FFFBEB, #FEFCE8);
   border: 1px solid #FDE68A;
   border-left: 3px solid #F59E0B;
   border-radius: var(--r-lg);
-  padding: 12px 15px; margin-bottom: 14px;
+  padding: 12px 34px 12px 15px; margin-bottom: 14px;
   font-size: 13px; color: var(--text-900); line-height: 1.55;
 }
+.notice-close {
+  position: absolute; top: 8px; right: 8px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; cursor: pointer;
+  color: #B45309; padding: 3px; border-radius: 6px;
+}
+.notice-close .material-symbols-outlined { font-size: 17px; }
+.notice-close:hover { background: rgba(245, 158, 11, .18); }
 .table-suggestions-title {
   display: flex; align-items: center; gap: 7px;
   font-weight: 600; margin-bottom: 8px;
@@ -1354,6 +1363,9 @@ body.auth-locked .app {
     const llmParsedFiles = (data.excel_filenames || []).filter((_, idx) => parsers[idx] === "llm");
     const llmParserNotice = llmParsedFiles.length
       ? `<div class="table-suggestions">
+          <button class="notice-close" title="Tutup" aria-label="Tutup pemberitahuan">
+            <span class="material-symbols-outlined">close</span>
+          </button>
           <div class="table-suggestions-title">
             <span class="material-symbols-outlined">smart_toy</span>
             Struktur tabel berikut dipetakan oleh AI karena formatnya tidak dikenali secara otomatis
@@ -1367,6 +1379,9 @@ body.auth-locked .app {
     const tableSuggestions = data.table_suggestions || [];
     const suggestionsBox = tableSuggestions.length
       ? `<div class="table-suggestions">
+          <button class="notice-close" title="Tutup" aria-label="Tutup saran tabel">
+            <span class="material-symbols-outlined">close</span>
+          </button>
           <div class="table-suggestions-title">
             <span class="material-symbols-outlined">lightbulb</span>
             Sebagian klaim tidak ditemukan di tabel yang diunggah. Coba unggah juga tabel berikut lalu jalankan ulang:
@@ -1423,6 +1438,10 @@ body.auth-locked .app {
   }
 
   function attachPairedHandlers(resultEl) {
+    resultEl.querySelectorAll(".notice-close").forEach((btn) => {
+      btn.addEventListener("click", () => btn.closest(".table-suggestions").remove());
+    });
+
     resultEl.querySelectorAll(".report-subtab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.reportTab;
