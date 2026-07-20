@@ -1,11 +1,53 @@
 import asyncio
 from unittest.mock import Mock, patch
 
+import pytest
+
 from pdf_extraction import (
+    _strip_tabular_content,
     extract_narrative_text,
     extract_text_from_pdf,
     extract_text_from_pdf_vision_async,
 )
+
+
+# ---------------------------------------------------------------------------
+# _strip_tabular_content — wordy-label table rows (trailing numeric run)
+# ---------------------------------------------------------------------------
+
+# Verbatim leaked rows measured in the April 2026 test PDF: their long labels (plus
+# pypdfium splitting words like 'Sem pit') keep them under the 65% numeric-density rule,
+# so before the trailing-run rule they reached the LLM as 'narrative' — 11% of the text.
+_LEAKED_TABLE_ROWS = [
+    "Uang Beredar Sem pit (M 1) 6.033,8 5.936,1 14,4 13,6",
+    "Surat Berharga Selain Saham ** 53,6 64,0 (49,8) (38,2)",
+    "Tabungan Rupiah Ditarik Sew aktu-w aktu 2.610,2 2.593,7 7,4 7,1",
+    "Kew ajiban kepada Pem erintah Pusat 793,8 903,2 (12,1) (11,7)",
+]
+
+# Genuine BI narrative sentences — numbers are always separated by words, so the longest
+# trailing numeric run is 1 and none of these may ever be dropped.
+_GENUINE_PROSE = [
+    "tumbuh sebesar 9,4% (yoy), melanjutkan pertumbuhan pada bulan Maret 2026 sebesar 8,9% (yoy).",
+    "M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun atau tumbuh 9,7% (yoy).",
+    "pada Maret 2026 sebesar 9,7% (yoy) (Tabel 1 dan Grafik 2)",
+    "penurunan suku bunga terjadi pada tahun 2025 dan 2026",
+]
+
+
+@pytest.mark.parametrize("row", _LEAKED_TABLE_ROWS)
+def test_strip_tabular_drops_wordy_label_table_rows(row):
+    assert _strip_tabular_content(row).strip() == ""
+
+
+@pytest.mark.parametrize("sentence", _GENUINE_PROSE)
+def test_strip_tabular_keeps_genuine_narrative_sentences(sentence):
+    assert _strip_tabular_content(sentence).strip() == sentence
+
+
+def test_strip_tabular_drops_row_of_bare_value_cells():
+    # A row that is ONLY value cells (label on a previous line) is also a table row.
+    assert _strip_tabular_content("53,6 64,0 (49,8)").strip() == ""
 
 
 @patch("pdf_extraction._extract_pages_raw")

@@ -151,10 +151,11 @@ def extract_text_from_pdf_vision(
     """
     try:
         import pypdfium2 as pdfium
+        import PIL.Image  # noqa: F401 -- to_pil() imports it lazily; fail here with a clear message
     except ImportError:
         raise RuntimeError(
-            "pypdfium2 is required for vision-based PDF extraction. "
-            "Install it with: pip install pypdfium2"
+            "pypdfium2 and Pillow are required for vision-based PDF extraction. "
+            "Install them with: pip install pypdfium2 Pillow"
         )
 
     # Render all pages to PNG bytes
@@ -303,18 +304,42 @@ _MONTH_ABBREVS = frozenset({
 # A token that is purely numeric (integer, decimal with comma/period, optional %).
 _NUMERIC_RE = re.compile(r'^-?[\d.,]+%?$')
 
+# A numeric token as it appears in a table CELL: bare ('53,6'), or wrapped in parentheses —
+# the accounting convention BI tables use for negatives ('(49,8)' means -49,8).
+_CELL_NUMERIC_RE = re.compile(r'^\(?-?[\d.,]+%?\)?$')
+
 # A run of 4+ spaces between two non-space characters: the inter-column gap that
 # justified PDF tables leave behind. Real prose never has interior 4+ space gaps.
 _JUSTIFIED_GAP_RE = re.compile(r'\S {4,}\S')
 
 
+def _trailing_numeric_run(tokens: List[str]) -> int:
+    """Length of the run of numeric cell tokens at the END of a line.
+
+    This is the shape of a table row whose LABEL is wordy: 'Uang Beredar Sempit (M1)
+    6.033,8 5.936,1 14,4 13,6' is only ~40% numeric overall (worse when pypdfium splits
+    label words), so the density rule in _strip_tabular_content never fires — but its tail
+    is an unbroken run of value cells. Prose never ends that way: numbers in a sentence are
+    separated by words ('sebesar 9,7% (yoy) pada Maret 2026' — longest trailing run is 1).
+    """
+    run = 0
+    for tok in reversed(tokens):
+        if not _CELL_NUMERIC_RE.match(tok):
+            break
+        run += 1
+    return run
+
+
 def _strip_tabular_content(text: str) -> str:
     """Remove tabular data rows from vision LLM output.
 
-    Catches both:
+    Catches:
     - Markdown table rows (lines starting with |)
     - Non-pipe tabular rows: lines where ≥ 65% of tokens are numeric or month abbreviations
       (e.g. "6,2  Mar  6,1  Apr  5,2  Mei  4,9  Jun  6,4  Jul" from BI time-series lampiran).
+    - Wordy-label table rows: lines ENDING in a run of ≥3 numeric cells ('Surat Berharga
+      Selain Saham ** 53,6 64,0 (49,8) (38,2)'). Their long labels keep them under the 65%
+      density bar, but prose never ends with 3+ consecutive bare numbers.
     """
     lines = text.split('\n')
     result = []
@@ -340,6 +365,11 @@ def _strip_tabular_content(text: str) -> str:
             )
             if tabular_count / len(tokens) >= 0.65:
                 continue
+        # Wordy-label table rows: 'label words… then value cells to the end of the line'.
+        # 3 is the floor because a sentence can legitimately end with two numbers
+        # ('…tahun 2025 dan 2026' minus the 'dan' in sloppy extraction), but never three.
+        if len(tokens) >= 3 and _trailing_numeric_run(tokens) >= 3:
+            continue
         is_blank = not stripped
         if is_blank and prev_blank:
             continue
@@ -352,10 +382,11 @@ def _render_pages_to_b64(file_bytes: bytes, dpi: int) -> list[str]:
     """Render every PDF page to a base64-encoded PNG string (CPU-bound, call in a thread)."""
     try:
         import pypdfium2 as pdfium
+        import PIL.Image  # noqa: F401 -- to_pil() imports it lazily; fail here with a clear message
     except ImportError:
         raise RuntimeError(
-            "pypdfium2 is required for vision-based PDF extraction. "
-            "Install it with: pip install pypdfium2"
+            "pypdfium2 and Pillow are required for vision-based PDF extraction. "
+            "Install them with: pip install pypdfium2 Pillow"
         )
     doc = pdfium.PdfDocument(file_bytes)
     scale = dpi / 72
