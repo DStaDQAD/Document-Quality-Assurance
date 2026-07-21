@@ -1,9 +1,13 @@
 import asyncio
+import base64
+import io
+import struct
 from unittest.mock import Mock, patch
 
 import pytest
 
 from pdf_extraction import (
+    _render_pages_to_b64,
     _strip_tabular_content,
     extract_narrative_text,
     extract_text_from_pdf,
@@ -48,6 +52,42 @@ def test_strip_tabular_keeps_genuine_narrative_sentences(sentence):
 def test_strip_tabular_drops_row_of_bare_value_cells():
     # A row that is ONLY value cells (label on a previous line) is also a table row.
     assert _strip_tabular_content("53,6 64,0 (49,8)").strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# _render_pages_to_b64 — real rendering, no mocks
+# ---------------------------------------------------------------------------
+
+def _blank_pdf_bytes(page_count: int, width: int = 200, height: int = 100) -> bytes:
+    """Build a real in-memory PDF, so the render path runs against genuine bytes."""
+    pdfium = pytest.importorskip("pypdfium2")
+    doc = pdfium.PdfDocument.new()
+    for _ in range(page_count):
+        doc.new_page(width, height)
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
+def test_render_pages_to_b64_produces_one_real_png_per_page():
+    """Exercise the actual pypdfium2 → PIL → PNG path instead of mocking it.
+
+    Every other vision test mocks the LLM and never reaches bitmap.to_pil(), which is why
+    CI stayed green while production died with ModuleNotFoundError: No module named 'PIL' —
+    pypdfium2 imports PIL lazily and does not depend on it, so a clean install had no
+    Pillow. This test fails on that install, and on any future lazy-import dependency
+    that goes undeclared in requirements.txt.
+    """
+    rendered = _render_pages_to_b64(_blank_pdf_bytes(2), dpi=144)
+
+    assert len(rendered) == 2
+    for b64_page in rendered:
+        png = base64.b64decode(b64_page, validate=True)
+        assert png[:8] == b"\x89PNG\r\n\x1a\n"
+        # IHDR carries the dimensions in the 8 bytes after the chunk header: at 144 DPI a
+        # 200x100 pt page (72 pt/inch) must come out exactly 2x, proving dpi is applied.
+        width, height = struct.unpack(">II", png[16:24])
+        assert (width, height) == (400, 200)
 
 
 @patch("pdf_extraction._extract_pages_raw")
