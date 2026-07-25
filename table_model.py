@@ -3,9 +3,11 @@
 A parsed table is modelled as (row_label, column_key) -> float where the column axis is one
 of two kinds:
 
-  temporal    : column key = (year, month) — the BI time-series case. Internally stored as
-                the 3-tuple key (row_label, year, month) so existing callers, tests and eval
-                fixtures that populate `_data` directly keep working unchanged.
+  temporal    : column key = (year, month) — the BI time-series case. The month slot holds
+                a 3-letter month abbreviation ("Apr") OR a quarter token ("Q2") for
+                quarterly tables. Internally stored as the 3-tuple key (row_label, year,
+                month) so existing callers, tests and eval fixtures that populate `_data`
+                directly keep working unchanged.
   categorical : column key = attribute name (e.g. 'Harga', 'Stok' in an item list).
                 Stored as the 2-tuple key (row_label, col_label).
 

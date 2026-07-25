@@ -1,12 +1,18 @@
 """Heuristic parser for arbitrary 'clean' tables — Tier 2 of the parsing cascade.
 
 parse_bi_table (Tier 1) handles the known BI wide time-series layout. This module handles
-everything else that still has a detectable single-row header structure:
+everything else with a detectable header structure:
 
+  - Two-row headers: an int-year row merged across period columns above a row of bare
+    quarter ("I/II/III/IV", "Q1", "Tw I") or month tokens — the BI survey layout, incl.
+    several tables stacked in one sheet and multi-column hierarchical label blocks.
   - Time-series tables whose period headers are COMBINED in one row ("Apr 2026", "2026M04",
-    "Apr-26", real Excel date cells) instead of BI's split year-row + month-row.
+    "Apr-26", "Q1 2026", "Triwulan II 2026", real Excel date cells).
   - Non-time-series (categorical) tables such as item lists / inventories / budgets:
     a header row of attribute names ("Nama Barang | Harga | Stok") over data rows.
+
+Quarter columns share the temporal key space with months: TableData keys are
+(label, year, "Apr") or (label, year, "Q2").
 
 Detection strategy (all deterministic — no LLM, values never leave code):
   1. Header row  : first row (within the top 20) with >= 2 non-empty cells where >= 80% of
@@ -27,8 +33,8 @@ structure-mapping tier):
   - The leftmost text column is assumed to be the row key. If an ID/code column precedes
     the human-readable name column, rows are keyed by the code.
   - Duplicate row labels / column headers keep the first occurrence.
-  - Split two-row period headers (bare year row + month row) are NOT handled here — that is
-    exactly the BI layout, which Tier 1 already covers.
+  - The two-row path requires merged-style contiguous year runs for month tokens, so the
+    sparse-year-anchor BI monthly layout still belongs to Tier 1 exclusively.
 """
 
 import io
@@ -36,10 +42,24 @@ import re
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
-from table_model import TableData
+from table_model import QUAL_SEP, TableData
 
 _MONTH_ABBREVS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+# Canonical quarter tokens. They share the (year, token) period-key slot with month
+# abbreviations: TableData's temporal keys are (label, year, "Apr") or (label, year, "Q2").
+_QUARTER_CANON = ["Q1", "Q2", "Q3", "Q4"]
+
+# Quarter spellings (lowercased) -> canonical token. Covers roman numerals as used in BI
+# survey headers ('I'..'IV'), Q-forms, and Indonesian 'Tw'/'Triwulan'/'Kuartal' prefixes.
+_QUARTER_TOKENS: Dict[str, str] = {}
+for _i, _q in enumerate(_QUARTER_CANON, start=1):
+    _roman = ["i", "ii", "iii", "iv"][_i - 1]
+    for _form in (_roman, f"q{_i}", f"q {_i}", f"tw{_i}", f"tw {_i}", f"tw {_roman}",
+                  f"triwulan {_i}", f"triwulan {_roman}",
+                  f"kuartal {_i}", f"kuartal {_roman}"):
+        _QUARTER_TOKENS[_form] = _q
 
 # Indonesian + English month names/abbreviations -> canonical 3-letter English abbreviation
 # (the same canonical form structured_extractor emits and TableData keys on).
@@ -69,6 +89,31 @@ _YEAR_NAME_RE = re.compile(r"^(\d{4})[\s.\-/']*([A-Za-z]+)$")
 _YEAR_M_NUM_RE = re.compile(r"^(\d{4})[Mm\-/](\d{1,2})$")
 _NUM_YEAR_RE = re.compile(r"^(\d{1,2})[\-/](\d{4})$")
 
+# Combined quarter+year single-cell forms: "Q1 2026", "Tw I 2026", "Triwulan II 2026",
+# "2026Q1", "I 2026". Bare tokens without a year are handled by _parse_quarter_token
+# (two-row header path) instead, so a lone categorical column named "I" stays categorical.
+_QTR_PHRASE = r"(?:q|tw|triwulan|kuartal)[\s.]*(?:[1-4]|[ivIV]+)|[ivIV]+"
+_QTR_YEAR_RE = re.compile(rf"^({_QTR_PHRASE})[\s.\-/']*(\d{{2}}|\d{{4}})$", re.IGNORECASE)
+_YEAR_QTR_RE = re.compile(rf"^(\d{{4}})[\s.\-/']*({_QTR_PHRASE})$", re.IGNORECASE)
+
+
+def _normalize_quarter_phrase(raw: str) -> Optional[str]:
+    """Canonicalize a quarter phrase ('Tw.II', 'q1', 'IV') to 'Q1'..'Q4', else None."""
+    return _QUARTER_TOKENS.get(re.sub(r"[\s.]+", " ", raw).strip().lower())
+
+
+def _parse_quarter_token(value) -> Optional[str]:
+    """Return 'Q1'..'Q4' when a header cell denotes one bare calendar quarter, else None.
+
+    Used only by the two-row header path, where the year comes from the row above.
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip().rstrip("*").strip()
+    if not text:
+        return None
+    return _normalize_quarter_phrase(text)
+
 
 def _normalize_year(raw: str) -> Optional[int]:
     year = int(raw)
@@ -95,6 +140,10 @@ def _parse_period(value) -> Optional[Tuple[int, str]]:
         year = _normalize_year(m.group(2))
         if month and year:
             return year, month
+        # Not a month name — a roman quarter ("I 2026") also fits [A-Za-z]+.
+        quarter = _QUARTER_TOKENS.get(m.group(1).lower())
+        if quarter and year:
+            return year, quarter
         return None
     m = _YEAR_NAME_RE.match(text)
     if m:
@@ -102,6 +151,9 @@ def _parse_period(value) -> Optional[Tuple[int, str]]:
         year = _normalize_year(m.group(1))
         if month and year:
             return year, month
+        quarter = _QUARTER_TOKENS.get(m.group(2).lower())
+        if quarter and year:
+            return year, quarter
         return None
     m = _YEAR_M_NUM_RE.match(text)
     if m:
@@ -114,18 +166,61 @@ def _parse_period(value) -> Optional[Tuple[int, str]]:
         month_num, year = int(m.group(1)), _normalize_year(m.group(2))
         if year and 1 <= month_num <= 12:
             return year, _MONTH_ABBREVS[month_num - 1]
+        return None
+    m = _QTR_YEAR_RE.match(text)
+    if m:
+        quarter = _normalize_quarter_phrase(m.group(1))
+        year = _normalize_year(m.group(2))
+        if quarter and year:
+            return year, quarter
+        return None
+    m = _YEAR_QTR_RE.match(text)
+    if m:
+        quarter = _normalize_quarter_phrase(m.group(2))
+        year = _normalize_year(m.group(1))
+        if quarter and year:
+            return year, quarter
     return None
 
 
 # ---------------------------------------------------------------------------
-# Grid loading (.xls via xlrd, .xlsx via openpyxl) — values only, dates as datetime
+# Grid loading (.xls via xlrd, .xlsx via openpyxl) — values only, dates as datetime.
+# Merged cells are forward-filled: the anchor (top-left) value is copied into every
+# cell of the merge, so merged year headers and vertically-merged category labels
+# become visible to the structure heuristics.
 # ---------------------------------------------------------------------------
+
+def _apply_merged_fill(grid: List[List], ranges: List[Tuple[int, int, int, int]]) -> None:
+    """Copy each merged range's anchor value into all its cells, in place.
+
+    `ranges` uses xlrd's convention: 0-based half-open (rlo, rhi, clo, chi).
+    Rows shorter than a range's right edge are extended with None first.
+    """
+    for rlo, rhi, clo, chi in ranges:
+        if rlo >= len(grid):
+            continue
+        anchor = grid[rlo][clo] if clo < len(grid[rlo]) else None
+        if anchor is None:
+            continue
+        for r in range(rlo, min(rhi, len(grid))):
+            row = grid[r]
+            if len(row) < chi:
+                row.extend([None] * (chi - len(row)))
+            for c in range(clo, chi):
+                row[c] = anchor
+
 
 def _load_grid(data: bytes, sheet_name: str) -> List[List]:
     if data[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
         import xlrd
 
-        wb = xlrd.open_workbook(file_contents=data)
+        # formatting_info exposes merged_cells; some .xls files can't provide it —
+        # fall back to a plain open and skip the merged fill (same pattern as
+        # excel_parser_bi._read_xls).
+        try:
+            wb = xlrd.open_workbook(file_contents=data, formatting_info=True)
+        except Exception:
+            wb = xlrd.open_workbook(file_contents=data)
         try:
             ws = wb.sheet_by_name(sheet_name)
         except xlrd.XLRDError:
@@ -139,15 +234,39 @@ def _load_grid(data: bytes, sheet_name: str) -> List[List]:
                     v = xlrd.xldate.xldate_as_datetime(v, wb.datemode)
                 row.append(v)
             grid.append(row)
+        _apply_merged_fill(grid, list(getattr(ws, "merged_cells", []) or []))
         return grid
     elif data[:4] == b'PK\x03\x04':
         import openpyxl
 
-        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        # Not read_only: merged_cells.ranges is unavailable in read-only mode, and the
+        # workbooks handled here are small enough to load fully.
+        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
         if sheet_name not in wb.sheetnames:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
         try:
-            return [list(row) for row in wb[sheet_name].iter_rows(values_only=True)]
+            ws = wb[sheet_name]
+            grid = []
+            for row in ws.iter_rows():
+                out = []
+                for cell in row:
+                    v = cell.value
+                    # Excel scales %-formatted cells by 100 for DISPLAY only (0.0577
+                    # shown as "5.77%"). Narrative claims quote the displayed number,
+                    # so store the display scale. Quoted literals ('0"%"') don't scale
+                    # in Excel and are excluded. (.xls path: xlrd format lookup is
+                    # impractical, so this correction is xlsx-only.)
+                    if isinstance(v, (int, float)) and not isinstance(v, bool):
+                        fmt = re.sub(r'"[^"]*"', "", cell.number_format or "")
+                        if "%" in fmt:
+                            v = v * 100
+                    out.append(v)
+                grid.append(out)
+            _apply_merged_fill(grid, [
+                (m.min_row - 1, m.max_row, m.min_col - 1, m.max_col)
+                for m in ws.merged_cells.ranges
+            ])
+            return grid
         finally:
             wb.close()
     else:
@@ -219,6 +338,200 @@ def _title_and_unit(grid: List[List], header_row: int) -> Tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Two-row header path: an int-year row (merged across period columns) directly above
+# a row of bare quarter (I/II/III/IV, Q1..) or month tokens — the BI survey layout.
+# Tried BEFORE the single-row heuristics because those latch onto the quarter row as a
+# categorical header and silently produce garbage on such sheets. Regression safety
+# comes from the strict structural preconditions below, not from ordering.
+# ---------------------------------------------------------------------------
+
+def _is_year_cell(v) -> bool:
+    """True for an integral numeric cell in the plausible-year range (2012 or 2012.0)."""
+    return (
+        isinstance(v, (int, float)) and not isinstance(v, bool)
+        and float(v).is_integer() and 1990 <= v <= 2100
+    )
+
+
+def _bare_period_token(v) -> Optional[str]:
+    """Canonical token for a bare period header cell: 'Q1'..'Q4' or 'Jan'..'Dec'."""
+    quarter = _parse_quarter_token(v)
+    if quarter:
+        return quarter
+    if isinstance(v, str):
+        return _MONTH_NAMES.get(v.strip().rstrip("*").strip().lower())
+    return None
+
+
+def _years_form_merged_runs(row: List, year_cols: List[int]) -> bool:
+    """True when every distinct year value spans a contiguous run of >= 2 columns.
+
+    Evidence the years came from horizontal merges (this layout), not the sparse
+    single-cell anchors of the BI monthly layout — which tier 1 owns and whose year
+    assignment would be wrong if naively read here.
+    """
+    runs: List[int] = []
+    prev_c: Optional[int] = None
+    for c in sorted(year_cols):
+        if prev_c is not None and c == prev_c + 1 and row[c] == row[prev_c]:
+            runs[-1] += 1
+        else:
+            runs.append(1)
+        prev_c = c
+    return bool(runs) and all(n >= 2 for n in runs)
+
+
+def _find_header_blocks(grid: List[List]) -> List[Tuple[int, int]]:
+    """All (year_row, period_row) header pairs, top to bottom, across the whole grid.
+
+    Headers repeat mid-sheet when several tables are stacked in one sheet, so the scan
+    is not limited to the top rows. A pair qualifies when the year row holds >= 2 year
+    cells (merged years repeat after the fill) and >= _PERIOD_MIN_FRAC of those columns
+    carry a parseable bare period token right below (computed ONLY over year-bearing
+    columns — vertical label merges spill text into the period row).
+    """
+    blocks: List[Tuple[int, int]] = []
+    r = 0
+    while r < len(grid) - 1:
+        year_cols = [c for c, v in enumerate(grid[r]) if _is_year_cell(v)]
+        if len(year_cols) < 2:
+            r += 1
+            continue
+        next_row = grid[r + 1]
+        tokens = {
+            c: tok for c in year_cols
+            if (tok := _bare_period_token(next_row[c] if c < len(next_row) else None))
+        }
+        if len(tokens) < 2 or len(tokens) / len(year_cols) < _PERIOD_MIN_FRAC:
+            r += 1
+            continue
+        if not any(t in _QUARTER_CANON for t in tokens.values()):
+            # Month-only block: require merged-style contiguous year runs (see above).
+            if not _years_form_merged_runs(grid[r], year_cols):
+                r += 1
+                continue
+        blocks.append((r, r + 1))
+        r += 2
+    return blocks
+
+
+def _block_col_keys(grid: List[List], year_row: int, period_row: int) -> Dict[int, Tuple[int, str]]:
+    """{column -> (year, period_token)} for every column with a year above a token."""
+    keys: Dict[int, Tuple[int, str]] = {}
+    yrow, prow = grid[year_row], grid[period_row]
+    for c, v in enumerate(yrow):
+        if not _is_year_cell(v):
+            continue
+        tok = _bare_period_token(prow[c] if c < len(prow) else None)
+        if tok:
+            keys[c] = (int(v), tok)
+    return keys
+
+
+def _find_label_cols(
+    grid: List[List], first_data_col: int, row_lo: int, row_hi: int
+) -> List[int]:
+    """Contiguous run of text-bearing columns ending right before the first data column."""
+    def col_has_text(c: int) -> bool:
+        for r in range(row_lo, min(row_hi, len(grid))):
+            row = grid[r]
+            if c < len(row) and isinstance(row[c], str) and row[c].strip():
+                return True
+        return False
+
+    cols: List[int] = []
+    c = first_data_col - 1
+    while c >= 0 and col_has_text(c):
+        cols.append(c)
+        c -= 1
+    return list(reversed(cols))
+
+
+def _composite_label(parts: List[Optional[str]]) -> str:
+    """Join label parts with QUAL_SEP: whitespace-normalized, blanks dropped,
+    consecutive case-insensitive duplicates collapsed ('Total > Total' -> 'Total')."""
+    out: List[str] = []
+    for p in parts:
+        if p is None:
+            continue
+        text = re.sub(r"\s+", " ", str(p)).strip()
+        if not text:
+            continue
+        if out and out[-1].lower() == text.lower():
+            continue
+        out.append(text)
+    return QUAL_SEP.join(out)
+
+
+def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
+    """Parse a sheet of stacked two-row-header tables into one temporal TableData.
+
+    Each header block governs the rows down to the next block (or the sheet's end), so
+    blank separator rows, repeated sub-headers, 'na' sentinels and footnote rows need no
+    special casing: a row only enters the table when a mapped column holds a number.
+
+    Row labels are composites of the label-block columns joined with QUAL_SEP, built
+    with a HIERARCHICAL forward fill: a blank label cell inherits the value above it
+    only while no column to its left is explicit in the same row, and an explicit value
+    at level k clears the carried values of every level right of k — so a 'Total' row
+    with a blank child column stays 'Total' instead of inheriting a stale child label.
+    """
+    blocks = _find_header_blocks(grid)
+    if not blocks:
+        return None
+
+    table_data: Dict[Tuple, float] = {}
+    row_labels: List[str] = []
+    for i, (year_row, period_row) in enumerate(blocks):
+        region_end = blocks[i + 1][0] if i + 1 < len(blocks) else len(grid)
+        col_keys = _block_col_keys(grid, year_row, period_row)
+        if not col_keys:
+            continue
+        label_cols = _find_label_cols(grid, min(col_keys), year_row, region_end)
+        if not label_cols:
+            continue
+
+        carry: List[Optional[str]] = [None] * len(label_cols)
+        for r in range(period_row + 1, region_end):
+            row = grid[r]
+            parts: List[Optional[str]] = []
+            explicit_left = False
+            for idx, c in enumerate(label_cols):
+                v = row[c] if c < len(row) else None
+                if not _is_empty(v):
+                    carry[idx] = str(v)
+                    for j in range(idx + 1, len(label_cols)):
+                        carry[j] = None
+                    parts.append(str(v))
+                    explicit_left = True
+                else:
+                    parts.append(None if explicit_left else carry[idx])
+            label = _composite_label(parts)
+            if not label:
+                continue
+            stored = False
+            for c, (year, tok) in col_keys.items():
+                if c < len(row) and _is_number(row[c]):
+                    table_data.setdefault((label, year, tok), float(row[c]))
+                    stored = True
+            if stored and label not in row_labels:
+                row_labels.append(label)
+
+    if not row_labels or not table_data:
+        return None
+
+    title, unit = _title_and_unit(grid, blocks[0][0])
+    return TableData(
+        title=title,
+        unit=unit,
+        row_labels=row_labels,
+        col_labels=[],
+        axis_type="temporal",
+        _data=table_data,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -230,6 +543,13 @@ def parse_generic_table(data: bytes, sheet_name: str) -> TableData:
     Raises ValueError when no plausible table structure is found.
     """
     grid = _load_grid(data, sheet_name)
+
+    # Two-row header layout (year row over quarter/month tokens) first: on such sheets
+    # the single-row heuristics below misread the token row as a categorical header.
+    two_row = _parse_two_row_table(grid)
+    if two_row is not None:
+        return two_row
+
     header_row = _find_header_row(grid)
     label_col = _find_label_col(grid, header_row)
     title, unit = _title_and_unit(grid, header_row)
