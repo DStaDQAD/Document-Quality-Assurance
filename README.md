@@ -58,6 +58,15 @@ touches a number:
    uploads of the same layout parse without another LLM call, and the UI flags LLM-mapped
    sources for review. All parsers emit the same two-axis `TableData` container
    (`table_model.py`): rows × (periods **or** attribute columns) → value.
+
+   Claims that still resolve against no parsed table get a last-resort **cell-pointer pass**
+   (`cell_pointer.py`): the LLM is shown a coordinate snapshot of the raw grid plus the pending
+   queries and answers each with a cell **coordinate** - code reads `grid[row][col]`, feeds the
+   value through the ordinary comparison machinery, and marks the result `resolved_via:
+   "pointer"` with the cell references in its reasoning. Sheets whose structure defeats every
+   parser are kept as `pointer-only` sources instead of failing the request, so any table the
+   model can visually understand stays verifiable - and a wrong pointer is visible in the
+   provenance, but can never invent a number.
 2. **PDF text extraction** (`pdf_extraction.py`) - `pypdf` first, falling back to Gemini vision
    OCR if the extracted text is too sparse. The extracted narrative text is shared between fact
    verification and the typo/grammar check below, so the vision fallback only ever runs once.
