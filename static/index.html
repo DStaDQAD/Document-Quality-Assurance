@@ -1332,14 +1332,6 @@ body.auth-locked .app {
           const valCls   = verdict === "Refuted" ? "bad" : verdict === "Entailed" ? "ok" : "";
           const pageBadge = item.page_number != null ? `<span class="page-badge">Hal.&nbsp;${item.page_number}</span>` : "";
           const sourceBadge = item.matched_excel_source ? `<span class="source-badge" title="${escapeHtml(item.matched_excel_source)}">${escapeHtml(item.matched_excel_source)}</span>` : "";
-          // Tier-4 provenance: the AI pointed at the cell, code read the value. The cell
-          // references ride in `reasoning` after the "Sel ditunjuk AI: " marker.
-          const pointerRefs = item.resolved_via === "pointer" && (item.reasoning || "").includes("Sel ditunjuk AI: ")
-            ? item.reasoning.split("Sel ditunjuk AI: ").pop()
-            : "";
-          const pointerBadge = item.resolved_via === "pointer"
-            ? `<span class="source-badge" title="${escapeHtml("Sel ditunjuk AI — nilai dibaca langsung dari sel oleh kode. " + pointerRefs)}">sel AI</span>`
-            : "";
           const quote    = item.context_quote ? `<div class="fact-quote">"${escapeHtml(item.context_quote)}"</div>` : "";
 
           const periodChips = periods.length > 1
@@ -1375,7 +1367,6 @@ body.auth-locked .app {
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
               ${pageBadge}
               ${sourceBadge}
-              ${pointerBadge}
             </div>
             ${quote}
             ${periodChips}
@@ -1428,7 +1419,7 @@ body.auth-locked .app {
             <span class="material-symbols-outlined">my_location</span>
             ${pointerResolvedCount
               ? `${pointerResolvedCount} klaim dipetakan melalui penunjukan sel AI — nilainya dibaca langsung
-                 dari sel oleh kode; arahkan kursor ke lencana "sel AI" untuk melihat referensi selnya.`
+                 dari sel oleh kode.`
               : ""}
             ${pointerOnlyFiles.length
               ? ` Struktur file berikut tidak terurai — klaimnya hanya dapat dicek via penunjukan sel AI:
