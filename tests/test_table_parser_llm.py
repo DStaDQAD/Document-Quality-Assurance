@@ -9,6 +9,7 @@ from table_parser_llm import (
     _SPEC_CACHE,
     _ColumnSpec,
     _TableSpec,
+    _grid_snapshot,
     _validate_spec,
     parse_table_with_llm,
 )
@@ -155,6 +156,14 @@ def test_validate_spec_rejects_period_column_without_month():
 
     with pytest.raises(ValueError, match="invalid month"):
         _validate_spec(spec, _grid())
+
+
+def test_grid_snapshot_larger_caps_expose_far_cells():
+    grid = [[None] * 45 for _ in range(25)]
+    grid[22][40] = 99.9  # beyond the default 20x30 window
+
+    assert "[40]=" not in _grid_snapshot(grid)
+    assert "[40]='99.9'" in _grid_snapshot(grid, max_rows=120, max_cols=100)
 
 
 def test_validate_spec_accepts_quarter_tokens_as_period_months():

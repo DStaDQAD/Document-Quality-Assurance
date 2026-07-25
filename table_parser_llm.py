@@ -130,16 +130,26 @@ _MAPPING_PROMPT = ChatPromptTemplate.from_messages([
 # Snapshot + fingerprint
 # ---------------------------------------------------------------------------
 
-def _grid_snapshot(grid: List[List]) -> str:
+def _grid_snapshot(
+    grid: List[List],
+    max_rows: int = _SNAPSHOT_ROWS,
+    max_cols: int = _SNAPSHOT_COLS,
+    cell_text_max: int = _CELL_TEXT_MAX,
+) -> str:
+    """Textual snapshot of the grid's top-left max_rows x max_cols region.
+
+    Defaults preserve the tier-3 structure-mapping behaviour; the cell-pointer tier
+    passes larger caps because the answer cells (newest periods) sit far right.
+    """
     lines = []
-    for r, row in enumerate(grid[:_SNAPSHOT_ROWS]):
+    for r, row in enumerate(grid[:max_rows]):
         cells = []
-        for c, v in enumerate(row[:_SNAPSHOT_COLS]):
+        for c, v in enumerate(row[:max_cols]):
             if _is_empty(v):
                 continue
             text = str(v)
-            if len(text) > _CELL_TEXT_MAX:
-                text = text[:_CELL_TEXT_MAX] + "…"
+            if len(text) > cell_text_max:
+                text = text[:cell_text_max] + "…"
             cells.append(f"[{c}]={text!r}")
         lines.append(f"row {r}: " + (" ".join(cells) if cells else "(empty)"))
     return "\n".join(lines)
