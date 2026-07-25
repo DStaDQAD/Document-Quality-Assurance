@@ -473,6 +473,17 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .sheet-ms-option:hover { background: var(--blue-50); }
 .sheet-ms-option input { width: auto; margin: 0; accent-color: var(--blue-500); cursor: pointer; }
 .sheet-ms-all { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; font-weight: 600; margin-bottom: 2px; }
+/* Per-PDF report sections when several PDFs are verified in one run */
+.pdf-report-section { margin-bottom: 20px; }
+.pdf-report-header {
+  display: flex; align-items: center; gap: 6px; margin: 0 0 10px;
+  font-size: 13px; font-weight: 600; color: var(--text-900);
+  padding: 8px 12px; background: var(--blue-50);
+  border: 1px solid var(--blue-100); border-radius: var(--r);
+}
+.pdf-report-header .material-symbols-outlined { font-size: 16px; color: #DC2626; }
+.pdf-report-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-report-count { font-size: 11px; font-weight: 500; color: var(--text-500); }
 .add-excel-btn {
   display: flex; align-items: center; gap: 4px; margin-top: 8px;
   font-size: 12px; color: var(--blue-500); cursor: pointer;
@@ -921,8 +932,8 @@ body.auth-locked .app {
                   <span class="upload-label">PDF Laporan</span>
                   <div class="dropzone-sm" id="paired-pdf-dropzone">
                     <span class="material-symbols-outlined">picture_as_pdf</span>
-                    <div class="dz-sub" id="paired-pdf-filename">Pilih file PDF</div>
-                    <input type="file" id="paired-pdf" accept="application/pdf" style="display:none">
+                    <div class="dz-sub" id="paired-pdf-filename">Pilih file PDF (boleh lebih dari satu)</div>
+                    <input type="file" id="paired-pdf" accept="application/pdf" multiple style="display:none">
                   </div>
                 </div>
                 <div class="upload-field">
@@ -1045,20 +1056,35 @@ body.auth-locked .app {
     fn.title = name;
   }
 
-  // Paired dropzones
+  // Paired PDF dropzone — accepts several PDFs at once; each is verified independently
+  // against the same Excel sources (PDF↔tabel, never PDF↔PDF).
+  function pdfSummary(files) {
+    if (!files.length) return "Belum ada file dipilih";
+    if (files.length === 1) return files[0].name;
+    return `${files.length} file PDF dipilih`;
+  }
   function setupDropzone(dzId, inpId, fnId) {
     const dz  = document.getElementById(dzId);
     const inp = document.getElementById(inpId);
     const fn  = document.getElementById(fnId);
+    const show = (files) => {
+      fn.textContent = pdfSummary(files);
+      fn.title = files.map((f) => f.name).join("\n") || "Belum ada file dipilih";
+    };
     dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => setFilenameText(fn, inp.files[0]?.name || "Belum ada file dipilih"));
+    inp.addEventListener("change", () => show([...inp.files]));
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
     dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
     dz.addEventListener("drop", (e) => {
       e.preventDefault();
       dz.classList.remove("drag-over");
-      const file = e.dataTransfer.files[0];
-      if (file) { const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files; setFilenameText(fn, file.name); }
+      const files = [...e.dataTransfer.files];
+      if (files.length) {
+        const dt = new DataTransfer();
+        files.forEach((f) => dt.items.add(f));
+        inp.files = dt.files;
+        show(files);
+      }
     });
   }
   setupDropzone("paired-pdf-dropzone", "paired-pdf", "paired-pdf-filename");
@@ -1737,29 +1763,56 @@ body.auth-locked .app {
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
     const pdfInp   = document.getElementById("paired-pdf");
     const resultEl = document.getElementById("paired-result");
+    const pdfFiles = [...pdfInp.files];
     const filledSources = excelSources.filter(s => s.inp.files.length > 0);
-    if (!pdfInp.files.length || filledSources.length === 0) {
+    if (!pdfFiles.length || filledSources.length === 0) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF dan minimal satu file Excel terlebih dahulu.</div>`;
       return;
     }
     // One (file, sheet) source per SELECTED sheet: the same file part is appended once
     // per sheet, aligned positionally with the comma-separated sheet_names query param —
     // the backend contract (_read_paired_uploads) is unchanged.
-    const formData = new FormData();
-    formData.append("pdf_file", pdfInp.files[0]);
-    const sheetNames = [];
+    const perSource = [];
     for (const s of filledSources) {
       const selected = pickerSelectedSheets(s.picker);
       if (!selected.length) {
         resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu sheet untuk setiap file Excel.</div>`;
         return;
       }
-      selected.forEach((sheet) => {
-        sheetNames.push(sheet);
-        formData.append("excel_file", s.inp.files[0]);
-      });
+      perSource.push({ file: s.inp.files[0], sheets: selected });
     }
-    withDisabledButton(e.currentTarget, () => runPairedVerification(resultEl, formData, sheetNames.join(",")));
+    const sheetNames = perSource.flatMap((p) => p.sheets).join(",");
+    const buildFormData = (pdf) => {
+      const fd = new FormData();
+      fd.append("pdf_file", pdf);
+      perSource.forEach((p) => p.sheets.forEach(() => fd.append("excel_file", p.file)));
+      return fd;
+    };
+
+    // Several PDFs run SEQUENTIALLY, each against the same Excel sources (PDF↔tabel,
+    // never PDF↔PDF), each rendering into its own titled section. A failure in one PDF
+    // shows its error banner in place and the loop moves on to the next.
+    withDisabledButton(e.currentTarget, async () => {
+      resultEl.innerHTML = "";
+      for (let idx = 0; idx < pdfFiles.length; idx++) {
+        const body = document.createElement("div");
+        if (pdfFiles.length > 1) {
+          const section = document.createElement("div");
+          section.className = "pdf-report-section";
+          section.innerHTML = `<div class="pdf-report-header">
+            <span class="material-symbols-outlined">picture_as_pdf</span>
+            <span class="pdf-report-name">${escapeHtml(pdfFiles[idx].name)}</span>
+            <span class="pdf-report-count">${idx + 1}/${pdfFiles.length}</span>
+          </div>`;
+          section.appendChild(body);
+          resultEl.appendChild(section);
+          section.scrollIntoView({ behavior: "smooth", block: "start" });
+        } else {
+          resultEl.appendChild(body);
+        }
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames);
+      }
+    });
   });
 
   // Sidebar toggle
