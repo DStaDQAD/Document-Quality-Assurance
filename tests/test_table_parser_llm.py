@@ -157,6 +157,27 @@ def test_validate_spec_rejects_period_column_without_month():
         _validate_spec(spec, _grid())
 
 
+def test_validate_spec_accepts_quarter_tokens_as_period_months():
+    spec = _TableSpec(
+        header_row=2, label_col=1, data_start_row=3, axis_type="temporal",
+        title=None, unit=None,
+        columns=[_ColumnSpec(col=3, kind="period", year=2026, month="Q2")],
+    )
+
+    _validate_spec(spec, _grid())  # must not raise
+
+
+def test_validate_spec_rejects_invalid_quarter_token():
+    spec = _TableSpec(
+        header_row=2, label_col=1, data_start_row=3, axis_type="temporal",
+        title=None, unit=None,
+        columns=[_ColumnSpec(col=3, kind="period", year=2026, month="Q5")],
+    )
+
+    with pytest.raises(ValueError, match="invalid month"):
+        _validate_spec(spec, _grid())
+
+
 def test_validate_spec_rejects_attribute_column_without_name():
     spec = _inventory_spec()
     spec.columns[0].name = "  "

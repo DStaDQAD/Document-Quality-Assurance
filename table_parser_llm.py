@@ -25,7 +25,16 @@ from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from table_model import TableData
-from table_parser_generic import _MONTH_ABBREVS, _is_empty, _is_number, _load_grid
+from table_parser_generic import (
+    _MONTH_ABBREVS,
+    _QUARTER_CANON,
+    _is_empty,
+    _is_number,
+    _load_grid,
+)
+
+# Valid period tokens for a column spec: months plus quarter tokens.
+_PERIOD_TOKENS = frozenset(_MONTH_ABBREVS) | frozenset(_QUARTER_CANON)
 
 logger = logging.getLogger("fact-checker")
 
@@ -51,7 +60,10 @@ class _ColumnSpec(BaseModel):
     year: Optional[int] = Field(None, description="Period columns only: the year, e.g. 2026.")
     month: Optional[str] = Field(
         None,
-        description="Period columns only: 3-letter English month abbreviation (Jan..Dec).",
+        description=(
+            "Period columns only: 3-letter English month abbreviation (Jan..Dec), or a "
+            "quarter token Q1..Q4 when the column is a calendar quarter."
+        ),
     )
     name: Optional[str] = Field(
         None, description="Attribute columns only: the column's name as written in the sheet."
@@ -97,6 +109,8 @@ Rules:
    attribute names).
 2. Skip columns that hold row numbers, notes, or free text: list only real data columns.
 3. If year headers appear on a different row than month headers, combine them per column.
+   Quarter headers 'I','II','III','IV' (or Tw/Triwulan/Kuartal forms) under a year row are
+   period columns too: month='Q1'..'Q4' (Triwulan I=Q1 .. Triwulan IV=Q4).
 4. label_col must not be listed in columns.
 """
 
@@ -182,7 +196,7 @@ def _validate_spec(spec: _TableSpec, grid: List[List]) -> None:
                 raise ValueError("Period column in a categorical spec.")
             if col_spec.year is None or not (1990 <= col_spec.year <= 2100):
                 raise ValueError(f"Period column {col_spec.col} has invalid year {col_spec.year}.")
-            if col_spec.month not in _MONTH_ABBREVS:
+            if col_spec.month not in _PERIOD_TOKENS:
                 raise ValueError(f"Period column {col_spec.col} has invalid month {col_spec.month!r}.")
         else:
             if spec.axis_type != "categorical":
