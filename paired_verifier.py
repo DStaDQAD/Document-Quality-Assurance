@@ -11,8 +11,15 @@ pattern. No SQL is generated — every data point is a direct dict lookup into t
 tables; the operation itself (average, sum, diff, ratio, monotonic-trend check, unit conversion,
 YoY growth) is computed in plain Python, never by an LLM, to avoid hallucination risk in the
 comparison step.
+
+Lookup cascade: parsing runs bi → generic → LLM structure-mapping (_parse_table_with_fallback);
+claims that still resolve against no parsed table get a tier-4 CELL-POINTER pass (_pointer_pass /
+cell_pointer.py): the LLM points at grid coordinates and code reads the values, so even sheets
+whose structure defeats every parser stay verifiable ("pointer-only" sources) — and the LLM still
+never supplies a number, only a location that is reported in the result's provenance.
 """
 
+import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -20,8 +27,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 
+from cell_pointer import build_point_queries, read_grid_cell, resolve_pointers
 from excel_parser_bi import BITableData, parse_bi_table
-from table_parser_generic import parse_generic_table
+from table_parser_generic import _load_grid, parse_generic_table
 from table_parser_llm import parse_table_with_llm
 from schemas import (
     FactVerificationResult,
@@ -74,6 +82,12 @@ class _ExcelSource:
     table: BITableData
     filename: str
     sheet: str
+    # Raw cell grid (merged-fill applied) for the tier-4 cell-pointer pass; None when
+    # the bytes could not be loaded as a grid (then the pointer pass skips this source).
+    grid: Optional[List[List]] = None
+    # True when every parser failed but the grid loaded: the table is empty and claims
+    # against this source can only be resolved by the cell-pointer pass.
+    pointer_only: bool = False
 
     @property
     def label(self) -> str:
@@ -601,6 +615,91 @@ def _parse_table_with_fallback(
 
 
 # ---------------------------------------------------------------------------
+# Tier-4 cell-pointer pass: claims no source could resolve get one more chance —
+# the LLM points at grid coordinates, code reads the values (see cell_pointer.py).
+# ---------------------------------------------------------------------------
+
+async def _pointer_pass(
+    facts: List[ExtractedFact],
+    results: List[FactVerificationResult],
+    sources: List[_ExcelSource],
+    llm: BaseChatModel,
+    fallback_llm: Optional[BaseChatModel] = None,
+) -> Tuple[List[FactVerificationResult], int]:
+    """Re-resolve fully-unresolved claims via LLM cell pointers.
+
+    Candidates are results that stayed Inconclusive without matching any source (the
+    same predicate _build_table_suggestions uses). One batched pointer call per
+    grid-bearing source; a fact is accepted from the first source (upload order) where
+    EVERY needed cell — including the synthesized prior-year point for yoy_growth —
+    yields a numeric value via read_grid_cell. The values are injected into a fresh
+    minimal TableData under the exact keys the fact asks for, and the ordinary
+    _evaluate_fact machinery computes the verdict; the LLM never supplies a number.
+    A wrong pointer is therefore visible (cell refs are appended to reasoning and
+    resolved_via='pointer' is set) but can never invent data.
+    """
+    candidate_idx = [
+        i for i, r in enumerate(results)
+        if r.verdict == "Inconclusive" and r.matched_excel_source is None
+    ]
+    grid_sources = [s for s in sources if s.grid]
+    if not candidate_idx or not grid_sources:
+        return results, 0
+    queries = build_point_queries(facts, candidate_idx)
+    if not queries:
+        return results, 0
+
+    resolutions = await asyncio.gather(*[
+        resolve_pointers(queries, src.grid, llm, fallback_llm) for src in grid_sources
+    ])
+
+    new_results = list(results)
+    n_resolved = 0
+    for fi in candidate_idx:
+        fact_queries = [(qi, q) for qi, q in enumerate(queries) if q.fact_index == fi]
+        if not fact_queries:
+            continue  # mixed-axis or otherwise unqueryable fact
+        for src, (pointers, sheet_unit) in zip(grid_sources, resolutions):
+            cells = []
+            for qi, q in fact_queries:
+                coord = pointers.get(qi)
+                value = read_grid_cell(src.grid, *coord) if coord else None
+                if value is None:
+                    cells = None
+                    break
+                cells.append((q, coord[0], coord[1], value))
+            if cells is None:
+                continue
+
+            axis = "categorical" if len(fact_queries[0][1].data_key) == 2 else "temporal"
+            # A parsed table's own unit stays authoritative; only a pointer-only source
+            # (no parse at all) trusts the LLM-reported unit ANNOTATION text, so that
+            # _unit_factor can reconcile e.g. a 'triliun Rp' claim with a 'Miliar Rp'
+            # sheet instead of comparing raw.
+            unit = src.table.unit if not src.pointer_only else (sheet_unit or "")
+            mini = BITableData(title=src.table.title, unit=unit, row_labels=[], axis_type=axis)
+            for q, _r, _c, value in cells:
+                mini._data.setdefault(q.data_key, value)
+                if q.data_key[0] not in mini.row_labels:
+                    mini.row_labels.append(q.data_key[0])
+                if axis == "categorical" and q.data_key[1] not in mini.col_labels:
+                    mini.col_labels.append(q.data_key[1])
+
+            patched = _ExcelSource(table=mini, filename=src.filename, sheet=src.sheet)
+            res = _evaluate_fact(facts[fi], [patched])
+            if res.verdict == "Inconclusive":
+                continue
+            refs = "; ".join(f"{q.desc} → R{r}K{c}" for q, r, c, _v in cells)
+            new_results[fi] = res.model_copy(update={
+                "resolved_via": "pointer",
+                "reasoning": f"{res.reasoning} | Sel ditunjuk AI: {refs}",
+            })
+            n_resolved += 1
+            break
+    return new_results, n_resolved
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
 
@@ -658,12 +757,38 @@ async def verify_paired(
             "excel", "running", current=i - 1, total=len(excel_sources),
             detail=f"{filename} / {sheet_name}",
         )
-        table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name, llm=llm)
+        try:
+            table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name, llm=llm)
+        except ValueError as parse_error:
+            # Every parser tier failed. If the raw grid still loads, keep the source as
+            # POINTER-ONLY: an empty table whose claims can only be answered by the
+            # tier-4 cell-pointer pass. Unloadable bytes (bad sheet name, corrupt file)
+            # keep surfacing the original parser error.
+            try:
+                grid = _load_grid(excel_bytes, sheet_name)
+            except ValueError:
+                raise parse_error
+            logger.warning(
+                "All parsers failed for '%s' / '%s' (%s) — keeping as pointer-only source.",
+                filename, sheet_name, parse_error,
+            )
+            parsed_sources.append(_ExcelSource(
+                table=BITableData(title="", unit="", row_labels=[]),
+                filename=filename, sheet=sheet_name, grid=grid, pointer_only=True,
+            ))
+            excel_parsers.append("pointer-only")
+            continue
         logger.info(
             "Excel parsed via %s parser (%s axis): %d rows, unit='%s'",
             parser_used, table.axis_type, len(table.row_labels), table.unit,
         )
-        parsed_sources.append(_ExcelSource(table=table, filename=filename, sheet=sheet_name))
+        try:
+            grid = _load_grid(excel_bytes, sheet_name)
+        except ValueError:
+            grid = None
+        parsed_sources.append(_ExcelSource(
+            table=table, filename=filename, sheet=sheet_name, grid=grid,
+        ))
         excel_parsers.append(parser_used)
     emit(
         "excel", "done",
@@ -675,6 +800,8 @@ async def verify_paired(
     # advertise their attribute columns so the LLM can fill col_label with a real name.
     def _source_desc(src: _ExcelSource) -> str:
         desc = f"{src.table.title} / {src.filename}"
+        if src.pointer_only:
+            desc += " — struktur tabel tidak terurai; gunakan nama metrik apa adanya"
         if src.table.axis_type == "categorical" and src.table.col_labels:
             desc += " — kolom atribut (non-waktu): " + ", ".join(src.table.col_labels)
         return desc
@@ -735,13 +862,30 @@ async def verify_paired(
     emit("compare", "running", detail=f"{len(facts)} klaim")
     results: List[FactVerificationResult] = [_evaluate_fact(fact, parsed_sources) for fact in facts]
 
+    # Step 3b: tier-4 cell-pointer pass for claims no source could resolve. Vision LLM
+    # (Gemini) first — big grid snapshots trip Groq's TPM limits more readily — with the
+    # text LLM as fallback; any failure keeps the original Inconclusive results.
+    n_pointer = 0
+    n_unresolved = sum(
+        1 for r in results if r.verdict == "Inconclusive" and r.matched_excel_source is None
+    )
+    if n_unresolved and any(s.grid for s in parsed_sources):
+        emit("compare", "running", detail=f"penunjukan sel AI: {n_unresolved} klaim")
+        results, n_pointer = await _pointer_pass(
+            facts, results, parsed_sources,
+            llm=vision_llm or llm,
+            fallback_llm=llm if vision_llm is not None else None,
+        )
+
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
     inconclusive = sum(1 for r in results if r.verdict == "Inconclusive")
-    emit(
-        "compare", "done",
-        detail=f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan",
+    compare_detail = (
+        f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"
     )
+    if n_pointer:
+        compare_detail += f" · {n_pointer} via sel AI"
+    emit("compare", "done", detail=compare_detail)
 
     return PairedVerificationResponse(
         pdf_filename=pdf_filename,

@@ -80,6 +80,10 @@ class FactVerificationResult(BaseModel):
     reasoning: str
     context_quote: str
     page_number: Optional[int] = None
+    # "pointer" when the value was located by the tier-4 AI cell-pointer pass (the LLM
+    # pointed at a coordinate; the number itself was read from the cell by code). The
+    # cell references are appended to `reasoning`. None for normal table lookups.
+    resolved_via: Optional[str] = None
 
 
 class TypoIssue(BaseModel):
@@ -112,8 +116,10 @@ class PairedVerificationResponse(BaseModel):
     excel_filenames: List[str]
     excel_sheets: List[str]
     excel_units: List[str]
-    # Which cascade tier parsed each source: "bi" | "generic" | "llm" (aligned with
-    # excel_filenames). "llm" means the structure was LLM-mapped — worth a reviewer's glance.
+    # Which cascade tier parsed each source: "bi" | "generic" | "llm" | "pointer-only"
+    # (aligned with excel_filenames). "llm" means the structure was LLM-mapped;
+    # "pointer-only" means no parser understood the sheet and claims are resolved by the
+    # tier-4 cell-pointer pass — both worth a reviewer's glance.
     excel_parsers: List[str] = Field(default_factory=list)
     total_facts: int
     entailed_count: int

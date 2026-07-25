@@ -3,7 +3,9 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from cell_pointer import _BatchCellPointers, _CellPointer
 from excel_parser_bi import BITableData
+from langchain_core.runnables import RunnableLambda
 from paired_verifier import (
     _ExcelSource,
     _build_table_suggestions,
@@ -11,6 +13,7 @@ from paired_verifier import (
     _evaluate_fact,
     _parse_scale_unit,
     _parse_table_with_fallback,
+    _pointer_pass,
     _unit_factor,
     verify_paired,
 )
@@ -484,6 +487,56 @@ def test_verify_paired_returns_no_facts_when_narrative_has_nothing_extractable(m
     assert response.results == []
 
 
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier._load_grid")
+@patch("paired_verifier.parse_table_with_llm")
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_keeps_unparseable_sheet_as_pointer_only_source(
+    mock_bi, mock_generic, mock_llm_parse, mock_load, mock_extract_facts
+):
+    mock_bi.side_effect = ValueError("no year header")
+    mock_generic.side_effect = ValueError("no structure")
+    mock_llm_parse.side_effect = ValueError("spec rejected")
+    mock_load.return_value = [["Metrik", 2026], ["KPR", 40.63]]
+    mock_extract_facts.return_value = []
+
+    response = asyncio.run(
+        verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "z" * 250,
+            excel_sources=[(b"weird-bytes", "S", "aneh.xlsx")],
+            llm=Mock(),
+        )
+    )
+
+    assert response.excel_parsers == ["pointer-only"]
+    assert response.total_facts == 0
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier._load_grid")
+@patch("paired_verifier.parse_table_with_llm")
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_still_raises_when_grid_also_unloadable(
+    mock_bi, mock_generic, mock_llm_parse, mock_load, mock_extract_facts
+):
+    mock_bi.side_effect = ValueError("no year header")
+    mock_generic.side_effect = ValueError("no structure")
+    mock_llm_parse.side_effect = ValueError("spec rejected")
+    mock_load.side_effect = ValueError("Unrecognized file format")
+    mock_extract_facts.return_value = []
+
+    with pytest.raises(ValueError, match="Tabel tidak dapat diparsing"):
+        asyncio.run(
+            verify_paired(
+                narrative_text="[== Halaman 1 ==]\n" + "z" * 250,
+                excel_sources=[(b"garbage", "S", "rusak.bin")],
+                llm=Mock(),
+            )
+        )
+
+
 # ---------------------------------------------------------------------------
 # Categorical (non-time-series) sources
 # ---------------------------------------------------------------------------
@@ -698,6 +751,225 @@ def test_evaluate_temporal_unitless_source_compares_raw_instead_of_unit_inconclu
 
     assert result.verdict == "Entailed"
     assert "not supported" not in (result.reasoning or "")
+
+
+# ---------------------------------------------------------------------------
+# Tier-4 cell-pointer pass (_pointer_pass) — LLM points, code reads
+# ---------------------------------------------------------------------------
+
+def _pointer_llm(batch, call_log=None):
+    def _respond(prompt_value):
+        if call_log is not None:
+            call_log.append(prompt_value)
+        return batch
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    return llm
+
+
+def _pointer_llm_raising():
+    def _raise(_prompt_value):
+        raise RuntimeError("pointer boom")
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_raise))
+    return llm
+
+
+def _pointer_only_source(grid):
+    return _ExcelSource(
+        table=BITableData(title="", unit="", row_labels=[]),
+        filename="aneh.xlsx", sheet="S", grid=grid, pointer_only=True,
+    )
+
+
+_POINTER_GRID = [["Metrik", "x", "y"], ["KPR/KPA", 38.0, 40.63], ["Lain", "na", 99.9]]
+
+
+def _kpr_fact(**overrides):
+    base = dict(
+        periods=[_make_period(metric_label="KPR/KPA", year=2026, month="Q2")],
+        claimed_value=40.63,
+        unit="persen",
+    )
+    base.update(overrides)
+    return _make_fact(**base)
+
+
+def test_pointer_pass_resolves_value_claim_with_provenance():
+    src = _pointer_only_source(_POINTER_GRID)
+    fact = _kpr_fact()
+    results = [_evaluate_fact(fact, [src])]
+    assert results[0].verdict == "Inconclusive"
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=2)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 1
+    assert new[0].verdict == "Entailed"
+    assert new[0].resolved_via == "pointer"
+    assert "R1K2" in new[0].reasoning
+    assert new[0].matched_excel_source == "aneh.xlsx / S"
+
+
+def test_pointer_pass_out_of_range_pointer_keeps_original_inconclusive():
+    src = _pointer_only_source(_POINTER_GRID)
+    fact = _kpr_fact()
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=9, col=9)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 0
+    assert new[0].verdict == "Inconclusive"
+    assert new[0].resolved_via is None
+
+
+def test_pointer_pass_non_numeric_cell_keeps_original_inconclusive():
+    src = _pointer_only_source(_POINTER_GRID)
+    fact = _kpr_fact()
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=2, col=1)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 0
+    assert new[0].verdict == "Inconclusive"
+
+
+def test_pointer_pass_llm_failure_keeps_all_originals():
+    src = _pointer_only_source(_POINTER_GRID)
+    fact = _kpr_fact()
+    results = [_evaluate_fact(fact, [src])]
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm_raising()))
+
+    assert n == 0
+    assert new == results
+
+
+def test_pointer_pass_yoy_uses_synthesized_prior_year_cell():
+    grid = [["Metrik", "x", "y"], ["KPR/KPA", 40.0, 42.0]]
+    src = _pointer_only_source(grid)
+    fact = _kpr_fact(operation="yoy_growth", claimed_value=5.0, unit="persen_yoy")
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(pointers=[
+        _CellPointer(query_index=0, found=True, row=1, col=2),  # 2026 Q2 = 42.0
+        _CellPointer(query_index=1, found=True, row=1, col=1),  # 2025 Q2 = 40.0
+    ])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 1
+    assert new[0].verdict == "Entailed"
+    assert new[0].computed_value == pytest.approx(5.0)
+
+
+def test_pointer_pass_wrong_numeric_cell_yields_attributed_verdict():
+    # A wrong-but-numeric pointer produces a REAL verdict by design — the guard is
+    # provenance (resolved_via + cell ref), not blocking.
+    src = _pointer_only_source(_POINTER_GRID)
+    fact = _kpr_fact()  # claims 40.63, pointer aims at 38.0
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 1
+    assert new[0].verdict == "Refuted"
+    assert new[0].resolved_via == "pointer"
+    assert "R1K1" in new[0].reasoning
+
+
+def test_pointer_pass_batches_all_facts_into_one_call_per_source():
+    src = _pointer_only_source(_POINTER_GRID)
+    facts = [
+        _kpr_fact(),
+        _kpr_fact(periods=[_make_period(metric_label="Lain", year=2026, month="Q2")],
+                  claimed_value=99.9),
+    ]
+    results = [_evaluate_fact(f, [src]) for f in facts]
+    batch = _BatchCellPointers(pointers=[
+        _CellPointer(query_index=0, found=True, row=1, col=2),
+        _CellPointer(query_index=1, found=True, row=2, col=2),
+    ])
+    log = []
+
+    new, n = asyncio.run(_pointer_pass(facts, results, [src], _pointer_llm(batch, log)))
+
+    assert len(log) == 1  # one batched call for the whole source
+    assert n == 2
+    assert all(r.resolved_via == "pointer" for r in new)
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+def test_verify_paired_end_to_end_pointer_resolution_on_unparseable_sheet(mock_extract_facts):
+    # A real xlsx whose layout defeats every parser tier (numeric header codes — not
+    # headerish for the generic tier, no year row for BI, and the scripted LLM fails
+    # structure mapping) — the claim must still verify via the cell-pointer pass.
+    import io as _io
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "S"
+    ws.append([None, 12345, 67890])
+    ws.append(["KPR", 40.63, 39.0])
+    buf = _io.BytesIO()
+    wb.save(buf)
+
+    fact = _make_fact(
+        periods=[_make_period(metric_label="KPR", year=2026, month="Q2")],
+        claimed_value=40.63, unit="persen",
+    )
+    mock_extract_facts.return_value = [fact]
+
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+
+    def _structured(schema, **_kw):
+        if schema is _BatchCellPointers:
+            return RunnableLambda(lambda _pv: batch)
+
+        def _fail(_pv):
+            raise RuntimeError("no structure spec")
+        return RunnableLambda(_fail)  # tier-3 structure mapping fails
+
+    llm = Mock()
+    llm.with_structured_output = Mock(side_effect=_structured)
+
+    response = asyncio.run(
+        verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "k" * 250,
+            excel_sources=[(buf.getvalue(), "S", "aneh.xlsx")],
+            llm=llm,
+        )
+    )
+
+    assert response.excel_parsers == ["pointer-only"]
+    assert response.entailed_count == 1
+    assert response.results[0].verdict == "Entailed"
+    assert response.results[0].resolved_via == "pointer"
+    assert "R1K1" in response.results[0].reasoning
+
+
+def test_pointer_pass_sheet_unit_enables_scale_conversion_on_pointer_only_source():
+    grid = [["Posisi", 8900.0]]
+    src = _pointer_only_source(grid)
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Posisi Kredit", year=2026, month="Apr")],
+        claimed_value=8.9, unit="triliun Rp",
+    )
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(
+        sheet_unit="Miliar Rp",
+        pointers=[_CellPointer(query_index=0, found=True, row=0, col=1)],
+    )
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 1
+    assert new[0].verdict == "Entailed"  # 8.9 triliun == 8900 miliar
 
 
 # ---------------------------------------------------------------------------
