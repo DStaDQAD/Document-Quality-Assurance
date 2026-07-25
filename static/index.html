@@ -446,15 +446,33 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .source-sheet-row { display: flex; align-items: center; gap: 8px; }
 .source-sheet-row label { font-size: 11px; color: var(--text-500); white-space: nowrap; }
 .source-sheet-row input { width: 72px; }
-.source-sheet-row select {
-  flex: 1; min-width: 0; max-width: 240px;
+/* Multi-select sheet picker: a select-look toggle opening a checkbox panel */
+.sheet-multiselect { position: relative; flex: 1; min-width: 0; max-width: 240px; }
+.sheet-ms-toggle {
+  display: flex; align-items: center; gap: 6px; width: 100%;
   font-size: 12px; font-family: inherit; color: var(--text-900);
   padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r);
-  background: var(--white); cursor: pointer;
+  background: var(--white); cursor: pointer; text-align: left;
   transition: border-color .12s, box-shadow .12s;
 }
-.source-sheet-row select:focus { outline: none; border-color: var(--blue-400); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
-.source-sheet-row select:disabled { color: var(--text-400); background: #F4F7FC; cursor: default; }
+.sheet-ms-toggle:focus { outline: none; border-color: var(--blue-400); box-shadow: 0 0 0 3px rgba(59,130,246,0.15); }
+.sheet-ms-toggle:disabled { color: var(--text-400); background: #F4F7FC; cursor: default; }
+.sheet-ms-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sheet-ms-toggle .material-symbols-outlined { font-size: 16px; color: var(--text-500); }
+.sheet-ms-panel {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+  background: var(--white); border: 1px solid var(--border); border-radius: var(--r);
+  box-shadow: 0 8px 24px rgba(15,23,42,0.12);
+  max-height: 210px; overflow-y: auto; padding: 4px;
+}
+.sheet-ms-option {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 12px; color: var(--text-900); padding: 5px 8px;
+  border-radius: 4px; cursor: pointer; user-select: none;
+}
+.sheet-ms-option:hover { background: var(--blue-50); }
+.sheet-ms-option input { width: auto; margin: 0; accent-color: var(--blue-500); cursor: pointer; }
+.sheet-ms-all { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; font-weight: 600; margin-bottom: 2px; }
 .add-excel-btn {
   display: flex; align-items: center; gap: 4px; margin-top: 8px;
   font-size: 12px; color: var(--blue-500); cursor: pointer;
@@ -1047,7 +1065,7 @@ body.auth-locked .app {
 
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
-  let excelSources = []; // [{container, inp, sheetSelect}]
+  let excelSources = []; // [{container, inp, picker}]
 
   function attachDropzoneBehavior(dz, inp, fn, onFile) {
     dz.addEventListener("click", () => inp.click());
@@ -1070,10 +1088,63 @@ body.auth-locked .app {
     });
   }
 
-  // Ask the backend which sheets the chosen workbook has, and fill the dropdown.
-  async function loadSheetsIntoSelect(file, select) {
-    select.disabled = true;
-    select.innerHTML = `<option value="">Memuat daftar sheet…</option>`;
+  // ── Multi-select sheet picker ─────────────────────────────────────────
+  // A checklist dropdown per Excel source: any subset of sheets can be selected and
+  // each selected sheet becomes its own verification source. "Pilih semua sheet"
+  // toggles the whole list.
+
+  function pickerSelectedSheets(picker) {
+    return [...picker.querySelectorAll(".sheet-ms-options input:checked")].map((cb) => cb.value);
+  }
+
+  function updatePickerState(picker) {
+    const summary = picker.querySelector(".sheet-ms-summary");
+    const allCb   = picker.querySelector(".sheet-ms-all-cb");
+    const boxes   = [...picker.querySelectorAll(".sheet-ms-options input")];
+    const checked = boxes.filter((cb) => cb.checked);
+    allCb.checked = boxes.length > 0 && checked.length === boxes.length;
+    allCb.indeterminate = checked.length > 0 && checked.length < boxes.length;
+    if (!boxes.length) summary.textContent = "—";
+    else if (!checked.length) summary.textContent = "Pilih sheet…";
+    else if (checked.length === boxes.length) summary.textContent = `Semua sheet (${boxes.length})`;
+    else if (checked.length === 1) summary.textContent = checked[0].value;
+    else summary.textContent = `${checked.length} sheet dipilih`;
+  }
+
+  function closeAllSheetPanels(except) {
+    document.querySelectorAll(".sheet-ms-panel").forEach((panel) => {
+      if (!except || panel !== except) panel.hidden = true;
+    });
+  }
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".sheet-multiselect")) closeAllSheetPanels();
+  });
+
+  function initSheetPicker(picker) {
+    const toggle = picker.querySelector(".sheet-ms-toggle");
+    const panel  = picker.querySelector(".sheet-ms-panel");
+    const allCb  = picker.querySelector(".sheet-ms-all-cb");
+    toggle.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (toggle.disabled) return;
+      const willOpen = panel.hidden;
+      closeAllSheetPanels();
+      panel.hidden = !willOpen;
+    });
+    allCb.addEventListener("change", () => {
+      picker.querySelectorAll(".sheet-ms-options input").forEach((cb) => { cb.checked = allCb.checked; });
+      updatePickerState(picker);
+    });
+  }
+
+  // Ask the backend which sheets the chosen workbook has, and fill the checklist.
+  async function loadSheetsIntoPicker(file, picker) {
+    const toggle  = picker.querySelector(".sheet-ms-toggle");
+    const summary = picker.querySelector(".sheet-ms-summary");
+    const optsBox = picker.querySelector(".sheet-ms-options");
+    toggle.disabled = true;
+    summary.textContent = "Memuat daftar sheet…";
+    optsBox.innerHTML = "";
     try {
       const fd = new FormData();
       fd.append("file", file);
@@ -1081,18 +1152,23 @@ body.auth-locked .app {
       if (!res.ok) throw new Error("bad response");
       const sheets = (await res.json()).sheets || [];
       if (sheets.length === 0) throw new Error("no sheets");
-      select.innerHTML = "";
-      sheets.forEach((name) => {
-        const opt = document.createElement("option");
-        opt.value = name; opt.textContent = name;
-        select.appendChild(opt);
-      });
       // Default to a BI-style "I.1" sheet when present, otherwise the first one.
-      select.value = sheets.includes("I.1") ? "I.1" : sheets[0];
-      select.disabled = false;
+      const defaultSheet = sheets.includes("I.1") ? "I.1" : sheets[0];
+      sheets.forEach((name) => {
+        const label = document.createElement("label");
+        label.className = "sheet-ms-option";
+        const cb = document.createElement("input");
+        cb.type = "checkbox"; cb.value = name; cb.checked = name === defaultSheet;
+        cb.addEventListener("change", () => updatePickerState(picker));
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(name));
+        optsBox.appendChild(label);
+      });
+      toggle.disabled = false;
+      updatePickerState(picker);
     } catch (_) {
-      select.innerHTML = `<option value="">Gagal memuat sheet</option>`;
-      select.disabled = true;
+      summary.textContent = "Gagal memuat sheet";
+      toggle.disabled = true;
     }
   }
 
@@ -1120,23 +1196,33 @@ body.auth-locked .app {
       </div>
       <div class="source-sheet-row">
         <label>Sheet:</label>
-        <select class="excel-sheet-select" disabled>
-          <option value="">—</option>
-        </select>
+        <div class="sheet-multiselect">
+          <button type="button" class="sheet-ms-toggle" disabled>
+            <span class="sheet-ms-summary">—</span>
+            <span class="material-symbols-outlined">expand_more</span>
+          </button>
+          <div class="sheet-ms-panel" hidden>
+            <label class="sheet-ms-option sheet-ms-all">
+              <input type="checkbox" class="sheet-ms-all-cb"> Pilih semua sheet
+            </label>
+            <div class="sheet-ms-options"></div>
+          </div>
+        </div>
       </div>`;
     const inp     = container.querySelector(`#excel-inp-${uid}`);
     const fn      = container.querySelector(`#excel-fn-${uid}`);
     const dz      = container.querySelector(`#excel-dz-${uid}`);
-    const sheetSelect = container.querySelector(".excel-sheet-select");
+    const picker  = container.querySelector(".sheet-multiselect");
     const removeBtn = container.querySelector(".remove-excel-btn");
-    attachDropzoneBehavior(dz, inp, fn, (file) => loadSheetsIntoSelect(file, sheetSelect));
+    initSheetPicker(picker);
+    attachDropzoneBehavior(dz, inp, fn, (file) => loadSheetsIntoPicker(file, picker));
     removeBtn.addEventListener("click", () => {
       if (excelSources.length <= 1) return;
       excelSources = excelSources.filter(s => s.container !== container);
       container.remove();
       updateRemoveButtons();
     });
-    excelSources.push({ container, inp, sheetSelect });
+    excelSources.push({ container, inp, picker });
     document.getElementById("excel-sources-container").appendChild(container);
     updateRemoveButtons();
   }
@@ -1656,11 +1742,24 @@ body.auth-locked .app {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF dan minimal satu file Excel terlebih dahulu.</div>`;
       return;
     }
+    // One (file, sheet) source per SELECTED sheet: the same file part is appended once
+    // per sheet, aligned positionally with the comma-separated sheet_names query param —
+    // the backend contract (_read_paired_uploads) is unchanged.
     const formData = new FormData();
     formData.append("pdf_file", pdfInp.files[0]);
-    const sheetNames = filledSources.map(s => s.sheetSelect.value || "I.1").join(",");
-    filledSources.forEach(s => formData.append("excel_file", s.inp.files[0]));
-    withDisabledButton(e.currentTarget, () => runPairedVerification(resultEl, formData, sheetNames));
+    const sheetNames = [];
+    for (const s of filledSources) {
+      const selected = pickerSelectedSheets(s.picker);
+      if (!selected.length) {
+        resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu sheet untuk setiap file Excel.</div>`;
+        return;
+      }
+      selected.forEach((sheet) => {
+        sheetNames.push(sheet);
+        formData.append("excel_file", s.inp.files[0]);
+      });
+    }
+    withDisabledButton(e.currentTarget, () => runPairedVerification(resultEl, formData, sheetNames.join(",")));
   });
 
   // Sidebar toggle
