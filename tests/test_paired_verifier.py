@@ -643,6 +643,64 @@ def test_categorical_fact_skips_temporal_source_and_matches_categorical_one():
 
 
 # ---------------------------------------------------------------------------
+# Quarterly (survey) tables — quarter tokens ride the month slot: (year, "Q2")
+# ---------------------------------------------------------------------------
+
+def _make_quarterly_table():
+    return _make_table(
+        title="Tabel 1. Penyaluran Kredit Baru",
+        unit="",  # BI survey workbooks declare no unit row
+        data={
+            ("Kredit Modal Kerja", 2012, "Q2"): 92.11,
+            ("Kredit Modal Kerja", 2013, "Q2"): 70.47,
+        },
+    )
+
+
+def test_evaluate_value_on_quarterly_table_entailed():
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Kredit Modal Kerja", year=2013, month="Q2")],
+        claimed_value=70.47,
+        unit="persen",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(_make_quarterly_table())])
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].excel_value == 70.47
+
+
+def test_evaluate_yoy_growth_on_quarterly_table_uses_prior_year_same_quarter():
+    # (70.47 - 92.11) / 92.11 * 100 = -23.49...
+    fact = _make_fact(
+        operation="yoy_growth",
+        periods=[_make_period(metric_label="Kredit Modal Kerja", year=2013, month="Q2")],
+        claimed_value=-23.49,
+        unit="persen_yoy",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(_make_quarterly_table())])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(-23.49, abs=0.01)
+
+
+def test_evaluate_temporal_unitless_source_compares_raw_instead_of_unit_inconclusive():
+    # A temporal source with an empty unit (survey workbook) must fall back to raw
+    # comparison — not fail with "Unit conversion not supported".
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Kredit Modal Kerja", year=2013, month="Q2")],
+        claimed_value=70.47,
+        unit="persen",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(_make_quarterly_table())])
+
+    assert result.verdict == "Entailed"
+    assert "not supported" not in (result.reasoning or "")
+
+
+# ---------------------------------------------------------------------------
 # Parser cascade (_parse_table_with_fallback)
 # ---------------------------------------------------------------------------
 

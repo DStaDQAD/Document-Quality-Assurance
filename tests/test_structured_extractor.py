@@ -258,6 +258,16 @@ def test_finalize_facts_parses_value_operation():
     assert facts[0].page_number == 1
 
 
+@pytest.mark.parametrize("raw_month", ["Q2", "q2", "Triwulan II", "triwulan 2", "Tw II", "II"])
+def test_finalize_facts_normalizes_quarter_tokens(raw_month):
+    fact = _fake_fact(periods=[_fake_period(month=raw_month)])
+
+    facts = _finalize_facts([fact], NARRATIVE)
+
+    assert facts[0].periods[0].month == "Q2"
+    assert facts[0].periods[0].year == 2026
+
+
 # ---------------------------------------------------------------------------
 # Anchor → sentence expansion (the LLM emits a short anchor_quote; the public
 # context_quote is recovered from the source text by code)

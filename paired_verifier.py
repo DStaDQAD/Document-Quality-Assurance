@@ -479,12 +479,15 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             if src.table.axis_type == "categorical":
                 excel_unit = next((u for u in col_units if u), None) or src.table.unit
             factor = _unit_factor(fact.unit, excel_unit)
-            if factor is None and src.table.axis_type == "categorical" and not excel_unit:
-                # Source declares no unit anywhere. Spreadsheet cells without a declared
-                # unit hold BASE-currency numbers (an item list stores 7500000, not 7.5) —
-                # so normalise the CLAIM to base units via its own scale word: a claim of
-                # 7,5 'juta Rp' becomes 7 500 000 before comparing. Claims whose unit has
-                # no scale to apply ('Rp', 'unit', or none) compare raw, as before.
+            if factor is None and not excel_unit:
+                # Source declares no unit anywhere — categorical item lists, but also
+                # temporal survey tables (BI survey workbooks carry no unit row; their
+                # cells are plain percentages/index numbers). Spreadsheet cells without
+                # a declared unit hold BASE-scale numbers (an item list stores 7500000,
+                # not 7.5) — so normalise the CLAIM to base units via its own scale
+                # word: a claim of 7,5 'juta Rp' becomes 7 500 000 before comparing.
+                # Claims whose unit has no scale to apply ('Rp', 'persen', or none)
+                # compare raw, as before.
                 parsed = _parse_scale_unit(fact.unit) if fact.unit else None
                 factor = parsed[0] if parsed else 1.0
             if factor is None:

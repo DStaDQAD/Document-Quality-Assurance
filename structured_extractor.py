@@ -46,6 +46,16 @@ _MONTH_NORM: dict = {
     "sep": "Sep", "oct": "Oct", "nov": "Nov", "dec": "Dec",
 }
 
+# Period tokens = months plus quarters. Quarterly sources (BI survey tables) key their
+# columns as (year, 'Q1'..'Q4'), sharing the month slot — see table_model.TableData.
+_PERIOD_NORM: dict = dict(_MONTH_NORM)
+for _i, _q in enumerate(["Q1", "Q2", "Q3", "Q4"], start=1):
+    _roman = ["i", "ii", "iii", "iv"][_i - 1]
+    for _form in (_roman, f"q{_i}", f"q {_i}", f"tw{_i}", f"tw {_i}", f"tw {_roman}",
+                  f"triwulan {_i}", f"triwulan {_roman}",
+                  f"kuartal {_i}", f"kuartal {_roman}"):
+        _PERIOD_NORM[_form] = _q
+
 _OPERATIONS = Literal[
     "value", "yoy_growth", "average", "sum", "diff", "ratio",
     "is_increasing", "is_decreasing", "is_stable",
@@ -79,6 +89,9 @@ class _PeriodRef(BaseModel):
             "Jul/Aug/Sep/Oct/Nov/Dec. Use Indonesian month name equivalents: "
             "Januari=Jan, Februari=Feb, Maret=Mar, April=Apr, Mei=May, Juni=Jun, "
             "Juli=Jul, Agustus=Aug, September=Sep, Oktober=Oct, November=Nov, Desember=Dec. "
+            "For QUARTERLY sources use a quarter token 'Q1'..'Q4' instead: "
+            "Triwulan I=Q1, Triwulan II=Q2, Triwulan III=Q3, Triwulan IV=Q4 — never invent "
+            "a month for a quarterly claim. "
             "REQUIRED for every time-series claim; leave null ONLY for attribute claims "
             "that use col_label instead."
         ),
@@ -183,6 +196,9 @@ Available operations:
 TWO KINDS OF REFERENCE TABLES:
   - Time-series tables (e.g. BI monetary statistics): every data point is identified by
     (metric_label, year, month). ALWAYS fill year and month; leave col_label null.
+    QUARTERLY time-series (e.g. BI survey tables — the source's period list shows Q1/Q2/...)
+    use a quarter token in the month field: "Triwulan II 2026" -> year=2026, month='Q2'.
+    For quarterly yoy_growth the prior-year same-quarter point is fetched automatically.
   - Non-time-series tables (item lists, inventories, budgets — the source's column list shows
     attribute names like 'Harga' or 'Stok' instead of time periods): for claims about such data
     (e.g. "harga Laptop X adalah Rp7.500.000"), set metric_label to the ROW name (the item),
@@ -619,7 +635,7 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
         valid = True
         for p in f.periods:
             raw_month = getattr(p, "month", None)
-            month = _MONTH_NORM.get(raw_month.lower().strip()) if raw_month else None
+            month = _PERIOD_NORM.get(raw_month.lower().strip()) if raw_month else None
             year = getattr(p, "year", None)
             col_label = (getattr(p, "col_label", None) or "").strip() or None
             # Temporal wins when both forms are present: a valid (year, month) means the claim
