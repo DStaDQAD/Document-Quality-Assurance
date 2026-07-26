@@ -475,6 +475,24 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .sheet-ms-option:hover { background: var(--blue-50); }
 .sheet-ms-option input { width: auto; margin: 0; accent-color: var(--blue-500); cursor: pointer; }
 .sheet-ms-all { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; font-weight: 600; margin-bottom: 2px; }
+/* Chosen-PDF list under the upload dropzone (multiple PDFs accumulate) */
+.pdf-file-list { display: flex; flex-direction: column; gap: 5px; }
+.pdf-file-list:not(:empty) { margin-top: 2px; }
+.pdf-file-item {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--text-900);
+  padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--white);
+}
+.pdf-file-item > .material-symbols-outlined { font-size: 15px; color: #DC2626; }
+.pdf-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-file-remove {
+  display: flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; padding: 0; border-radius: 5px; flex-shrink: 0;
+  border: 1px solid var(--border); background: var(--white); color: var(--text-500); cursor: pointer;
+}
+.pdf-file-remove:hover { color: #DC2626; border-color: #DC2626; }
+.pdf-file-remove .material-symbols-outlined { font-size: 13px; color: inherit; }
+
 /* Per-PDF report sections when several PDFs are verified in one run */
 .pdf-report-section { margin-bottom: 20px; }
 .pdf-report-header {
@@ -934,9 +952,10 @@ body.auth-locked .app {
                   <span class="upload-label">PDF Laporan</span>
                   <div class="dropzone-sm" id="paired-pdf-dropzone">
                     <span class="material-symbols-outlined">picture_as_pdf</span>
-                    <div class="dz-sub" id="paired-pdf-filename">Pilih file PDF (boleh lebih dari satu)</div>
+                    <div class="dz-sub" id="paired-pdf-filename">Pilih file PDF (bisa lebih dari satu)</div>
                     <input type="file" id="paired-pdf" accept="application/pdf" multiple style="display:none">
                   </div>
+                  <div id="paired-pdf-list" class="pdf-file-list"></div>
                 </div>
                 <div class="upload-field">
                   <span class="upload-label">Tabel Excel</span>
@@ -1058,38 +1077,63 @@ body.auth-locked .app {
     fn.title = name;
   }
 
-  // Paired PDF dropzone — accepts several PDFs at once; each is verified independently
-  // against the same Excel sources (PDF↔tabel, never PDF↔PDF).
-  function pdfSummary(files) {
-    if (!files.length) return "Belum ada file dipilih";
-    if (files.length === 1) return files[0].name;
-    return `${files.length} file PDF dipilih`;
+  // Paired PDF upload — several PDFs ACCUMULATE across picks/drops (the native input
+  // would otherwise replace the previous selection each time), each verified independently
+  // against the same Excel sources (PDF↔tabel, never PDF↔PDF). selectedPdfs is the source
+  // of truth the submit handler reads.
+  let selectedPdfs = [];
+
+  function renderPdfList() {
+    const list = document.getElementById("paired-pdf-list");
+    const fn = document.getElementById("paired-pdf-filename");
+    fn.textContent = selectedPdfs.length
+      ? "Tambah PDF lain (klik atau seret)"
+      : "Pilih file PDF (bisa lebih dari satu)";
+    list.innerHTML = selectedPdfs.map((f, i) => `
+      <div class="pdf-file-item">
+        <span class="material-symbols-outlined">picture_as_pdf</span>
+        <span class="pdf-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
+        <button type="button" class="pdf-file-remove" data-idx="${i}" title="Hapus" aria-label="Hapus ${escapeHtml(f.name)}">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>`).join("");
+    list.querySelectorAll(".pdf-file-remove").forEach((btn) => {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        selectedPdfs.splice(Number(btn.dataset.idx), 1);
+        renderPdfList();
+      });
+    });
   }
-  function setupDropzone(dzId, inpId, fnId) {
-    const dz  = document.getElementById(dzId);
-    const inp = document.getElementById(inpId);
-    const fn  = document.getElementById(fnId);
-    const show = (files) => {
-      fn.textContent = pdfSummary(files);
-      fn.title = files.map((f) => f.name).join("\n") || "Belum ada file dipilih";
-    };
+
+  function addPdfFiles(files) {
+    files
+      .filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name))
+      .forEach((f) => {
+        // Dedupe by name+size so re-dropping the same file doesn't add it twice.
+        if (!selectedPdfs.some((s) => s.name === f.name && s.size === f.size)) {
+          selectedPdfs.push(f);
+        }
+      });
+    renderPdfList();
+  }
+
+  (function setupPdfDropzone() {
+    const dz  = document.getElementById("paired-pdf-dropzone");
+    const inp = document.getElementById("paired-pdf");
     dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => show([...inp.files]));
+    inp.addEventListener("change", () => {
+      addPdfFiles([...inp.files]);
+      inp.value = "";  // reset so re-picking a removed file still fires 'change'
+    });
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
     dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
     dz.addEventListener("drop", (e) => {
       e.preventDefault();
       dz.classList.remove("drag-over");
-      const files = [...e.dataTransfer.files];
-      if (files.length) {
-        const dt = new DataTransfer();
-        files.forEach((f) => dt.items.add(f));
-        inp.files = dt.files;
-        show(files);
-      }
+      addPdfFiles([...e.dataTransfer.files]);
     });
-  }
-  setupDropzone("paired-pdf-dropzone", "paired-pdf", "paired-pdf-filename");
+  })();
 
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
@@ -1794,9 +1838,8 @@ body.auth-locked .app {
   }
 
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
-    const pdfInp   = document.getElementById("paired-pdf");
     const resultEl = document.getElementById("paired-result");
-    const pdfFiles = [...pdfInp.files];
+    const pdfFiles = selectedPdfs;
     const filledSources = excelSources.filter(s => s.inp.files.length > 0);
     if (!pdfFiles.length || filledSources.length === 0) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF dan minimal satu file Excel terlebih dahulu.</div>`;
