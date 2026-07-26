@@ -1,6 +1,7 @@
 import json
 
 from perf_log import StageTimer, append_perf_record, build_record
+from perf_report import _load
 
 
 def test_stage_timer_records_first_running_to_done():
@@ -66,3 +67,32 @@ def test_append_perf_record_writes_one_jsonl_line(tmp_path):
 def test_append_perf_record_swallows_write_errors():
     # A bad path must never raise — instrumentation can't break a request.
     append_perf_record({"total_s": 1.0}, path="/nonexistent_dir_xyz/perf.jsonl")
+
+
+def test_perf_report_load_reads_clean_jsonl_and_raw_log_lines(tmp_path):
+    # Mix of a clean JSONL record, a prefixed Render/stdout log line, and noise —
+    # only the two real perf records survive.
+    path = tmp_path / "mixed.log"
+    path.write_text(
+        '{"pdf_filename": "a.pdf", "total_s": 1.5, "stages": {"pdf": 0.5}}\n'
+        'INFO:     Uvicorn running on http://0.0.0.0:10000\n'
+        'INFO:fact-checker:perf {"pdf_filename": "b.pdf", "total_s": 2.5, "stages": {"pdf": 0.6}}\n'
+        'INFO:other:some unrelated {"not": "a perf record"}\n',
+        encoding="utf-8",
+    )
+
+    records = _load(str(path), last=None)
+
+    assert [r["pdf_filename"] for r in records] == ["a.pdf", "b.pdf"]
+
+
+def test_perf_report_load_last_n(tmp_path):
+    path = tmp_path / "log.jsonl"
+    path.write_text(
+        "\n".join(json.dumps({"pdf_filename": f"{i}.pdf", "total_s": float(i)}) for i in range(5)),
+        encoding="utf-8",
+    )
+
+    records = _load(str(path), last=2)
+
+    assert [r["pdf_filename"] for r in records] == ["3.pdf", "4.pdf"]

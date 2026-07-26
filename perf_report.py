@@ -8,6 +8,10 @@ perf_log.jsonl. Run it yourself; it is NOT served by the app and never touches t
 Prints, per stage (pdf/excel/extract/compare/typo) and for the total wall-clock:
 count, mean, median, p95, max — plus a mean-duration bar chart and a recent-runs trend,
 so you can capture a baseline and show the before/after of an optimisation with numbers.
+
+Accepts both a clean JSONL file and raw Render/stdout log lines: each record is parsed
+from its first '{', so you can paste log lines like `INFO:fact-checker:perf {...}`
+straight into a file and report on them without stripping the prefix.
 """
 
 import argparse
@@ -20,13 +24,25 @@ STAGE_ORDER = ["pdf", "excel", "extract", "compare", "typo"]
 
 
 def _load(path: str, last: int | None) -> List[dict]:
+    """Read perf records from a JSONL file OR raw log lines.
+
+    Each line is parsed from its first '{', so a Render/stdout line such as
+    `INFO:fact-checker:perf {"...": ...}` works unchanged; non-record lines and any
+    other JSON logging noise are skipped (only dicts carrying 'total_s' are kept).
+    """
     records = []
     try:
         with open(path, encoding="utf-8") as fh:
             for line in fh:
-                line = line.strip()
-                if line:
-                    records.append(json.loads(line))
+                brace = line.find("{")
+                if brace == -1:
+                    continue
+                try:
+                    rec = json.loads(line[brace:])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(rec, dict) and "total_s" in rec:
+                    records.append(rec)
     except FileNotFoundError:
         sys.exit(f"Belum ada log: {path} (jalankan pipeline dulu agar terisi).")
     return records[-last:] if last else records
