@@ -475,24 +475,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .sheet-ms-option:hover { background: var(--blue-50); }
 .sheet-ms-option input { width: auto; margin: 0; accent-color: var(--blue-500); cursor: pointer; }
 .sheet-ms-all { border-bottom: 1px solid var(--border); border-radius: 4px 4px 0 0; font-weight: 600; margin-bottom: 2px; }
-/* Chosen-PDF list under the upload dropzone (multiple PDFs accumulate) */
-.pdf-file-list { display: flex; flex-direction: column; gap: 5px; }
-.pdf-file-list:not(:empty) { margin-top: 2px; }
-.pdf-file-item {
-  display: flex; align-items: center; gap: 7px;
-  font-size: 12px; color: var(--text-900);
-  padding: 6px 8px; border: 1px solid var(--border); border-radius: var(--r); background: var(--white);
-}
-.pdf-file-item > .material-symbols-outlined { font-size: 15px; color: #DC2626; }
-.pdf-file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pdf-file-remove {
-  display: flex; align-items: center; justify-content: center;
-  width: 20px; height: 20px; padding: 0; border-radius: 5px; flex-shrink: 0;
-  border: 1px solid var(--border); background: var(--white); color: var(--text-500); cursor: pointer;
-}
-.pdf-file-remove:hover { color: #DC2626; border-color: #DC2626; }
-.pdf-file-remove .material-symbols-outlined { font-size: 13px; color: inherit; }
-
 /* Per-PDF report sections when several PDFs are verified in one run */
 .pdf-report-section { margin-bottom: 20px; }
 .pdf-report-header {
@@ -950,12 +932,10 @@ body.auth-locked .app {
               <div class="upload-row">
                 <div class="upload-field">
                   <span class="upload-label">PDF Laporan</span>
-                  <div class="dropzone-sm" id="paired-pdf-dropzone">
-                    <span class="material-symbols-outlined">picture_as_pdf</span>
-                    <div class="dz-sub" id="paired-pdf-filename">Pilih file PDF (bisa lebih dari satu)</div>
-                    <input type="file" id="paired-pdf" accept="application/pdf" multiple style="display:none">
-                  </div>
-                  <div id="paired-pdf-list" class="pdf-file-list"></div>
+                  <div id="pdf-sources-container"></div>
+                  <button type="button" id="add-pdf-btn" class="add-excel-btn">
+                    <span class="material-symbols-outlined">add</span> Tambah PDF
+                  </button>
                 </div>
                 <div class="upload-field">
                   <span class="upload-label">Tabel Excel</span>
@@ -1077,73 +1057,15 @@ body.auth-locked .app {
     fn.title = name;
   }
 
-  // Paired PDF upload — several PDFs ACCUMULATE across picks/drops (the native input
-  // would otherwise replace the previous selection each time), each verified independently
-  // against the same Excel sources (PDF↔tabel, never PDF↔PDF). selectedPdfs is the source
-  // of truth the submit handler reads.
-  let selectedPdfs = [];
-
-  function renderPdfList() {
-    const list = document.getElementById("paired-pdf-list");
-    const fn = document.getElementById("paired-pdf-filename");
-    fn.textContent = selectedPdfs.length
-      ? "Tambah PDF lain (klik atau seret)"
-      : "Pilih file PDF (bisa lebih dari satu)";
-    list.innerHTML = selectedPdfs.map((f, i) => `
-      <div class="pdf-file-item">
-        <span class="material-symbols-outlined">picture_as_pdf</span>
-        <span class="pdf-file-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span>
-        <button type="button" class="pdf-file-remove" data-idx="${i}" title="Hapus" aria-label="Hapus ${escapeHtml(f.name)}">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>`).join("");
-    list.querySelectorAll(".pdf-file-remove").forEach((btn) => {
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        selectedPdfs.splice(Number(btn.dataset.idx), 1);
-        renderPdfList();
-      });
-    });
-  }
-
-  function addPdfFiles(files) {
-    files
-      .filter((f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name))
-      .forEach((f) => {
-        // Dedupe by name+size so re-dropping the same file doesn't add it twice.
-        if (!selectedPdfs.some((s) => s.name === f.name && s.size === f.size)) {
-          selectedPdfs.push(f);
-        }
-      });
-    renderPdfList();
-  }
-
-  (function setupPdfDropzone() {
-    const dz  = document.getElementById("paired-pdf-dropzone");
-    const inp = document.getElementById("paired-pdf");
-    dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => {
-      addPdfFiles([...inp.files]);
-      inp.value = "";  // reset so re-picking a removed file still fires 'change'
-    });
-    dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
-    dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
-    dz.addEventListener("drop", (e) => {
-      e.preventDefault();
-      dz.classList.remove("drag-over");
-      addPdfFiles([...e.dataTransfer.files]);
-    });
-  })();
-
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   let excelSources = []; // [{container, inp, picker}]
 
-  function attachDropzoneBehavior(dz, inp, fn, onFile) {
+  function attachDropzoneBehavior(dz, inp, fn, onFile, placeholder = "Pilih file Excel") {
     dz.addEventListener("click", () => inp.click());
     inp.addEventListener("change", () => {
       const file = inp.files[0];
-      setFilenameText(fn, file?.name || "Pilih file Excel");
+      setFilenameText(fn, file?.name || placeholder);
       if (file && onFile) onFile(file);
     });
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
@@ -1325,6 +1247,52 @@ body.auth-locked .app {
 
   addExcelSource(); // initialize with one source
   document.getElementById("add-excel-btn").addEventListener("click", addExcelSource);
+
+  // ── Multi-PDF source management (mirrors the Excel pattern; each entry = one PDF) ──
+  // Every PDF is verified independently against the same Excel sources (PDF↔tabel,
+  // never PDF↔PDF). pdfSources is the source of truth the submit handler reads.
+  let pdfSources = []; // [{container, inp}]
+
+  function updatePdfRemoveButtons() {
+    pdfSources.forEach((src) => {
+      src.container.querySelector(".remove-excel-btn").style.visibility =
+        pdfSources.length > 1 ? "visible" : "hidden";
+    });
+  }
+
+  function addPdfSource() {
+    const uid = Date.now() + pdfSources.length;
+    const container = document.createElement("div");
+    container.className = "excel-source-entry";
+    container.innerHTML = `
+      <div class="source-entry-header">
+        <div class="dropzone-sm" id="pdf-dz-${uid}">
+          <span class="material-symbols-outlined">picture_as_pdf</span>
+          <div class="dz-sub" id="pdf-fn-${uid}">Pilih file PDF</div>
+          <input type="file" id="pdf-inp-${uid}" accept="application/pdf" style="display:none">
+        </div>
+        <button type="button" class="remove-excel-btn" title="Hapus" style="visibility:hidden">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>`;
+    const inp = container.querySelector(`#pdf-inp-${uid}`);
+    const fn  = container.querySelector(`#pdf-fn-${uid}`);
+    const dz  = container.querySelector(`#pdf-dz-${uid}`);
+    const removeBtn = container.querySelector(".remove-excel-btn");
+    attachDropzoneBehavior(dz, inp, fn, null, "Pilih file PDF");
+    removeBtn.addEventListener("click", () => {
+      if (pdfSources.length <= 1) return;
+      pdfSources = pdfSources.filter(s => s.container !== container);
+      container.remove();
+      updatePdfRemoveButtons();
+    });
+    pdfSources.push({ container, inp });
+    document.getElementById("pdf-sources-container").appendChild(container);
+    updatePdfRemoveButtons();
+  }
+
+  addPdfSource(); // initialize with one PDF field
+  document.getElementById("add-pdf-btn").addEventListener("click", addPdfSource);
 
   // Browse table
   let tableListLoaded = false;
@@ -1776,7 +1744,7 @@ body.auth-locked .app {
 
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
     const resultEl = document.getElementById("paired-result");
-    const pdfFiles = selectedPdfs;
+    const pdfFiles = pdfSources.map(s => s.inp.files[0]).filter(Boolean);
     const filledSources = excelSources.filter(s => s.inp.files.length > 0);
     if (!pdfFiles.length || filledSources.length === 0) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF dan minimal satu file Excel terlebih dahulu.</div>`;
