@@ -8,6 +8,7 @@ from cell_pointer import (
     _CellPointer,
     PointQuery,
     build_point_queries,
+    pointer_is_plausible,
     read_grid_cell,
     resolve_pointers,
 )
@@ -108,6 +109,35 @@ def test_read_grid_cell_rejects_text_bool_and_out_of_range():
     assert read_grid_cell(grid, 5, 0) is None    # row out of range
     assert read_grid_cell(grid, 1, 9) is None    # col out of range
     assert read_grid_cell(grid, -1, 0) is None   # negative
+
+
+# ---------------------------------------------------------------------------
+# pointer_is_plausible — reject pointers at rows unrelated to the metric
+# ---------------------------------------------------------------------------
+
+_PLAUSIBLE_GRID = [
+    ["Menurut Penggunaan", "Kredit Modal Kerja", "Working Capital Loans", 92.11],
+    ["TOTAL", "TOTAL", "TOTAL", 93.08],
+]
+
+
+def test_pointer_plausible_when_row_shares_a_metric_word():
+    assert pointer_is_plausible(_PLAUSIBLE_GRID, 0, "Kredit Modal Kerja") is True
+
+
+def test_pointer_implausible_when_row_is_unrelated_total():
+    # The ILS regression: a metric absent from the sheet must not bind to the TOTAL row.
+    assert pointer_is_plausible(_PLAUSIBLE_GRID, 1, "Indeks Lending Standard (ILS)") is False
+
+
+def test_pointer_plausible_via_table_title_subject():
+    grid = [["TOTAL", 100.0]]
+    assert pointer_is_plausible(grid, 0, "Cadangan Devisa", table_title="Cadangan Devisa Indonesia") is True
+
+
+def test_pointer_plausible_when_metric_has_no_significant_word():
+    # Nothing to guard against (e.g. 'M2') — don't block.
+    assert pointer_is_plausible(_PLAUSIBLE_GRID, 1, "M2") is True
 
 
 # ---------------------------------------------------------------------------

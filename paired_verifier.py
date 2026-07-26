@@ -27,7 +27,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 
-from cell_pointer import build_point_queries, read_grid_cell, resolve_pointers
+from cell_pointer import (
+    build_point_queries,
+    pointer_is_plausible,
+    read_grid_cell,
+    resolve_pointers,
+)
 from excel_parser_bi import BITableData, parse_bi_table
 from table_parser_generic import _load_grid, parse_generic_table
 from table_parser_llm import parse_table_with_llm
@@ -664,7 +669,12 @@ async def _pointer_pass(
             for qi, q in fact_queries:
                 coord = pointers.get(qi)
                 value = read_grid_cell(src.grid, *coord) if coord else None
-                if value is None:
+                # Guard: the pointed row must actually relate to the queried metric, so a
+                # pointer that grabbed an unrelated cell (e.g. a generic TOTAL for a metric
+                # absent from the sheet) is rejected instead of yielding a wrong verdict.
+                if value is None or not pointer_is_plausible(
+                    src.grid, coord[0], q.data_key[0], src.table.title
+                ):
                     cells = None
                     break
                 cells.append((q, coord[0], coord[1], value))

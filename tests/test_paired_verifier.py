@@ -826,6 +826,28 @@ def test_pointer_pass_out_of_range_pointer_keeps_original_inconclusive():
     assert new[0].resolved_via is None
 
 
+def test_pointer_pass_rejects_pointer_at_row_unrelated_to_metric():
+    # Regression: an ILS claim (metric absent from the sheet) must not bind to the SBT
+    # TOTAL row just because the pointer aimed there — it stays Inconclusive.
+    grid = [
+        ["Menurut Penggunaan", "Kredit Modal Kerja", 92.11],
+        ["TOTAL", "TOTAL", 93.08],
+    ]
+    src = _pointer_only_source(grid)
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Indeks Lending Standard (ILS)", year=2026, month="Q2")],
+        claimed_value=1.03, unit="",
+    )
+    results = [_evaluate_fact(fact, [src])]
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=2)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 0
+    assert new[0].verdict == "Inconclusive"
+    assert new[0].resolved_via is None
+
+
 def test_pointer_pass_non_numeric_cell_keeps_original_inconclusive():
     src = _pointer_only_source(_POINTER_GRID)
     fact = _kpr_fact()

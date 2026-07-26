@@ -19,6 +19,7 @@ swallowed and the claims simply stay unresolved.
 """
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
@@ -156,15 +157,19 @@ coordinate of the DATA CELL that holds the requested numeric value.
 Rules:
 1. NEVER return cell values — coordinates only. The value is read from the sheet by
    code, never from you.
-2. Point at the DATA cell, not at a row-label, header, or total of something else.
+2. Point at the DATA cell for the EXACT metric requested — never a row-label, a header,
+   a column TOTAL/aggregate row, or a DIFFERENT but nearby indicator.
 3. Period vocabulary: quarters may be written I/II/III/IV, Q1..Q4, or with Tw/Triwulan/
    Kuartal prefixes; Q1=Triwulan I .. Q4=Triwulan IV. Indonesian months: Mei=May,
    Agu/Ags=Aug, Okt=Oct, Des=Dec, Peb=Feb. Year headers often sit on a separate
    (merged) row ABOVE the month/quarter row — the target column is the one under the
    requested year carrying the requested period token.
 4. Return exactly one pointer per query_index; never invent extra indices.
-5. Set found=false when the requested cell is absent, ambiguous, or may lie outside
-   the snapshot region (a note says when the snapshot is truncated).
+5. Set found=false when the sheet has NO row that genuinely names the requested metric,
+   when the target cell is ambiguous, or when it may lie outside a truncated snapshot.
+   A missing metric MUST be found=false — do NOT substitute a TOTAL/aggregate row or a
+   different-but-related indicator just to return a coordinate. Guessing is worse than
+   admitting the metric is absent.
 6. sheet_unit: when the sheet visibly declares a measurement-unit annotation (e.g.
    'Miliar Rp', '(dalam persen)'), copy that text; else null. Text only.
 """
@@ -264,3 +269,37 @@ def read_grid_cell(grid: List[List], row: int, col: int) -> Optional[float]:
     if _is_number(v):
         return float(v)
     return None
+
+
+def _sig_words(text: str) -> set:
+    """Lowercased words of 3+ chars — the notion of a 'significant' term for matching."""
+    return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 2}
+
+
+def pointer_is_plausible(
+    grid: List[List], row: int, metric_label: str, table_title: str = ""
+) -> bool:
+    """True when the pointed row (or the table title) shares a significant word with the
+    requested metric.
+
+    A plausibility guard against the LLM pointing at an unrelated row — e.g. a generic
+    'TOTAL' — for a metric that is not actually in the sheet (observed: an ILS claim
+    pointed at the SBT total). It intentionally rejects such over-reaches at the cost of
+    also declining pointers whose only matching row is an abbreviation/synonym with no
+    shared word (those degrade to Inconclusive, which is safe, not to a wrong verdict).
+    Metrics with no significant word of their own (e.g. 'M2') are not guarded.
+    """
+    metric_words = _sig_words(metric_label)
+    if not metric_words:
+        return True
+    context_words = _sig_words(table_title or "")
+    if 0 <= row < len(grid):
+        for v in grid[row]:
+            if isinstance(v, str):
+                context_words |= _sig_words(v)
+    if metric_words & context_words:
+        return True
+    logger.info(
+        "Cell pointer rejected: row %d shares no term with metric %r", row, metric_label
+    )
+    return False
