@@ -186,11 +186,15 @@ Available operations:
   ratio          : the stated ratio/percentage of one metric relative to ANOTHER metric (or point),
                    e.g. "kredit terhadap DPK sebesar 85%". periods = [numerator point, denominator
                    point] in the order named ("A terhadap/dibanding B" → A first, B second).
-  is_increasing  : a claim that a metric rose/kept rising across several months, with no explicit
-                   number (e.g. "kredit terus meningkat dari Januari hingga April"). periods = every
-                   month in the range, chronological order. claimed_value_raw = null.
+  is_increasing  : a claim that ONE metric rose/kept rising across several time periods, with no
+                   explicit number (e.g. "kredit terus meningkat dari Januari hingga April").
+                   periods = the SAME metric at every time point in the range, chronological order
+                   (>= 2 DISTINCT periods). claimed_value_raw = null. When a sentence says several
+                   metrics each rose (e.g. "SBT meningkat pada Kredit Modal Kerja, Kredit Investasi,
+                   dan Kredit Konsumsi"), emit a SEPARATE is_increasing fact PER METRIC — never one
+                   fact whose periods mix different metrics, and never a trend over a single period.
   is_decreasing  : same as is_increasing but for a claimed decline. claimed_value_raw = null.
-  is_stable      : a claim that a metric stayed roughly flat/stable across several months.
+  is_stable      : a claim that ONE metric stayed roughly flat/stable across several time periods.
                    claimed_value_raw = null.
 
 TWO KINDS OF REFERENCE TABLES:

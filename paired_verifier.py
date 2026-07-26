@@ -77,6 +77,12 @@ _LEVEL_OPS = {"value", "average", "sum", "diff"}
 # (col_label instead of year/month) can never satisfy them.
 _TEMPORAL_ONLY_OPS = {"yoy_growth", "is_increasing", "is_decreasing", "is_stable"}
 
+# Monotonic-trend operations: ONE metric followed across several time points. They are
+# invalid when the extractor bundles several DIFFERENT metrics into one fact (a
+# cross-metric comparison mislabelled as a trend) or gives fewer than two distinct time
+# points (nothing to trend) — see the guard in _evaluate_fact.
+_TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
+
 
 # ---------------------------------------------------------------------------
 # Excel source container
@@ -477,6 +483,25 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 f"tetapi klaim ini merujuk atribut non-waktu ('{fact.display_label}')."
             ),
         )
+
+    # A trend must follow ONE metric across >= 2 distinct time points. When the extractor
+    # instead bundles several metrics (e.g. "SBT meningkat pada KMK, KI, dan KK" — three
+    # metrics at the same quarter), monotonicity would be checked across unrelated series
+    # and wrongly Refuted; and a single time point has nothing to trend. Both are the
+    # extractor mis-structuring the claim, not a data mismatch — so return Inconclusive
+    # (the claim should have been split into one trend per metric).
+    if fact.operation in _TREND_OPS:
+        distinct_metrics = {p.metric_label.strip().lower() for p in fact.periods}
+        distinct_times = {(p.year, p.month) for p in fact.periods}
+        if len(distinct_metrics) > 1 or len(distinct_times) < 2:
+            return _make_result(
+                fact, [], None, None, None, None, None, None, "Inconclusive",
+                reasoning=(
+                    f"Klaim tren '{fact.operation}' harus mengikuti satu metrik pada minimal "
+                    f"dua periode waktu berbeda, tetapi klaim ini mencakup {len(distinct_metrics)} "
+                    f"metrik pada {len(distinct_times)} periode — bukan tren waktu yang bisa dinilai."
+                ),
+            )
 
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None

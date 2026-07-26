@@ -366,6 +366,46 @@ def test_evaluate_is_stable_entailed_when_within_tolerance():
     assert result.verdict == "Entailed"
 
 
+def test_evaluate_is_increasing_inconclusive_when_periods_mix_metrics():
+    # "SBT meningkat pada KMK, KI, KK" mis-bundled as one trend over THREE metrics at the
+    # same quarter: monotonicity across unrelated series wrongly Refuted before — must now
+    # be Inconclusive (the claim should have been split into one trend per metric).
+    table = _make_table(data={
+        ("Kredit Modal Kerja", 2026, "Q2"): 94.34,
+        ("Kredit Investasi", 2026, "Q2"): 93.51,
+        ("Kredit Konsumsi", 2026, "Q2"): 83.67,
+    })
+    fact = _make_fact(
+        operation="is_increasing",
+        periods=[
+            _make_period(metric_label="Kredit Modal Kerja", year=2026, month="Q2"),
+            _make_period(metric_label="Kredit Investasi", year=2026, month="Q2"),
+            _make_period(metric_label="Kredit Konsumsi", year=2026, month="Q2"),
+        ],
+        claimed_value=None, unit=None,
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+    assert "satu metrik" in result.reasoning
+
+
+def test_evaluate_is_increasing_inconclusive_when_single_time_point():
+    # One data point cannot be a trend — previously the empty monotonicity check made it a
+    # vacuous Entailed.
+    table = _make_table(data={("Total", 2026, "Q2"): 94.34})
+    fact = _make_fact(
+        operation="is_increasing",
+        periods=[_make_period(metric_label="Total", year=2026, month="Q2")],
+        claimed_value=None, unit=None,
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+
+
 # ---------------------------------------------------------------------------
 # _deduplicate_facts
 # ---------------------------------------------------------------------------
