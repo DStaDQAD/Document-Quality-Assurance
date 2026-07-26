@@ -10,12 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 # verifier/orchestrator/main) never requires real API credentials during tests.
 os.environ.setdefault("LLM_PROVIDER", "ollama")
 
-# Route the pipeline's timing log to a throwaway file so endpoint tests that run
-# _run_paired_pipeline don't append to the developer's real perf_log.jsonl.
-os.environ.setdefault(
-    "PERF_LOG_PATH", str(Path(__file__).resolve().parent.parent / ".pytest_perf_log.jsonl")
-)
-
 
 @pytest.fixture(autouse=True)
 def _disable_basic_auth():
