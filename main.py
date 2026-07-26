@@ -79,6 +79,7 @@ from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
 from excel_parser_bi import list_sheet_names
 from excel_ingestion import ingest_bytes
 from llm_provider import get_llm, get_vision_llm
+from perf_log import StageTimer, append_perf_record, build_record
 from orchestrator import verify_document
 from paired_verifier import verify_paired
 from pdf_extraction import (
@@ -441,9 +442,19 @@ async def _run_paired_pipeline(
     called from the event loop thread — never from inside asyncio.to_thread — so a caller
     may safely use a non-thread-safe sink such as asyncio.Queue.put_nowait.
     """
-    def _emit(stage: str, status: str, **extra) -> None:
+    # Observe every stage event for timing, then forward to the real sink (if any). This
+    # single recording callback is passed to both this function's _emit and verify_paired's
+    # progress_cb, so excel/extract/compare/typo/pdf are all captured — server-side only,
+    # never added to the response or the frontend.
+    timer = StageTimer()
+
+    def _record_and_forward(event: Dict[str, Any]) -> None:
+        timer.observe(event)
         if emit is not None:
-            emit({"type": "stage", "stage": stage, "status": status, **extra})
+            emit(event)
+
+    def _emit(stage: str, status: str, **extra) -> None:
+        _record_and_forward({"type": "stage", "stage": stage, "status": status, **extra})
 
     vision_llm = None
     try:
@@ -485,10 +496,20 @@ async def _run_paired_pipeline(
             llm=get_llm(temperature=0.0),
             pdf_filename=pdf_filename,
             vision_llm=vision_llm,
-            progress_cb=emit,
+            progress_cb=_record_and_forward,
         ),
         _run_typo_check(),
     )
+
+    # Server-side timing record → JSONL log + app log (never the response/frontend).
+    append_perf_record(build_record(
+        pdf_filename=pdf_filename,
+        n_pages=n_pages,
+        n_chars=n_chars,
+        n_facts=fact_result.total_facts,
+        n_excel_sources=len(excel_sources),
+        timer=timer,
+    ))
     return fact_result.model_copy(update={"typo_check": typo_result})
 
 

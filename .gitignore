@@ -7,6 +7,10 @@ statistik_makro.db
 .pytest_cache/
 ~$*.xlsx
 
+# Accumulated pipeline timing log (observability data, per-machine)
+perf_log.jsonl
+.pytest_perf_log.jsonl
+
 # Real-world report fixtures used for manual testing of the paired pipeline
 # (contain actual report data, not synthetic samples like the .xlsx above)
 sample_data/M2-April-2026.pdf
