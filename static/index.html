@@ -459,11 +459,13 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .sheet-ms-toggle:disabled { color: var(--text-400); background: #F4F7FC; cursor: default; }
 .sheet-ms-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sheet-ms-toggle .material-symbols-outlined { font-size: 16px; color: var(--text-500); }
+/* Fixed (not absolute) so the ancestor cards' overflow:hidden / overflow:auto never
+   clip it — JS positions it under the toggle and closes it on scroll/resize. */
 .sheet-ms-panel {
-  position: absolute; top: calc(100% + 4px); left: 0; right: 0; z-index: 40;
+  position: fixed; z-index: 1000;
   background: var(--white); border: 1px solid var(--border); border-radius: var(--r);
   box-shadow: 0 8px 24px rgba(15,23,42,0.12);
-  max-height: 210px; overflow-y: auto; padding: 4px;
+  max-height: 260px; overflow-y: auto; padding: 4px;
 }
 .sheet-ms-option {
   display: flex; align-items: center; gap: 8px;
@@ -1145,6 +1147,27 @@ body.auth-locked .app {
   document.addEventListener("click", (e) => {
     if (!e.target.closest(".sheet-multiselect")) closeAllSheetPanels();
   });
+  // The panel is position:fixed, so it doesn't follow the page/sidebar as they scroll —
+  // close it instead of letting it drift away from its toggle.
+  window.addEventListener("scroll", () => closeAllSheetPanels(), true);
+  window.addEventListener("resize", () => closeAllSheetPanels());
+
+  // Place the fixed panel just under its toggle, flipping above when there isn't room
+  // below (so a picker near the bottom of the screen still shows every sheet).
+  function positionSheetPanel(toggle, panel) {
+    const rect = toggle.getBoundingClientRect();
+    const maxH = 260;
+    const spaceBelow = window.innerHeight - rect.bottom;
+    panel.style.left = `${rect.left}px`;
+    panel.style.width = `${rect.width}px`;
+    if (spaceBelow < maxH + 12 && rect.top > spaceBelow) {
+      panel.style.top = "auto";
+      panel.style.bottom = `${window.innerHeight - rect.top + 4}px`;
+    } else {
+      panel.style.bottom = "auto";
+      panel.style.top = `${rect.bottom + 4}px`;
+    }
+  }
 
   function initSheetPicker(picker) {
     const toggle = picker.querySelector(".sheet-ms-toggle");
@@ -1155,7 +1178,10 @@ body.auth-locked .app {
       if (toggle.disabled) return;
       const willOpen = panel.hidden;
       closeAllSheetPanels();
-      panel.hidden = !willOpen;
+      if (willOpen) {
+        positionSheetPanel(toggle, panel);
+        panel.hidden = false;
+      }
     });
     allCb.addEventListener("change", () => {
       picker.querySelectorAll(".sheet-ms-options input").forEach((cb) => { cb.checked = allCb.checked; });
