@@ -1578,67 +1578,8 @@ body.auth-locked .app {
       </button>
     </div>`;
 
-    // Flag sources whose structure was mapped by the LLM (cascade tier 3) — the numbers are
-    // still extracted by code, but the header interpretation deserves a reviewer's glance.
-    const parsers = data.excel_parsers || [];
-    const llmParsedFiles = (data.excel_filenames || []).filter((_, idx) => parsers[idx] === "llm");
-    const llmParserNotice = llmParsedFiles.length
-      ? `<div class="table-suggestions">
-          <button class="notice-close" title="Tutup" aria-label="Tutup pemberitahuan">
-            <span class="material-symbols-outlined">close</span>
-          </button>
-          <div class="table-suggestions-title">
-            <span class="material-symbols-outlined">smart_toy</span>
-            Struktur tabel berikut dipetakan oleh AI karena formatnya tidak dikenali secara otomatis
-            — periksa apakah interpretasi kolomnya masuk akal: ${llmParsedFiles.map(escapeHtml).join(", ")}
-          </div>
-        </div>`
-      : "";
-
-    // Tier-4 cell-pointer provenance: for claims no parsed table could answer, the AI
-    // pointed at grid coordinates and CODE read the values — flag them for review.
-    const pointerResolvedCount = (data.results || []).filter((r) => r.resolved_via === "pointer").length;
-    const pointerOnlyFiles = (data.excel_filenames || []).filter((_, idx) => parsers[idx] === "pointer-only");
-    const pointerNotice = (pointerResolvedCount || pointerOnlyFiles.length)
-      ? `<div class="table-suggestions">
-          <button class="notice-close" title="Tutup" aria-label="Tutup pemberitahuan">
-            <span class="material-symbols-outlined">close</span>
-          </button>
-          <div class="table-suggestions-title">
-            <span class="material-symbols-outlined">my_location</span>
-            ${pointerResolvedCount
-              ? `${pointerResolvedCount} klaim dipetakan melalui penunjukan sel AI — nilainya dibaca langsung
-                 dari sel oleh kode.`
-              : ""}
-            ${pointerOnlyFiles.length
-              ? ` Struktur file berikut tidak terurai — klaimnya hanya dapat dicek via penunjukan sel AI:
-                 ${pointerOnlyFiles.map(escapeHtml).join(", ")}.`
-              : ""}
-          </div>
-        </div>`
-      : "";
-
-    // Suggest which BI table families to upload when claims came back Inconclusive
-    // because no uploaded source carries their data (populated by the backend).
-    const tableSuggestions = data.table_suggestions || [];
-    const suggestionsBox = tableSuggestions.length
-      ? `<div class="table-suggestions">
-          <button class="notice-close" title="Tutup" aria-label="Tutup saran tabel">
-            <span class="material-symbols-outlined">close</span>
-          </button>
-          <div class="table-suggestions-title">
-            <span class="material-symbols-outlined">lightbulb</span>
-            Sebagian klaim tidak ditemukan di tabel yang diunggah. Coba unggah juga tabel berikut lalu jalankan ulang:
-          </div>
-          ${tableSuggestions.map((s) => `<div class="table-suggestion-item">
-            <strong>${escapeHtml(s.table)}</strong>
-            <div class="table-suggestion-metrics">Untuk klaim: ${s.metrics.map(escapeHtml).join(" · ")}</div>
-          </div>`).join("")}
-        </div>`
-      : "";
-
     const factPanel = `<div class="report-tab-panel active" data-report-panel="fact">
-      ${llmParserNotice}${pointerNotice}${suggestionsBox}${toolbarRow}${filterBar}<div class="fact-cards">${cards}</div>
+      ${toolbarRow}${filterBar}<div class="fact-cards">${cards}</div>
     </div>`;
 
     const typoPanel = `<div class="report-tab-panel" data-report-panel="typo">
@@ -1682,10 +1623,6 @@ body.auth-locked .app {
   }
 
   function attachPairedHandlers(resultEl) {
-    resultEl.querySelectorAll(".notice-close").forEach((btn) => {
-      btn.addEventListener("click", () => btn.closest(".table-suggestions").remove());
-    });
-
     resultEl.querySelectorAll(".report-subtab-btn").forEach((btn) => {
       btn.addEventListener("click", () => {
         const tab = btn.dataset.reportTab;
