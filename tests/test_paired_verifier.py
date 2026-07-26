@@ -793,6 +793,33 @@ def test_evaluate_temporal_unitless_source_compares_raw_instead_of_unit_inconclu
     assert "not supported" not in (result.reasoning or "")
 
 
+def test_evaluate_value_dimensionless_nonempty_unit_compares_raw():
+    # PMI is an index in % ; a 'persen' claim must compare raw against a '(%, Indeks)'
+    # sheet unit (no scale to convert), not fail unit conversion.
+    table = _make_table(title="PMI", unit="%, Indeks", data={("PMI - BI", 2026, "Q2"): 51.43})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="PMI - BI", year=2026, month="Q2")],
+        claimed_value=51.43, unit="persen",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "not supported" not in (result.reasoning or "")
+
+
+def test_evaluate_value_dimensionless_nonempty_unit_still_refutes_wrong_number():
+    table = _make_table(title="PMI", unit="%, Indeks", data={("PMI - BI", 2026, "Q2"): 51.43})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="PMI - BI", year=2026, month="Q2")],
+        claimed_value=60.0, unit="persen",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"
+
+
 # ---------------------------------------------------------------------------
 # Tier-4 cell-pointer pass (_pointer_pass) — LLM points, code reads
 # ---------------------------------------------------------------------------
