@@ -59,6 +59,7 @@ for _i, _q in enumerate(["Q1", "Q2", "Q3", "Q4"], start=1):
 _OPERATIONS = Literal[
     "value", "yoy_growth", "average", "sum", "diff", "ratio",
     "is_increasing", "is_decreasing", "is_stable",
+    "above_threshold", "below_threshold",
 ]
 
 # ---------------------------------------------------------------------------
@@ -117,7 +118,8 @@ class _ExtractedFact(BaseModel):
             "Every individual (metric, year, month) data point this claim references, listed in "
             "the order they appear/matter (chronological for average/sum/diff/is_increasing/"
             "is_decreasing/is_stable; numerator-then-denominator for ratio). "
-            "'value' and 'yoy_growth' need exactly 1. 'diff' and 'ratio' need exactly 2. "
+            "'value', 'yoy_growth', 'above_threshold', 'below_threshold' need exactly 1. "
+            "'diff' and 'ratio' need exactly 2. "
             "'average', 'sum', 'is_increasing', 'is_decreasing', 'is_stable' need 2 or more - "
             "list EVERY month in a stated range individually, never as a range description."
         ),
@@ -196,6 +198,17 @@ Available operations:
   is_decreasing  : same as is_increasing but for a claimed decline. claimed_value_raw = null.
   is_stable      : a claim that ONE metric stayed roughly flat/stable across several time periods.
                    claimed_value_raw = null.
+  above_threshold: a claim that ONE metric's value at ONE period is ABOVE a stated bound
+                   (e.g. "PMI berada pada fase ekspansi (indeks >50%)" → the index is above 50).
+                   periods = exactly ONE point (the metric at that period). claimed_value_raw =
+                   the threshold number ("50"). For a PMI-style diffusion index, "fase ekspansi"
+                   means above 50 even when the number is not written out. When a sentence says
+                   several metrics are each above the bound (e.g. "mayoritas komponen berada pada
+                   fase ekspansi, yaitu Volume Produksi, Volume Persediaan Barang Jadi, dan Volume
+                   Total Pesanan"), emit a SEPARATE above_threshold fact PER METRIC.
+  below_threshold: same as above_threshold but for a value BELOW the bound (e.g. "fase kontraksi
+                   (indeks <50%)" → below 50). periods = exactly ONE point. claimed_value_raw =
+                   the threshold number.
 
 TWO KINDS OF REFERENCE TABLES:
   - Time-series tables (e.g. BI monetary statistics): every data point is identified by
@@ -210,7 +223,7 @@ TWO KINDS OF REFERENCE TABLES:
     operations here are value, diff, and ratio; yoy_growth and trend operations do not apply.
 
 For each claim, output a JSON object with these fields:
-  operation        : one of the 9 values above
+  operation        : one of the 11 values above
   periods          : array of {{metric_label, year, month, col_label}} - see each operation's rule
                      above for how many points and in what order
   claimed_value_raw: the number string EXACTLY as it appears in the text (no Rp, no unit word), or

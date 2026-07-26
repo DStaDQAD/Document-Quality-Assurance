@@ -407,6 +407,57 @@ def test_evaluate_is_increasing_inconclusive_when_single_time_point():
 
 
 # ---------------------------------------------------------------------------
+# _evaluate_fact — operation="above_threshold" / "below_threshold"
+# ---------------------------------------------------------------------------
+
+def _threshold_table(value):
+    return _make_table(title="PMI", unit="%, Indeks", data={("PMI - BI", 2026, "Q2"): value})
+
+
+def _threshold_fact(operation, bound):
+    return _make_fact(
+        operation=operation,
+        periods=[_make_period(metric_label="PMI - BI", year=2026, month="Q2")],
+        claimed_value=bound, unit="persen",
+    )
+
+
+def test_evaluate_above_threshold_entailed_when_value_exceeds_bound():
+    result = _evaluate_fact(_threshold_fact("above_threshold", 50.0), [_make_source(_threshold_table(51.43))])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == 51.43
+    assert result.periods[0].excel_value == 51.43
+
+
+def test_evaluate_above_threshold_refuted_when_value_below_bound():
+    result = _evaluate_fact(_threshold_fact("above_threshold", 50.0), [_make_source(_threshold_table(48.0))])
+
+    assert result.verdict == "Refuted"
+
+
+def test_evaluate_above_threshold_refuted_at_exactly_the_bound():
+    # A PMI index of exactly 50 is neutral — neither expansion nor contraction.
+    result = _evaluate_fact(_threshold_fact("above_threshold", 50.0), [_make_source(_threshold_table(50.0))])
+
+    assert result.verdict == "Refuted"
+
+
+def test_evaluate_below_threshold_entailed_when_value_under_bound():
+    result = _evaluate_fact(_threshold_fact("below_threshold", 50.0), [_make_source(_threshold_table(47.2))])
+
+    assert result.verdict == "Entailed"
+
+
+def test_evaluate_threshold_inconclusive_without_a_bound():
+    fact = _threshold_fact("above_threshold", None)
+    result = _evaluate_fact(fact, [_make_source(_threshold_table(51.43))])
+
+    assert result.verdict == "Inconclusive"
+    assert "ambang" in result.reasoning
+
+
+# ---------------------------------------------------------------------------
 # _deduplicate_facts
 # ---------------------------------------------------------------------------
 

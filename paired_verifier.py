@@ -83,6 +83,11 @@ _TEMPORAL_ONLY_OPS = {"yoy_growth", "is_increasing", "is_decreasing", "is_stable
 # points (nothing to trend) — see the guard in _evaluate_fact.
 _TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
 
+# Threshold operations: ONE metric at ONE period compared to a bound (claimed_value is the
+# threshold, e.g. a PMI diffusion index "berada pada fase ekspansi (>50)"). Dimensionless —
+# no unit conversion — so they stay out of _LEVEL_OPS.
+_THRESHOLD_OPS = {"above_threshold", "below_threshold"}
+
 
 # ---------------------------------------------------------------------------
 # Excel source container
@@ -390,11 +395,48 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     )
 
 
+def _compute_threshold(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
+) -> FactVerificationResult:
+    """Verify a value-above/below-a-bound claim (claimed_value = the threshold).
+
+    Dimensionless comparison: the metric's value at the period is checked directly against
+    the threshold with a strict inequality (a PMI index of exactly 50 is neither expansion
+    nor contraction). No unit conversion — the bound is an index/percent level.
+    """
+    label, value = resolved[0]
+    value = round(value, 4)
+    matched_source = src.label
+    periods = _build_periods(fact.periods, resolved, [value])
+    threshold = fact.claimed_value
+    if threshold is None:
+        return _make_result(
+            fact, periods, matched_source, None, fact.unit, value, fact.unit, None, "Inconclusive",
+            reasoning="Klaim ambang tanpa nilai ambang yang jelas; tidak dapat dinilai.",
+        )
+    if fact.operation == "above_threshold":
+        ok, arah = value > threshold, "di atas"
+    else:
+        ok, arah = value < threshold, "di bawah"
+    verdict = "Entailed" if ok else "Refuted"
+    return _make_result(
+        fact, periods, matched_source, threshold, fact.unit, value, fact.unit, None, verdict,
+        reasoning=(
+            f"Klaim: {label} {arah} ambang {threshold} | "
+            f"Excel [{matched_source}]: {label} = {value} | "
+            f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
+        ),
+    )
+
+
 def _compute_operation(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], factor: float, src: _ExcelSource
 ) -> FactVerificationResult:
     op = fact.operation
     matched_source = src.label
+
+    if op in _THRESHOLD_OPS:
+        return _compute_threshold(fact, resolved, src)
 
     if op == "value":
         computed = round(resolved[0][1] / factor, 4)

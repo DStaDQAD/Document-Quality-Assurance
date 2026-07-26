@@ -1320,6 +1320,7 @@ body.auth-locked .app {
     value: "Nilai", yoy_growth: "% YoY", average: "Rata-rata", sum: "Total",
     diff: "Selisih", ratio: "Rasio",
     is_increasing: "Tren Naik", is_decreasing: "Tren Turun", is_stable: "Tren Stabil",
+    above_threshold: "Di Atas Ambang", below_threshold: "Di Bawah Ambang",
   };
 
   function fmtValue(val, unit) {
@@ -1456,7 +1457,13 @@ body.auth-locked .app {
             : "";
 
           let comparison;
-          if (hasClaimed) {
+          const isThreshold = item.operation === "above_threshold" || item.operation === "below_threshold";
+          if (isThreshold) {
+            const arah = item.operation === "above_threshold" ? "di atas" : "di bawah";
+            comparison = computedVal
+              ? `<span class="fact-val-label">Nilai:</span> <span class="fact-val ${valCls}">${computedVal}</span> <span class="fact-val-label">(klaim ${arah} ${claimedVal})</span>`
+              : `<span class="na">Tidak ditemukan di data</span>`;
+          } else if (hasClaimed) {
             comparison = `<span class="fact-val-label">PDF:</span> <span class="fact-val ${valCls}">${claimedVal}</span>`;
             if (computedVal) {
               comparison += ` <span class="fact-arrow">&#8594;</span> <span class="fact-val-label">Referensi:</span> <span class="fact-val">${computedVal}</span>`;

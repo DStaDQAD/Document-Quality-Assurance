@@ -67,6 +67,7 @@ class FactVerificationResult(BaseModel):
     operation: Literal[
         "value", "yoy_growth", "average", "sum", "diff", "ratio",
         "is_increasing", "is_decreasing", "is_stable",
+        "above_threshold", "below_threshold",
     ]
     metric_label: str  # display label - shared metric name, or "A / B" for cross-metric ops
     matched_excel_source: Optional[str] = None  # "filename / sheet" of the source that matched
