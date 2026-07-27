@@ -105,6 +105,12 @@ def build_point_queries(facts, candidate_indices: List[int]) -> List[PointQuery]
         kinds = {p.col_label is not None for p in fact.periods}
         if len(kinds) > 1:
             continue
+        # The claim's own sentence carries the extra dimensions (region, city, product…)
+        # that the structured (metric, period/attribute) form drops. Passing it lets the
+        # LLM pick the RIGHT row when several share a label — the difference between a
+        # resolvable and an ambiguous query on a long-format/relational table.
+        quote = (getattr(fact, "context_quote", "") or "").strip()
+        ctx = f' — konteks: "{quote[:200]}"' if quote else ""
         fact_queries: List[PointQuery] = []
         valid = True
         for p in fact.periods:
@@ -112,13 +118,13 @@ def build_point_queries(facts, candidate_indices: List[int]) -> List[PointQuery]
                 fact_queries.append(PointQuery(
                     fact_index=fi,
                     data_key=(p.metric_label, p.col_label),
-                    desc=f"baris='{p.metric_label}', atribut='{p.col_label}'",
+                    desc=f"baris='{p.metric_label}', atribut='{p.col_label}'{ctx}",
                 ))
             elif p.year is not None and p.month is not None:
                 fact_queries.append(PointQuery(
                     fact_index=fi,
                     data_key=(p.metric_label, p.year, p.month),
-                    desc=f"metrik='{p.metric_label}', periode='{_period_desc(p.year, p.month)}'",
+                    desc=f"metrik='{p.metric_label}', periode='{_period_desc(p.year, p.month)}'{ctx}",
                 ))
             else:
                 valid = False
@@ -134,7 +140,7 @@ def build_point_queries(facts, candidate_indices: List[int]) -> List[PointQuery]
                         desc=(
                             f"metrik='{p.metric_label}', "
                             f"periode='{_period_desc(p.year - 1, p.month)}' "
-                            "(pembanding tahun sebelumnya)"
+                            f"(pembanding tahun sebelumnya){ctx}"
                         ),
                     ))
         queries.extend(fact_queries)
@@ -149,6 +155,11 @@ _POINTER_SYSTEM_PROMPT = """\
 You are a precise spreadsheet cell locator. You are shown a textual snapshot of a
 spreadsheet grid: one line per row ("row r: ..."), each non-empty cell shown as
 [c]=value with its 0-based column index c.
+
+A query may also carry 'konteks' — the claim's original sentence. When several rows share
+a label (e.g. many 'Laptop' rows in a long-format table), USE the other details in that
+context (region, city, quarter, product…) to choose the ONE correct row. If the context
+still doesn't pin down a single row, set found=false.
 
 You receive a numbered list of QUERIES. Each query names a metric/row and either a
 calendar period or an attribute/column. For each query, return the 0-based (row, col)

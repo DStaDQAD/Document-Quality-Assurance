@@ -68,6 +68,18 @@ def test_build_point_queries_yoy_synthesizes_prior_year():
     assert "pembanding tahun sebelumnya" in queries[1].desc
 
 
+def test_build_point_queries_includes_claim_context():
+    # The claim sentence carries the dimensions the structured form drops — it must ride
+    # along so the pointer can disambiguate rows on a long-format table.
+    fact = _fact(periods=[PeriodPoint(metric_label="Laptop", col_label="Revenue")])
+    fact.context_quote = "Surabaya mencatat pendapatan Laptop tertinggi pada Q2 sebesar 52.000"
+
+    queries = build_point_queries([fact], [0])
+
+    assert "konteks:" in queries[0].desc
+    assert "Surabaya" in queries[0].desc
+
+
 def test_build_point_queries_categorical_two_tuple_key():
     fact = _fact(periods=[PeriodPoint(metric_label="Laptop ASUS", col_label="Harga")])
 
