@@ -366,6 +366,40 @@ def test_evaluate_is_stable_entailed_when_within_tolerance():
     assert result.verdict == "Entailed"
 
 
+def test_evaluate_is_increasing_autocompletes_previous_quarter():
+    # "SBT KMK meningkat" in a Tw II report states only Q2; the baseline Q1 is pulled from
+    # the table so the QoQ trend is checkable without the LLM guessing the earlier period.
+    table = _make_table(data={
+        ("Kredit Modal Kerja", 2026, "Q1"): 36.4,
+        ("Kredit Modal Kerja", 2026, "Q2"): 94.34,
+    })
+    fact = _make_fact(
+        operation="is_increasing",
+        periods=[_make_period(metric_label="Kredit Modal Kerja", year=2026, month="Q2")],
+        claimed_value=None, unit=None,
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert len(result.periods) == 2  # Q1 auto-added ahead of the stated Q2
+
+
+def test_evaluate_is_decreasing_autocompletes_and_refutes_when_actually_up():
+    table = _make_table(data={
+        ("KMK", 2026, "Q1"): 36.4, ("KMK", 2026, "Q2"): 94.34,
+    })
+    fact = _make_fact(
+        operation="is_decreasing",
+        periods=[_make_period(metric_label="KMK", year=2026, month="Q2")],
+        claimed_value=None, unit=None,
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"  # it rose, so a decline claim is refuted
+
+
 def test_evaluate_is_increasing_inconclusive_when_periods_mix_metrics():
     # "SBT meningkat pada KMK, KI, KK" mis-bundled as one trend over THREE metrics at the
     # same quarter: monotonicity across unrelated series wrongly Refuted before — must now

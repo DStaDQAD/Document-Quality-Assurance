@@ -119,8 +119,9 @@ class _ExtractedFact(BaseModel):
             "the order they appear/matter (chronological for average/sum/diff/is_increasing/"
             "is_decreasing/is_stable; numerator-then-denominator for ratio). "
             "'value', 'yoy_growth', 'above_threshold', 'below_threshold' need exactly 1. "
-            "'diff' and 'ratio' need exactly 2. "
-            "'average', 'sum', 'is_increasing', 'is_decreasing', 'is_stable' need 2 or more - "
+            "'diff' and 'ratio' need exactly 2. 'average', 'sum' need 2 or more. "
+            "'is_increasing', 'is_decreasing', 'is_stable' take the periods EXPLICITLY stated "
+            "(a single current period is fine — the baseline is completed automatically); "
             "list EVERY month in a stated range individually, never as a range description."
         ),
     )
@@ -188,13 +189,15 @@ Available operations:
   ratio          : the stated ratio/percentage of one metric relative to ANOTHER metric (or point),
                    e.g. "kredit terhadap DPK sebesar 85%". periods = [numerator point, denominator
                    point] in the order named ("A terhadap/dibanding B" → A first, B second).
-  is_increasing  : a claim that ONE metric rose/kept rising across several time periods, with no
-                   explicit number (e.g. "kredit terus meningkat dari Januari hingga April").
-                   periods = the SAME metric at every time point in the range, chronological order
-                   (>= 2 DISTINCT periods). claimed_value_raw = null. When a sentence says several
-                   metrics each rose (e.g. "SBT meningkat pada Kredit Modal Kerja, Kredit Investasi,
-                   dan Kredit Konsumsi"), emit a SEPARATE is_increasing fact PER METRIC — never one
-                   fact whose periods mix different metrics, and never a trend over a single period.
+  is_increasing  : a claim that ONE metric rose/kept rising over time, no explicit number. Emit a
+                   SEPARATE is_increasing fact PER METRIC — never mix different metrics in one fact.
+                   periods: list every period the sentence EXPLICITLY states, chronological order
+                   (e.g. "meningkat dari Januari hingga April" → Jan,Feb,Mar,Apr). When the sentence
+                   only says a metric "meningkat/naik" within a report about ONE period (e.g. "pada
+                   triwulan II 2026 ... SBT meningkat pada Kredit Modal Kerja, Kredit Investasi, dan
+                   Kredit Konsumsi"), emit ONE fact per metric with just THAT single period
+                   (year=2026, month='Q2') — the comparison against the preceding period is completed
+                   automatically by code. claimed_value_raw = null.
   is_decreasing  : same as is_increasing but for a claimed decline. claimed_value_raw = null.
   is_stable      : a claim that ONE metric stayed roughly flat/stable across several time periods.
                    claimed_value_raw = null.

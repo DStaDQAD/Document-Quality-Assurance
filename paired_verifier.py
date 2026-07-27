@@ -34,7 +34,7 @@ from cell_pointer import (
     resolve_pointers,
 )
 from excel_parser_bi import BITableData, parse_bi_table
-from table_parser_generic import _load_grid, parse_generic_table
+from table_parser_generic import _MONTH_ABBREVS, _load_grid, parse_generic_table
 from table_parser_llm import parse_table_with_llm
 from schemas import (
     FactVerificationResult,
@@ -267,6 +267,39 @@ def _point_desc(p: PeriodPoint) -> str:
     return p.col_label if p.col_label is not None else f"{p.month} {p.year}"
 
 
+_QUARTER_ORDINAL = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+
+
+def _period_ordinal(token: str) -> int:
+    """Chronological rank of a period token so months and quarters sort correctly
+    (available_periods sorts tokens as plain strings, which misorders month abbrevs)."""
+    if token in _QUARTER_ORDINAL:
+        return _QUARTER_ORDINAL[token]
+    try:
+        return _MONTH_ABBREVS.index(token) + 1
+    except ValueError:
+        return 0
+
+
+def _previous_period(
+    table: BITableData, label: str, year: int, month: str
+) -> Optional[Tuple[Tuple[int, str], float]]:
+    """The period immediately before (year, month) in this metric's own series, with its
+    value — used to complete a single-point trend claim. None when there is no earlier
+    period or it has no value."""
+    avail = table.available_periods(label)
+    ordered = sorted(avail, key=lambda ym: (ym[0], _period_ordinal(ym[1])))
+    key = (year, month)
+    if key not in ordered:
+        return None
+    i = ordered.index(key)
+    if i == 0:
+        return None
+    py, pm = ordered[i - 1]
+    _, val = table.lookup_fuzzy(label, py, pm)
+    return ((py, pm), val) if val is not None else None
+
+
 def _numeric_verdict(claimed: float, computed: float) -> Tuple[float, str]:
     delta = round(abs(claimed - computed), 4)
     return delta, ("Entailed" if delta <= MATCH_TOLERANCE else "Refuted")
@@ -372,9 +405,34 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
 
 
 def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
-    values = [raw for (_, raw) in resolved]
-    periods = _build_periods(fact.periods, resolved, values)
     matched_source = src.label
+    used_periods = list(fact.periods)
+    labelled = list(resolved)  # [(matched_label, value)]
+
+    # Auto-complete a single-point trend: reports often state only the current period
+    # ("SBT meningkat" in a Tw II 2026 report) and leave the QoQ baseline implicit. Pull
+    # the metric's immediately-preceding period from the table itself so the claim is
+    # checkable without relying on the LLM to guess the earlier period.
+    if len(labelled) == 1:
+        p0 = used_periods[0]
+        if p0.col_label is None and p0.year is not None and p0.month is not None:
+            prev = _previous_period(src.table, labelled[0][0], p0.year, p0.month)
+            if prev is not None:
+                (py, pm), pv = prev
+                labelled = [(labelled[0][0], pv), labelled[0]]
+                used_periods = [PeriodPoint(metric_label=labelled[0][0], year=py, month=pm), p0]
+
+    values = [raw for (_, raw) in labelled]
+    periods = _build_periods(used_periods, labelled, values)
+
+    if len(values) < 2:
+        return _make_result(
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            reasoning=(
+                f"Klaim tren '{fact.operation}' hanya menyebut satu periode dan tabel tidak "
+                f"punya periode sebelumnya untuk '{labelled[0][0]}' sebagai pembanding."
+            ),
+        )
 
     if fact.operation == "is_increasing":
         ok = all(values[i + 1] >= values[i] for i in range(len(values) - 1))
@@ -384,7 +442,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         ok = all(abs(values[i + 1] - values[i]) <= MATCH_TOLERANCE for i in range(len(values) - 1))
 
     verdict = "Entailed" if ok else "Refuted"
-    breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, v in zip(fact.periods, values))
+    breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, v in zip(used_periods, values))
     return _make_result(
         fact, periods, matched_source, None, None, None, src.table.unit, None, verdict,
         reasoning=(
@@ -526,22 +584,21 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             ),
         )
 
-    # A trend must follow ONE metric across >= 2 distinct time points. When the extractor
-    # instead bundles several metrics (e.g. "SBT meningkat pada KMK, KI, dan KK" — three
-    # metrics at the same quarter), monotonicity would be checked across unrelated series
-    # and wrongly Refuted; and a single time point has nothing to trend. Both are the
-    # extractor mis-structuring the claim, not a data mismatch — so return Inconclusive
-    # (the claim should have been split into one trend per metric).
+    # A trend must follow ONE metric. When the extractor bundles several DIFFERENT metrics
+    # into one fact (e.g. "SBT meningkat pada KMK, KI, dan KK" — three metrics at the same
+    # quarter), monotonicity would be checked across unrelated series and wrongly Refuted;
+    # that is the extractor mis-structuring the claim, so return Inconclusive (it should
+    # have been one trend per metric). A single-period trend is NOT rejected here — the
+    # baseline is auto-completed from the table in _compute_trend.
     if fact.operation in _TREND_OPS:
         distinct_metrics = {p.metric_label.strip().lower() for p in fact.periods}
-        distinct_times = {(p.year, p.month) for p in fact.periods}
-        if len(distinct_metrics) > 1 or len(distinct_times) < 2:
+        if len(distinct_metrics) > 1:
             return _make_result(
                 fact, [], None, None, None, None, None, None, "Inconclusive",
                 reasoning=(
-                    f"Klaim tren '{fact.operation}' harus mengikuti satu metrik pada minimal "
-                    f"dua periode waktu berbeda, tetapi klaim ini mencakup {len(distinct_metrics)} "
-                    f"metrik pada {len(distinct_times)} periode — bukan tren waktu yang bisa dinilai."
+                    f"Klaim tren '{fact.operation}' harus mengikuti satu metrik, tetapi klaim ini "
+                    f"mencakup {len(distinct_metrics)} metrik berbeda — seharusnya dipecah menjadi "
+                    "satu tren per metrik."
                 ),
             )
 
