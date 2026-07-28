@@ -34,6 +34,7 @@ from cell_pointer import (
     resolve_pointers,
 )
 from excel_parser_bi import BITableData, parse_bi_table
+from table_model import QUAL_SEP, label_match_score
 from table_parser_generic import _MONTH_ABBREVS, _load_grid, parse_generic_table
 from table_parser_llm import parse_table_with_llm
 from schemas import (
@@ -82,6 +83,23 @@ _TEMPORAL_ONLY_OPS = {"yoy_growth", "is_increasing", "is_decreasing", "is_stable
 # cross-metric comparison mislabelled as a trend) or gives fewer than two distinct time
 # points (nothing to trend) — see the guard in _evaluate_fact.
 _TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
+
+# Narrative markers of an UNNAMED subset: "peningkatan IKK terjadi di beberapa kota",
+# "sebagian besar kota mencatat penurunan IEK", "pada kelompok pengeluaran lainnya ...
+# menurun". No row corresponds to such a subset, so a trend claim about it that resolved to
+# an UNQUALIFIED metric was silently checked against the national series and came back
+# Refuted for saying the opposite of the national move — a confident, wrong verdict on a
+# sentence that is in fact true. The extractor is told to skip these (rule 9), and this is
+# the deterministic backstop for when it does not. It deliberately does NOT fire on the
+# per-member facts split out of the same sentence ("… terutama di Makassar, Banten, dan
+# Medan"), because those carry the member in their metric label.
+_SUBSET_PHRASE_RE = re.compile(
+    r"\b(?:beberapa|sejumlah|banyak|sebagian(?:\s+besar)?)\s+(?:\w+\s+)?"
+    r"(?:kota|daerah|wilayah|provinsi|kelompok|responden|komponen)\b"
+    r"|\b(?:kota|daerah|wilayah|kelompok|golongan|tingkat\s+pendidikan)\s+"
+    r"(?:\w+\s+)?lain(?:nya)?\b",
+    re.IGNORECASE,
+)
 
 # Threshold operations: ONE metric at ONE period compared to a bound (claimed_value is the
 # threshold, e.g. a PMI diffusion index "berada pada fase ekspansi (>50)"). Dimensionless —
@@ -248,6 +266,18 @@ def _try_resolve(
                 resolved.append((label, raw))
                 col_units.append(None)
     return resolved, missing, col_units
+
+
+def _resolution_score(
+    periods: List[PeriodPoint], resolved: List[Tuple[str, float]]
+) -> float:
+    """Mean label_match_score across a fact's data points — how well one source's rows
+    answer the metric names the claim actually asked for."""
+    scores = [
+        label_match_score(p.metric_label, label)
+        for p, (label, _) in zip(periods, resolved)
+    ]
+    return sum(scores) / len(scores) if scores else 0.0
 
 
 def _build_periods(
@@ -591,6 +621,22 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # have been one trend per metric). A single-period trend is NOT rejected here — the
     # baseline is auto-completed from the table in _compute_trend.
     if fact.operation in _TREND_OPS:
+        # A trend attributed to an unnamed subset cannot be checked against any single row;
+        # only reject when the metric itself names no member, so the per-member facts split
+        # out of the same sentence still verify normally (see _SUBSET_PHRASE_RE).
+        if all(QUAL_SEP not in p.metric_label for p in fact.periods) and (
+            _SUBSET_PHRASE_RE.search(fact.context_quote or "")
+        ):
+            return _make_result(
+                fact, [], None, None, None, None, None, None, "Inconclusive",
+                reasoning=(
+                    f"Klaim tren ini menyebut sebagian kelompok/kota tanpa menamainya, "
+                    f"sedangkan '{fact.display_label}' hanya tersedia sebagai seri "
+                    "keseluruhan — membandingkannya dengan seri keseluruhan akan menilai "
+                    "hal yang berbeda dari yang diklaim."
+                ),
+            )
+
         distinct_metrics = {p.metric_label.strip().lower() for p in fact.periods}
         if len(distinct_metrics) > 1:
             return _make_result(
@@ -605,6 +651,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None
     best_reason: Optional[str] = None
+    # (score, src, resolved, factor) of the best-matching source so far — see _resolution_score.
+    best_match: Optional[Tuple[float, _ExcelSource, List[Tuple[str, float]], float]] = None
 
     for src in sources:
         resolved, missing, col_units = _try_resolve(fact.periods, src)
@@ -640,6 +688,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     )
                 continue
 
+        # Do NOT stop at the first source that resolves: the fuzzy tiers resolve a
+        # breakdown claim against a coarser aggregate row just as readily as against the
+        # real breakdown row, so whichever sheet the user happened to upload first would
+        # win. Keep scanning and keep the closest label match; ties keep the earlier
+        # source, so single-source behaviour is unchanged.
+        score = _resolution_score(fact.periods, resolved)
+        if best_match is None or score > best_match[0]:
+            best_match = (score, src, resolved, factor)
+
+    if best_match is not None:
+        _, src, resolved, factor = best_match
         return _compute_operation(fact, resolved, factor, src)
 
     return _inconclusive_result(fact, best_missing, best_reason)
@@ -700,6 +759,22 @@ def _build_table_suggestions(results: List[FactVerificationResult]) -> List[Tabl
 # Parser cascade: deterministic BI layout first, generic heuristic parser as fallback
 # ---------------------------------------------------------------------------
 
+def _bi_parse_collapsed(table: BITableData) -> bool:
+    """True when the BI reader emitted the SAME row label more than once.
+
+    parse_bi_table reads the label from one fixed column and disambiguates repeats via the
+    label cell's indent. When a sheet encodes its row hierarchy in a DIFFERENT column
+    instead (the per-city consumer-survey sheet puts '1. Jakarta' left of the metric name),
+    the indent trick finds no parent, every city repeats the same six metric labels, and
+    first-occurrence-wins silently keeps only the first city's numbers under a label that
+    reads national. Duplicate labels are that failure's fingerprint, so treat the parse as
+    unusable and let the generic parser — which composes labels from the whole label block —
+    have it. Nothing is lost if that also fails: the cascade returns this table as its last
+    resort anyway.
+    """
+    return len(set(table.row_labels)) < len(table.row_labels)
+
+
 def _parse_table_with_fallback(
     excel_bytes: bytes, sheet_name: str, llm: Optional[BaseChatModel] = None
 ) -> Tuple[BITableData, str]:
@@ -718,7 +793,7 @@ def _parse_table_with_fallback(
     bi_error: Optional[Exception] = None
     try:
         bi_table = parse_bi_table(excel_bytes, sheet_name)
-        if bi_table.row_labels and bi_table._data:
+        if bi_table.row_labels and bi_table._data and not _bi_parse_collapsed(bi_table):
             return bi_table, "bi"
     except ValueError as exc:
         bi_error = exc

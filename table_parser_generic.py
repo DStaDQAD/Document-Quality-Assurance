@@ -447,6 +447,19 @@ def _find_label_cols(
     return list(reversed(cols))
 
 
+# Label-block cells that carry no name of their own: bullet glyphs and enumeration markers
+# ('A.', 'B1.', '3)', '1)'). They must NOT overwrite the forward-filled section name of their
+# own column. BI survey sheets put a section title ("Indeks Keyakinan Konsumen (IKK)") and the
+# bullet of each row under it in the SAME column, so treating the bullet as a real label buried
+# the section name: all nine sections of "Tabel 2" collapsed to 'A. > - > Pengeluaran >Rp5 juta',
+# 'B. > - > Pengeluaran >Rp5 juta', … — indistinguishable to a claim naming the indicator.
+_LABEL_MARKER_RE = re.compile(r"^(?:[\-–—•·*]+|(?:[A-Za-z]\d{0,2}|\d{1,2})[.)])$")
+
+
+def _is_label_marker(v) -> bool:
+    return isinstance(v, str) and bool(_LABEL_MARKER_RE.match(v.strip()))
+
+
 def _composite_label(parts: List[Optional[str]]) -> str:
     """Join label parts with QUAL_SEP: whitespace-normalized, blanks dropped,
     consecutive case-insensitive duplicates collapsed ('Total > Total' -> 'Total')."""
@@ -463,6 +476,52 @@ def _composite_label(parts: List[Optional[str]]) -> str:
     return QUAL_SEP.join(out)
 
 
+def _drop_redundant_qualifiers(
+    row_labels: List[str],
+    table_data: Dict[Tuple, float],
+    reduced: Dict[str, str],
+) -> Tuple[List[str], Dict[Tuple, float]]:
+    """Replace a label with its section-header-free form wherever the leaf is already unique.
+
+    `reduced[label]` is the same label rebuilt without the levels that were INHERITED from a
+    preceding row which held no data of its own — i.e. from a pure section-header row. Those
+    are the only droppable levels: a level that came from this row's own cells (including a
+    vertical merge, which fills every cell of the range) is part of the row's identity, so
+    bilingual/parallel label blocks like 'Menurut Penggunaan > Kredit Modal Kerja > Based on
+    Usage > Working Capital Loans' are never shortened.
+
+    Dropping is then gated on the same convention as excel_parser_bi._qualify_duplicate_labels:
+    a qualifier earns its place by resolving an ambiguity. It stays where it does — the
+    expenditure-group sheet repeats 'Pengeluaran >Rp5 juta' under all nine indicator sections,
+    and the per-city sheet repeats every metric name once per city. It goes where it does not:
+    a sheet whose section header is ALSO one of its own rows ("A. Indeks Keyakinan Konsumen
+    (IKK)" above the rows IKK / IKE / IEK) otherwise labels the national IKE row 'Indeks
+    Keyakinan Konsumen (IKK) > … (IKE)', and those borrowed words make it look FARTHER from a
+    plain "IKE" claim than a per-city or per-age-group IKE row is — so the national claim gets
+    checked against one arbitrary breakdown row instead.
+    """
+    leaf_counts: Dict[str, int] = {}
+    for label in row_labels:
+        leaf = label.rsplit(QUAL_SEP, 1)[-1]
+        leaf_counts[leaf] = leaf_counts.get(leaf, 0) + 1
+
+    renames = {
+        label: short
+        for label in row_labels
+        if (short := reduced.get(label, label)) != label
+        and leaf_counts[label.rsplit(QUAL_SEP, 1)[-1]] == 1
+    }
+    if not renames:
+        return row_labels, table_data
+
+    new_labels = [renames.get(label, label) for label in row_labels]
+    new_data = {
+        (renames.get(key[0], key[0]), *key[1:]): value
+        for key, value in table_data.items()
+    }
+    return new_labels, new_data
+
+
 def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
     """Parse a sheet of stacked two-row-header tables into one temporal TableData.
 
@@ -475,6 +534,8 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
     only while no column to its left is explicit in the same row, and an explicit value
     at level k clears the carried values of every level right of k — so a 'Total' row
     with a blank child column stays 'Total' instead of inheriting a stale child label.
+    The parent qualifier is then DROPPED again wherever the leaf alone already identifies
+    the row uniquely — see _drop_redundant_qualifiers.
     """
     blocks = _find_header_blocks(grid)
     if not blocks:
@@ -482,6 +543,9 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
 
     table_data: Dict[Tuple, float] = {}
     row_labels: List[str] = []
+    # label -> same label without the levels inherited from header-only rows; consumed by
+    # _drop_redundant_qualifiers.
+    reduced: Dict[str, str] = {}
     for i, (year_row, period_row) in enumerate(blocks):
         region_end = blocks[i + 1][0] if i + 1 < len(blocks) else len(grid)
         col_keys = _block_col_keys(grid, year_row, period_row)
@@ -492,21 +556,39 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
             continue
 
         carry: List[Optional[str]] = [None] * len(label_cols)
+        # Per level: did the carried value come from a row that stored no data (a pure
+        # section header) rather than from a data row's own cells?
+        carry_from_header: List[bool] = [False] * len(label_cols)
         for r in range(period_row + 1, region_end):
             row = grid[r]
             parts: List[Optional[str]] = []
+            own: List[bool] = []   # part belongs to this row's identity (not a header carry)
             explicit_left = False
+            set_here: List[int] = []
             for idx, c in enumerate(label_cols):
                 v = row[c] if c < len(row) else None
-                if not _is_empty(v):
+                # A bullet/enumeration marker counts as blank so the section name carried
+                # down this column survives (see _is_label_marker).
+                if not _is_empty(v) and not _is_label_marker(v):
                     carry[idx] = str(v)
                     for j in range(idx + 1, len(label_cols)):
                         carry[j] = None
                     parts.append(str(v))
+                    own.append(True)
+                    set_here.append(idx)
                     explicit_left = True
                 else:
-                    parts.append(None if explicit_left else carry[idx])
+                    inherited = None if explicit_left else carry[idx]
+                    parts.append(inherited)
+                    own.append(inherited is None or not carry_from_header[idx])
             label = _composite_label(parts)
+            if not label:
+                # Nothing but markers on this row and nothing carried — fall back to the
+                # raw cells so a marker-only key beats dropping the row's data entirely.
+                label = _composite_label([
+                    row[c] if c < len(row) else None for c in label_cols
+                ])
+                own = [True] * len(parts)
             if not label:
                 continue
             stored = False
@@ -514,11 +596,19 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
                 if c < len(row) and _is_number(row[c]):
                     table_data.setdefault((label, year, tok), float(row[c]))
                     stored = True
+            # A row that stored nothing is a section header: what it set becomes droppable
+            # context for the rows beneath it.
+            for idx in set_here:
+                carry_from_header[idx] = not stored
             if stored and label not in row_labels:
                 row_labels.append(label)
+                short = _composite_label([p for p, o in zip(parts, own) if o])
+                reduced.setdefault(label, short or label)
 
     if not row_labels or not table_data:
         return None
+
+    row_labels, table_data = _drop_redundant_qualifiers(row_labels, table_data, reduced)
 
     title, unit = _title_and_unit(grid, blocks[0][0])
     return TableData(

@@ -1239,3 +1239,148 @@ def test_cascade_keeps_empty_bi_result_when_llm_tier_also_fails(mock_bi, mock_ge
 
     assert parser == "bi"
     assert table.row_labels == []
+
+
+# ---------------------------------------------------------------------------
+# Best-matching-source selection, collapsed-BI rejection, unnamed-subset guard
+# ---------------------------------------------------------------------------
+
+def test_evaluate_fact_prefers_the_breakdown_row_over_an_earlier_aggregate_source():
+    # Both sources resolve the claim; the first holds only the national aggregate. Taking
+    # whichever source came first checked a per-group claim against the national series.
+    national = _make_source(
+        _make_table(title="Indeks", unit="", data={
+            ("Indeks Keyakinan Konsumen (IKK)", 2026, "Jun"): 117.8,
+        }),
+        sheet="Tabel 1",
+    )
+    per_group = _make_source(
+        _make_table(title="Indeks per Kelompok", unit="", data={
+            ("Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta", 2026, "Jun"): 121.4,
+        }),
+        sheet="Tabel 2",
+    )
+    fact = _make_fact(
+        claimed_value=121.4, unit=None,
+        periods=[_make_period(
+            metric_label="Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta",
+            year=2026, month="Jun",
+        )],
+    )
+
+    result = _evaluate_fact(fact, [national, per_group])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source.endswith("Tabel 2")
+
+
+def test_evaluate_fact_prefers_the_national_row_over_a_per_city_source():
+    per_city = _make_source(
+        _make_table(title="Indeks per Kota", unit="", data={
+            ("5. Medan > Indeks Kondisi Ekonomi Saat Ini (IKE)", 2026, "Jun"): 86.2,
+        }),
+        sheet="Tabel 6",
+    )
+    national = _make_source(
+        _make_table(title="Indeks", unit="", data={
+            ("Indeks Kondisi Ekonomi Saat Ini (IKE)", 2026, "Jun"): 109.2,
+        }),
+        sheet="Tabel 1",
+    )
+    fact = _make_fact(
+        claimed_value=109.2, unit=None,
+        periods=[_make_period(
+            metric_label="Indeks Kondisi Ekonomi Saat Ini (IKE)", year=2026, month="Jun",
+        )],
+    )
+
+    result = _evaluate_fact(fact, [per_city, national])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source.endswith("Tabel 1")
+
+
+def test_evaluate_fact_keeps_the_first_source_when_scores_tie():
+    data = {("Total", 2026, "Apr"): 10355.1}
+    first = _make_source(_make_table(data=data), sheet="I.1")
+    second = _make_source(_make_table(data=data), sheet="I.2")
+
+    result = _evaluate_fact(_make_fact(), [first, second])
+
+    assert result.matched_excel_source.endswith("I.1")
+
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_rejects_a_bi_parse_with_duplicate_row_labels(mock_bi, mock_generic):
+    # Repeated labels mean the BI reader missed the column holding the row hierarchy, so
+    # every group silently collapsed onto the first one's values.
+    collapsed = _make_table(data={("IKK", 2026, "Jun"): 1.0})
+    collapsed.row_labels.append("IKK")
+    mock_bi.return_value = collapsed
+    mock_generic.return_value = _make_table(data={
+        ("Jakarta > IKK", 2026, "Jun"): 1.0, ("Bandung > IKK", 2026, "Jun"): 2.0,
+    })
+
+    _, parser = _parse_table_with_fallback(b"bytes", "Tabel 6")
+
+    assert parser == "generic"
+
+
+@patch("paired_verifier.parse_generic_table")
+@patch("paired_verifier.parse_bi_table")
+def test_cascade_keeps_collapsed_bi_result_when_generic_also_fails(mock_bi, mock_generic):
+    collapsed = _make_table(data={("IKK", 2026, "Jun"): 1.0})
+    collapsed.row_labels.append("IKK")
+    mock_bi.return_value = collapsed
+    mock_generic.side_effect = ValueError("no structure")
+
+    _, parser = _parse_table_with_fallback(b"bytes", "Tabel 6")
+
+    assert parser == "bi"
+
+
+@pytest.mark.parametrize("quote", [
+    "Sementara itu, beberapa kota lainnya mencatatkan kenaikan IEK.",
+    "Secara spasial, sebagian besar kota mengalami penurunan IKE.",
+    "Sedangkan pada kelompok pengeluaran lainnya, proporsi konsumsi terindikasi menurun.",
+])
+def test_trend_about_an_unnamed_subset_is_inconclusive_not_refuted(quote):
+    source = _make_source(_make_table(title="Indeks", unit="", data={
+        ("Indeks Ekspektasi Konsumen (IEK)", 2026, "May"): 129.7,
+        ("Indeks Ekspektasi Konsumen (IEK)", 2026, "Jun"): 126.4,
+    }))
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+        periods=[
+            _make_period(metric_label="Indeks Ekspektasi Konsumen (IEK)", year=2026, month="May"),
+            _make_period(metric_label="Indeks Ekspektasi Konsumen (IEK)", year=2026, month="Jun"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [source])
+
+    assert result.verdict == "Inconclusive"
+
+
+def test_trend_naming_its_member_is_still_verified_from_the_same_sentence():
+    # The per-city facts split out of a 'sebagian besar kota …' sentence carry the city in
+    # their metric label, so the unnamed-subset guard must not swallow them too.
+    source = _make_source(_make_table(title="Indeks per Kota", unit="", data={
+        ("9. Makassar > Indeks Kondisi Ekonomi Saat Ini (IKE)", 2026, "May"): 117.2,
+        ("9. Makassar > Indeks Kondisi Ekonomi Saat Ini (IKE)", 2026, "Jun"): 99.3,
+    }))
+    label = "Indeks Kondisi Ekonomi Saat Ini (IKE) > Makassar"
+    fact = _make_fact(
+        operation="is_decreasing", claimed_value=None, unit=None,
+        context_quote=("Secara spasial, sebagian besar kota mengalami penurunan IKE "
+                       "terutama di Makassar, Banten, dan Medan."),
+        periods=[
+            _make_period(metric_label=label, year=2026, month="May"),
+            _make_period(metric_label=label, year=2026, month="Jun"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [source])
+
+    assert result.verdict == "Entailed"

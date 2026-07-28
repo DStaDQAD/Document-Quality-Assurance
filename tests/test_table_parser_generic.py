@@ -441,3 +441,87 @@ def test_parse_generic_table_raises_when_no_header_structure_found():
 
     with pytest.raises(ValueError, match="header"):
         parse_generic_table(_save(wb), "S")
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical label blocks: bullet/enumeration markers and redundant qualifiers
+# ---------------------------------------------------------------------------
+
+def _build_sectioned_survey_bytes():
+    """Mirror the consumer-survey sheet shape: an enumeration marker column ('A.', 'B1.'),
+    a bullet column ('-') that shares its column with the SECTION NAME, and the section's
+    member rows below. Two sections repeat the same member names, one does not."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "SK"
+    ws["C1"] = "Tabel 2. Indeks per Kelompok Pengeluaran"
+    ws["C3"] = "KETERANGAN"
+    ws["G3"] = 2026
+    ws.merge_cells("G3:J3")
+    for col, tok in zip("GHIJ", ["Jan", "Feb", "Mar", "Apr"]):
+        ws[f"{col}4"] = tok
+    # Section A — header row carries no data; its name sits in the same column as the
+    # bullets of the rows below it.
+    ws["D5"], ws["E5"] = "A.", "Indeks Keyakinan Konsumen (IKK)"
+    ws["E6"], ws["F6"] = "- ", "Pengeluaran Rp1 - 2 juta"
+    for col, v in zip("GHIJ", [101.0, 102.0, 103.0, 104.0]):
+        ws[f"{col}6"] = v
+    ws["E7"], ws["F7"] = "- ", "Pengeluaran >Rp5 juta"
+    for col, v in zip("GHIJ", [121.1, 121.2, 121.3, 121.4]):
+        ws[f"{col}7"] = v
+    # Section B repeats the same member names.
+    ws["D8"], ws["E8"] = "B.", "Indeks Kondisi Ekonomi (IKE)"
+    ws["E9"], ws["F9"] = "- ", "Pengeluaran Rp1 - 2 juta"
+    for col, v in zip("GHIJ", [91.0, 92.0, 93.0, 94.0]):
+        ws[f"{col}9"] = v
+    ws["E10"], ws["F10"] = "- ", "Pengeluaran >Rp5 juta"
+    for col, v in zip("GHIJ", [111.1, 111.2, 111.3, 111.4]):
+        ws[f"{col}10"] = v
+    # Section C's single member name is unique in the sheet.
+    ws["D11"], ws["E11"] = "C.", "Indeks Ekspektasi Konsumen (IEK)"
+    ws["E12"], ws["F12"] = "- ", "Rencana Pembelian Rumah"
+    for col, v in zip("GHIJ", [51.0, 52.0, 53.0, 54.0]):
+        ws[f"{col}12"] = v
+    return _save(wb)
+
+
+def test_two_row_bullet_marker_does_not_replace_the_section_name():
+    # The '-' bullet shares its column with the section title; treating it as a real label
+    # buried the title and left every section's rows labelled identically.
+    table = parse_generic_table(_build_sectioned_survey_bytes(), "SK")
+
+    assert "Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta" in table.row_labels
+    assert "Indeks Kondisi Ekonomi (IKE) > Pengeluaran >Rp5 juta" in table.row_labels
+    assert not any(" - > " in label for label in table.row_labels)
+
+
+def test_two_row_enumeration_marker_is_not_part_of_the_label():
+    table = parse_generic_table(_build_sectioned_survey_bytes(), "SK")
+
+    assert not any(label.startswith(("A.", "B.", "C.")) for label in table.row_labels)
+
+
+def test_two_row_repeated_member_names_stay_qualified_per_section():
+    table = parse_generic_table(_build_sectioned_survey_bytes(), "SK")
+
+    assert table.lookup("Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta", 2026, "Apr") == 121.4
+    assert table.lookup("Indeks Kondisi Ekonomi (IKE) > Pengeluaran >Rp5 juta", 2026, "Apr") == 111.4
+
+
+def test_two_row_unique_member_drops_its_section_header_qualifier():
+    # 'Rencana Pembelian Rumah' occurs once, so its section header adds no information —
+    # and those borrowed words would make the row look farther from a claim naming it.
+    table = parse_generic_table(_build_sectioned_survey_bytes(), "SK")
+
+    assert "Rencana Pembelian Rumah" in table.row_labels
+    assert table.lookup("Rencana Pembelian Rumah", 2026, "Apr") == 54.0
+
+
+def test_two_row_qualifier_from_a_data_row_is_never_dropped():
+    # 'Sektor Ekonomi' is carried from a row that HAS data (Pertanian's), so it is part of
+    # that block's identity — unlike a header-only section title. The bilingual label block
+    # of the same fixture (all parts explicit) must survive intact too.
+    table = parse_generic_table(_build_quarterly_survey_bytes(), "Survei")
+
+    assert "Sektor Ekonomi > Perikanan > Fishery" in table.row_labels
+    assert _KMK_LABEL in table.row_labels

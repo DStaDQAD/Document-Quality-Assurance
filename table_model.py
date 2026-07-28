@@ -32,6 +32,43 @@ def _sig_words(text: str) -> set:
     return {w.lower() for w in re.findall(r"\w+", text) if len(w) > 2}
 
 
+def _canon(text: str) -> str:
+    """Lowercase, whitespace collapsed, and spacing around punctuation removed.
+
+    Containment matching compares a claim's wording against a sheet's, and the two spell the
+    same category differently for purely cosmetic reasons: the narrative writes "kelompok
+    pengeluaran Rp4,1-5 juta" where the sheet's row reads "Pengeluaran Rp4,1 - 5 juta". On the
+    raw strings neither contains the other, so the breakdown row was missed and the claim fell
+    back to the coarser national row of another sheet.
+
+    Punctuation itself is KEPT — deleting it would let "tabungan lainnya rupiah" read as a
+    substring of "Tabungan Lainnya (Rupiah dan Valas)", so a query for the Rupiah sub-row
+    would bind to its parent's combined total instead.
+    """
+    return re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", text.lower().strip()))
+
+
+def label_match_score(query: str, matched_label: str) -> float:
+    """How well a resolved row label actually answers the metric name a claim asked for: the
+    Dice overlap of their significant words, 1.0 for a perfect match and 0.0 for none.
+
+    The fuzzy tiers are deliberately permissive — they will happily bind "IKK of the >Rp5
+    juta expenditure group" to a plain "Indeks Keyakinan Konsumen (IKK)" row, since the
+    query CONTAINS that label. That is correct as a last resort but wrong when another
+    uploaded sheet carries the actual breakdown row, so paired_verifier ranks the sources
+    that resolved a claim by this score instead of taking whichever came first.
+
+    Penalising both directions is intentional: words of the query missing from the label
+    mean the row is too coarse for the claim (a group breakdown answered by the national
+    aggregate), and words of the label missing from the query mean it is too specific (a
+    national claim answered by one city's row).
+    """
+    q, l = _sig_words(query), _sig_words(matched_label)
+    if not q or not l:
+        return 0.0
+    return 2 * len(q & l) / (len(q) + len(l))
+
+
 @dataclass
 class TableData:
     """Parsed table ready for direct lookup along either axis kind."""
@@ -141,32 +178,62 @@ class TableData:
         Containment (not shared-prefix) in the full-label tiers keeps distinct metrics that
         merely start alike apart: "Uang Beredar Digital" binds to nothing ("Uang Beredar
         Luas(M2)" neither contains it nor is contained by it).
+
+        All comparisons run on _canon forms so cosmetic spacing/punctuation differences
+        between narrative wording and sheet wording do not defeat containment.
         """
-        q_lower = query.lower().strip()
-        q_words = _sig_words(q_lower)
-        tier_exact = [(label, 0) for label in labels if label.lower().strip() == q_lower]
-        tier_q_in_l = [(label, len(label)) for label in labels if q_lower in label.lower()]
-        tier_l_in_q = [(label, -len(label)) for label in labels if label.lower().strip() in q_lower]
-        tier_leaf = []
+        q_canon = _canon(query)
+        q_words = _sig_words(query)
+        tier_exact, tier_q_in_l, tier_l_in_q, tier_leaf = [], [], [], []
         for label in labels:
-            if QUAL_SEP not in label:
-                continue
-            leaf = label.rsplit(QUAL_SEP, 1)[1].lower().strip()
-            if leaf and leaf in q_lower:
-                overlap = len(_sig_words(label) & q_words)
-                tier_leaf.append((label, (-overlap, -len(leaf))))
+            l_canon = _canon(label)
+            if l_canon == q_canon:
+                tier_exact.append((label, 0))
+            if q_canon and q_canon in l_canon:
+                tier_q_in_l.append((label, len(label)))
+            if l_canon and l_canon in q_canon:
+                tier_l_in_q.append((label, -len(label)))
+            if QUAL_SEP in label:
+                leaf = _canon(label.rsplit(QUAL_SEP, 1)[1])
+                if leaf and leaf in q_canon:
+                    overlap = len(_sig_words(label) & q_words)
+                    tier_leaf.append((label, (-overlap, -len(leaf))))
         return [tier_exact, tier_q_in_l, tier_leaf, tier_l_in_q]
 
     def _match_tiers(self, query: str):
         return self._match_tiers_over(query, self.row_labels)
+
+    @staticmethod
+    def _qualifier_kept(query: str, label: str) -> bool:
+        """False when an explicitly qualified query resolved to a label that drops its
+        qualifier entirely.
+
+        A query carrying QUAL_SEP means the extractor deliberately named a sub-dimension —
+        'Indeks Ketersediaan Lapangan Kerja (IKLK) > tingkat pendidikan lainnya', 'IEKU >
+        Pengeluaran Rp4,1-5 juta'. The containment tiers will still bind such a query to the
+        bare parent row ('… (IKLK)'), because the label IS contained in the query, and the
+        claim then gets checked against the national aggregate instead of the group it is
+        about — a confidently wrong verdict. Require MOST of the query leaf's significant
+        words to survive in the match; a single shared word is not enough, or 'IKLK >
+        tingkat pendidikan lainnya' would settle for a row merely called 'Lainnya'. When
+        nothing qualifies, no row in this table answers the claim and it is better left
+        unresolved than answered by the wrong series.
+        """
+        if QUAL_SEP not in query:
+            return True
+        leaf_words = _sig_words(query.rsplit(QUAL_SEP, 1)[1])
+        if not leaf_words:
+            return True
+        return 2 * len(leaf_words & _sig_words(label)) >= len(leaf_words)
 
     def _resolve_label(self, query: str) -> Optional[str]:
         """Return the best matching row label for query, or None if nothing matches."""
         if query in self.row_labels:
             return query
         for tier in self._match_tiers(query):
-            if tier:
-                return min(tier, key=lambda t: t[1])[0]
+            kept = [t for t in tier if self._qualifier_kept(query, t[0])]
+            if kept:
+                return min(kept, key=lambda t: t[1])[0]
         if self.title and self._query_matches_table_subject(query):
             for label in self.row_labels:
                 if label.strip().lower() in self._TOTAL_ROW_NAMES:
@@ -193,6 +260,7 @@ class TableData:
             with_data = [
                 (label, key) for label, key in tier
                 if self._data.get((label, year, month)) is not None
+                and self._qualifier_kept(query, label)
             ]
             if with_data:
                 best = min(with_data, key=lambda t: t[1])[0]
@@ -228,6 +296,7 @@ class TableData:
         if v is not None:
             return row_query, col_query, v
         for row_tier in self._match_tiers_over(row_query, self.row_labels):
+            row_tier = [t for t in row_tier if self._qualifier_kept(row_query, t[0])]
             for row_label, _ in sorted(row_tier, key=lambda t: t[1]):
                 for col_tier in self._match_tiers_over(col_query, self.col_labels):
                     with_data = [

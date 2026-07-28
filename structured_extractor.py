@@ -254,6 +254,19 @@ IMPORTANT RULES:
    year+month and leave col_label null — never fill both.
 7. anchor_quote must be an EXACT substring of the narrative (same spelling, punctuation and
    digits) so code can locate it afterwards — never paraphrase, translate, or re-punctuate it.
+8. A claim about a BREAKDOWN (a city, an expenditure group, an age group, an education level)
+   is about THAT series, not the national/overall one. Put the group in metric_label alongside
+   the indicator, using the reference list's own wording — e.g. "IKK tertinggi pada kelompok
+   >Rp5 juta" → metric_label "Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta", and
+   "peningkatan IKE di Mataram" → "Indeks Kondisi Ekonomi Saat Ini (IKE) > Mataram". When a
+   sentence names several groups, emit ONE fact per group.
+9. SKIP a claim whose subject is an UNNAMED or MULTI-ROW subset — "peningkatan IKK terjadi di
+   beberapa kota", "sebagian besar kota mencatat penurunan IEK", "pada kelompok pengeluaran
+   lainnya ... menurun", "responden dengan tingkat pendidikan lainnya", "kelompok usia >41
+   tahun" where the table lists 41-50 / 51-60 / >60 separately. No single row corresponds to
+   it, and checking it against the overall series would compare the wrong thing. If the same
+   sentence also NAMES members ("...antara lain, di Mataram, Padang, dan Palembang"), extract
+   the named ones per rule 8 and skip only the unnamed remainder.
 """
 
 _HUMAN_TEMPLATE = """\
