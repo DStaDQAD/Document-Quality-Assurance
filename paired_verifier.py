@@ -28,7 +28,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from langchain_core.language_models import BaseChatModel
 
 from cell_pointer import (
+    PointQuery,
     build_point_queries,
+    metric_could_match,
     pointer_is_plausible,
     read_grid_cell,
     resolve_pointers,
@@ -822,6 +824,24 @@ def _parse_table_with_fallback(
 # the LLM points at grid coordinates, code reads the values (see cell_pointer.py).
 # ---------------------------------------------------------------------------
 
+async def _resolve_source_pointers(
+    kept: List[Tuple[int, PointQuery]],
+    grid: List[List],
+    llm: BaseChatModel,
+    fallback_llm: Optional[BaseChatModel] = None,
+) -> Tuple[Dict[int, Tuple[int, int]], Optional[str]]:
+    """resolve_pointers for one source's surviving queries, keyed back to global indices.
+
+    resolve_pointers numbers the queries it is given from zero; the caller tracks them by
+    their position in the full list, so the two numbering schemes are translated here.
+    An empty selection short-circuits without any LLM call.
+    """
+    if not kept:
+        return {}, None
+    local, sheet_unit = await resolve_pointers([q for _, q in kept], grid, llm, fallback_llm)
+    return {kept[i][0]: coord for i, coord in local.items()}, sheet_unit
+
+
 async def _pointer_pass(
     facts: List[ExtractedFact],
     results: List[FactVerificationResult],
@@ -852,8 +872,27 @@ async def _pointer_pass(
     if not queries:
         return results, 0
 
+    # Only ask a sheet about metrics it could plausibly hold. pointer_is_plausible rejects
+    # a coordinate whose row shares no term with the metric, so a query failing
+    # metric_could_match here is one whose answer would be thrown away — and a sheet with
+    # no surviving query is a whole LLM call (a full grid snapshot) not worth making.
+    per_source_queries: List[List[Tuple[int, PointQuery]]] = [
+        [
+            (qi, q) for qi, q in enumerate(queries)
+            if metric_could_match(src.grid, q.data_key[0], src.table.title)
+        ]
+        for src in grid_sources
+    ]
+    for src, kept in zip(grid_sources, per_source_queries):
+        if len(kept) < len(queries):
+            logger.info(
+                "Cell pointer: %s/%s asked about %d of %d queries (rest cannot match this sheet)",
+                src.filename, src.sheet, len(kept), len(queries),
+            )
+
     resolutions = await asyncio.gather(*[
-        resolve_pointers(queries, src.grid, llm, fallback_llm) for src in grid_sources
+        _resolve_source_pointers(kept, src.grid, llm, fallback_llm)
+        for src, kept in zip(grid_sources, per_source_queries)
     ])
 
     new_results = list(results)

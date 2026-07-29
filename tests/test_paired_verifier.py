@@ -1077,6 +1077,48 @@ def test_pointer_pass_batches_all_facts_into_one_call_per_source():
     assert all(r.resolved_via == "pointer" for r in new)
 
 
+def test_pointer_pass_skips_a_source_that_cannot_hold_any_queried_metric():
+    # Nothing in this sheet names the metric, so every coordinate it could return would be
+    # rejected by pointer_is_plausible — the call is pure cost and must not be made.
+    src = _pointer_only_source([["Metrik", "x"], ["Cadangan Devisa", 1.0]])
+    fact = _kpr_fact()
+    results = [_evaluate_fact(fact, [src])]
+    log = []
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch, log)))
+
+    assert log == []
+    assert n == 0
+    assert new == results
+
+
+def test_pointer_pass_asks_each_source_only_about_metrics_it_could_hold():
+    # Two sheets, one metric each: neither should be asked about the other's metric, and
+    # both facts must still resolve — the query indices are renumbered per source.
+    kpr_src = _pointer_only_source([["Metrik", "x"], ["KPR/KPA", 40.63]])
+    dev_src = _pointer_only_source([["Metrik", "x"], ["Cadangan Devisa", 12.5]])
+    facts = [
+        _kpr_fact(),
+        _kpr_fact(periods=[_make_period(metric_label="Cadangan Devisa", year=2026, month="Q2")],
+                  claimed_value=12.5),
+    ]
+    results = [_evaluate_fact(f, [kpr_src, dev_src]) for f in facts]
+    # Each source sees exactly one query, so both answer at local index 0.
+    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+    log = []
+
+    new, n = asyncio.run(
+        _pointer_pass(facts, results, [kpr_src, dev_src], _pointer_llm(batch, log))
+    )
+
+    assert len(log) == 2
+    for prompt_value in log:
+        assert "1." not in prompt_value.to_string().split("QUERIES:")[1]
+    assert n == 2
+    assert [r.verdict for r in new] == ["Entailed", "Entailed"]
+
+
 @patch("paired_verifier.extract_structured_facts_async")
 def test_verify_paired_end_to_end_pointer_resolution_on_unparseable_sheet(mock_extract_facts):
     # A real xlsx whose layout defeats every parser tier (numeric header codes — not

@@ -8,6 +8,8 @@ from cell_pointer import (
     _CellPointer,
     PointQuery,
     build_point_queries,
+    build_snapshot,
+    metric_could_match,
     pointer_is_plausible,
     read_grid_cell,
     resolve_pointers,
@@ -150,6 +152,137 @@ def test_pointer_plausible_via_table_title_subject():
 def test_pointer_plausible_when_metric_has_no_significant_word():
     # Nothing to guard against (e.g. 'M2') — don't block.
     assert pointer_is_plausible(_PLAUSIBLE_GRID, 1, "M2") is True
+
+
+# ---------------------------------------------------------------------------
+# metric_could_match — the same guard, quantified over the sheet (pre-call filter)
+# ---------------------------------------------------------------------------
+
+def test_metric_could_match_true_when_some_row_shares_a_word():
+    assert metric_could_match(_PLAUSIBLE_GRID, "Kredit Modal Kerja") is True
+
+
+def test_metric_could_match_false_when_no_row_relates():
+    # Asking this sheet about ILS can only produce a pointer the guard would reject.
+    assert metric_could_match(_PLAUSIBLE_GRID, "Indeks Lending Standard (ILS)") is False
+
+
+def test_metric_could_match_true_via_title_and_for_unguarded_metric():
+    assert metric_could_match([["TOTAL", 1.0]], "Cadangan Devisa",
+                              table_title="Cadangan Devisa Indonesia") is True
+    assert metric_could_match(_PLAUSIBLE_GRID, "M2") is True
+
+
+def test_metric_could_match_agrees_with_the_row_guard():
+    # The filter must never drop a metric that some row would have accepted.
+    for metric in ("Kredit Modal Kerja", "Indeks Lending Standard (ILS)", "M2", "TOTAL"):
+        any_row_ok = any(
+            pointer_is_plausible(_PLAUSIBLE_GRID, r, metric)
+            for r in range(len(_PLAUSIBLE_GRID))
+        )
+        assert metric_could_match(_PLAUSIBLE_GRID, metric) == any_row_ok
+
+
+# ---------------------------------------------------------------------------
+# build_snapshot — relevance selection, printed with ORIGINAL coordinates
+# ---------------------------------------------------------------------------
+
+def _wide_grid():
+    """A time-series sheet whose newest year sits far to the right, like the BI tables.
+
+    Deliberately taller than the header window so row selection has room to act.
+    """
+    def _row(label):
+        return ["", label] + [float(i) for i in range(24)]
+
+    return [
+        ["", ""] + ["2024"] * 12 + ["2025"] * 12,
+        ["", "KETERANGAN"] + ["Jan"] * 24,
+        _row("Uang Beredar Sempit (M1)"),
+        _row("Uang Kartal"),
+        _row("Uang Giral"),
+        _row("Uang Kuasi"),
+        _row("Surat Berharga Selain Saham"),
+        _row("Tagihan Bersih kepada Pemerintah"),
+        _row("Aktiva Luar Negeri Bersih"),
+    ]
+
+
+def test_build_snapshot_keeps_original_indices_and_drops_old_years():
+    grid = _wide_grid()
+    queries = [PointQuery(fact_index=0, data_key=("Uang Beredar Sempit (M1)", 2025, "Jan"), desc="d")]
+
+    snapshot, note = build_snapshot(grid, queries)
+
+    # The 2025 block starts at column 14; the 2024 columns are not worth sending.
+    assert "[14]=" in snapshot
+    assert "[2]=" not in snapshot
+    # Row 3 is an unrelated metric — the guard would reject a pointer there anyway.
+    assert "Tagihan Bersih" not in snapshot
+    assert "relevant to these queries" in note
+
+
+def test_build_snapshot_indices_read_back_from_the_full_grid():
+    grid = _wide_grid()
+    queries = [PointQuery(fact_index=0, data_key=("Uang Beredar Sempit (M1)", 2025, "Jan"), desc="d")]
+
+    snapshot, _ = build_snapshot(grid, queries)
+
+    # Whatever coordinate the LLM copies out of the snapshot must address the real grid.
+    for line in snapshot.splitlines():
+        row = int(line.split(":")[0].removeprefix("row ").strip())
+        for cell in line.split(": ", 1)[1].split(" ["):
+            if "]=" not in cell:
+                continue
+            col = int(cell.split("]=")[0].lstrip("["))
+            printed = cell.split("]=", 1)[1]
+            if printed.startswith(("'", '"')):
+                continue
+            assert read_grid_cell(grid, row, col) == float(printed)
+
+
+def test_build_snapshot_falls_back_to_full_window_when_no_year_matches():
+    grid = _wide_grid()
+    # 2099 appears in no header, so the column selection cannot be trusted.
+    queries = [PointQuery(fact_index=0, data_key=("Uang Beredar Sempit (M1)", 2099, "Jan"), desc="d")]
+
+    snapshot, _ = build_snapshot(grid, queries)
+
+    assert "[2]=" in snapshot  # the 2024 block is back
+
+
+def test_build_snapshot_trim_keeps_label_columns_and_the_newest_periods():
+    # A selection wider than the cap must lose its OLDEST period columns, never the label
+    # column — slicing from the front would drop both the labels and the target cells.
+    from cell_pointer import _POINTER_MAX_COLS, _select_cols, _select_rows
+
+    n_old, n_new = 300, _POINTER_MAX_COLS + 40
+    grid = [
+        ["", ""] + ["2010"] * n_old + ["2025"] * n_new,
+        ["", "KETERANGAN"] + ["Jan"] * (n_old + n_new),
+    ] + [
+        ["", label] + [float(i) for i in range(n_old + n_new)]
+        for label in ("Uang Beredar Sempit (M1)", "Uang Kartal", "Uang Giral", "Uang Kuasi",
+                      "Surat Berharga", "Tagihan Bersih", "Aktiva Luar Negeri")
+    ]
+    queries = [PointQuery(fact_index=0, data_key=("Uang Beredar Sempit (M1)", 2025, "Jan"), desc="d")]
+
+    cols = _select_cols(grid, queries, _select_rows(grid, queries))
+
+    assert len(cols) <= _POINTER_MAX_COLS
+    assert 1 in cols                              # the label column survived
+    assert cols[-1] == n_old + n_new + 1          # the newest period survived
+    assert n_old + 2 not in cols                  # the oldest of the selection was dropped
+
+
+def test_build_snapshot_keeps_every_row_when_a_metric_is_unguarded():
+    grid = _wide_grid()
+    # 'M2' has no significant word, so the guard accepts any row and none may be dropped.
+    queries = [PointQuery(fact_index=0, data_key=("M2", 2025, "Jan"), desc="d")]
+
+    snapshot, _ = build_snapshot(grid, queries)
+
+    assert "Tagihan Bersih" in snapshot
 
 
 # ---------------------------------------------------------------------------

@@ -27,7 +27,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from table_parser_generic import _is_number
+from table_parser_generic import _is_empty, _is_number
 from table_parser_llm import _grid_snapshot
 
 logger = logging.getLogger("fact-checker")
@@ -39,6 +39,14 @@ logger = logging.getLogger("fact-checker")
 _POINTER_MAX_ROWS = 120
 _POINTER_MAX_COLS = 100
 _POINTER_CELL_TEXT_MAX = 30
+
+# Relevance pruning (see _select_rows / _select_cols). Wide BI time-series sheets carry
+# forty years of columns while a report only ever cites the newest one or two, so sending
+# the whole grid is both the pipeline's largest prompt and — once past _POINTER_MAX_COLS —
+# a slab that no longer even contains the answer.
+_HEADER_ROWS = 6          # top rows always kept: they carry the year/period headers
+_YEAR_BLOCK_SPAN = 13     # columns kept after a year header, covering a 12-month block
+_MIN_PRUNE_GAIN = 0.6     # skip pruning unless it drops >40% of the axis — not worth the risk
 
 _ROMAN = {"Q1": "I", "Q2": "II", "Q3": "III", "Q4": "IV"}
 
@@ -207,6 +215,197 @@ def build_pointer_chain(llm: BaseChatModel):
 
 
 # ---------------------------------------------------------------------------
+# Relevance selection — which slice of the grid this batch of queries can possibly need
+# ---------------------------------------------------------------------------
+
+def _row_words(grid_row: List) -> set:
+    """Significant words of every string cell in one row."""
+    words: set = set()
+    for v in grid_row:
+        if isinstance(v, str):
+            words |= _sig_words(v)
+    return words
+
+
+def _select_rows(grid: List[List], queries: List[PointQuery]) -> Optional[List[int]]:
+    """Row indices worth showing, or None when every row must be kept.
+
+    The predicate is `pointer_is_plausible`'s, quantified per row: a row that shares no
+    significant word with any queried metric would have its pointer rejected after the
+    call anyway, so dropping it beforehand cannot change a single verdict. When some
+    metric is unguarded (no significant words of its own, e.g. 'M2') the guard accepts
+    any row for it, so no row may be dropped and this returns None.
+    """
+    per_query_words = []
+    for q in queries:
+        words = _sig_words(q.data_key[0])
+        if not words:
+            return None  # unguarded metric — every row stays acceptable
+        per_query_words.append(words)
+
+    keep = set(range(min(_HEADER_ROWS, len(grid))))
+    for r, row in enumerate(grid):
+        row_words = _row_words(row)
+        if any(words & row_words for words in per_query_words):
+            keep.add(r)
+    return sorted(keep)
+
+
+def _requested_period_tokens(queries: List[PointQuery]) -> Tuple[set, set]:
+    """(year strings, lowercased attribute names) the queries actually ask for.
+
+    Months and quarters are deliberately NOT matched. A token like 'Apr' recurs in every
+    year block of a time-series sheet, so keying on it selects one column per year across
+    the whole history — the opposite of narrowing. The year picks the block; the
+    _YEAR_BLOCK_SPAN window carries that block's months along with it.
+    """
+    years: set = set()
+    labels: set = set()
+    for q in queries:
+        key = q.data_key
+        if len(key) == 3:
+            year = key[1]
+            if isinstance(year, int):
+                years.add(str(year))
+        elif len(key) == 2 and isinstance(key[1], str):
+            labels.add(key[1].lower())
+    return years, labels
+
+
+def _select_cols(
+    grid: List[List], queries: List[PointQuery], keep_rows: Optional[List[int]]
+) -> Optional[List[int]]:
+    """Column indices worth showing, or None when every column must be kept.
+
+    Two kinds survive: the label columns (all text, no numbers — they name the rows) and
+    the columns under a requested year or attribute. A year header often labels only the
+    first column of its block, so each hit also carries the following months along.
+
+    Returns None — meaning "send everything, as before" — whenever the selection cannot
+    be trusted: no header mentions a requested period, or too little would be dropped for
+    the risk to be worth taking.
+    """
+    n_cols = max((len(r) for r in grid), default=0)
+    if not n_cols:
+        return None
+
+    years, labels = _requested_period_tokens(queries)
+    if not years and not labels:
+        return None
+
+    matched: set = set()
+    for row in grid[:_HEADER_ROWS]:
+        for c, v in enumerate(row):
+            if v is None:
+                continue
+            text = str(v).strip().lower()
+            if not text:
+                continue
+            if any(y in text for y in years) or text in labels:
+                matched.add(c)
+    if not matched:
+        return None
+
+    period_cols: set = set()
+    for c in matched:
+        period_cols.update(range(c, min(c + _YEAR_BLOCK_SPAN, n_cols)))
+
+    # Label columns name the rows: across the rows on show they carry text and never a
+    # number. Scanning every kept row rather than only those past the header keeps this
+    # working on short sheets, where the whole grid sits inside the header window.
+    label_cols: set = set()
+    rows_on_show = keep_rows if keep_rows is not None else range(len(grid))
+    for c in range(n_cols):
+        has_text = False
+        has_number = False
+        for r in rows_on_show:
+            if r >= len(grid) or c >= len(grid[r]):
+                continue
+            v = grid[r][c]
+            if _is_number(v):
+                has_number = True
+                break
+            if isinstance(v, str) and v.strip():
+                has_text = True
+        if has_text and not has_number:
+            label_cols.add(c)
+
+    if len(period_cols | label_cols) >= _MIN_PRUNE_GAIN * n_cols:
+        return None
+
+    # Trimming to the cap drops the LEFTMOST period columns, never the label columns: these
+    # sheets run oldest-to-newest, and it is the newest period a report cites. Slicing the
+    # combined set from the front instead would amputate the row labels and then the very
+    # columns the queries are about.
+    period_cols -= label_cols
+    room = max(_POINTER_MAX_COLS - len(label_cols), 0)
+    return sorted(label_cols | set(sorted(period_cols)[-room:] if room else []))
+
+
+def _indexed_snapshot(
+    grid: List[List],
+    row_idxs: List[int],
+    col_idxs: List[int],
+    cell_text_max: int = _POINTER_CELL_TEXT_MAX,
+) -> str:
+    """Snapshot of a chosen sub-grid, printed with the cells' ORIGINAL coordinates.
+
+    The indices in the output are what the LLM answers with and what `read_grid_cell`
+    then reads out of the FULL grid, so they must never be renumbered to the position
+    within the selection.
+    """
+    lines = []
+    for r in row_idxs:
+        if r >= len(grid):
+            continue
+        row = grid[r]
+        cells = []
+        for c in col_idxs:
+            if c >= len(row):
+                continue
+            v = row[c]
+            if _is_empty(v):
+                continue
+            text = str(v)
+            if len(text) > cell_text_max:
+                text = text[:cell_text_max] + "…"
+            cells.append(f"[{c}]={text!r}")
+        lines.append(f"row {r}: " + (" ".join(cells) if cells else "(empty)"))
+    return "\n".join(lines)
+
+
+def build_snapshot(grid: List[List], queries: List[PointQuery]) -> Tuple[str, str]:
+    """(snapshot text, note describing what the LLM is looking at).
+
+    Prefers a relevance-selected view of the grid; falls back to the plain top-left
+    window whenever the selection would be unsafe or pointless.
+    """
+    n_rows = len(grid)
+    n_cols = max((len(r) for r in grid), default=0)
+
+    keep_rows = _select_rows(grid, queries)
+    keep_cols = _select_cols(grid, queries, keep_rows)
+
+    if keep_cols is not None or (keep_rows is not None and len(keep_rows) < _MIN_PRUNE_GAIN * n_rows):
+        rows = (keep_rows if keep_rows is not None else list(range(n_rows)))[:_POINTER_MAX_ROWS]
+        cols = (keep_cols if keep_cols is not None else list(range(n_cols)))[:_POINTER_MAX_COLS]
+        note = (
+            " NOTE: the snapshot shows only the rows and columns relevant to these queries, "
+            "so row/column indices JUMP — always copy the index printed next to the cell. "
+            "If a query's cell is not visible, answer found=false."
+        )
+        return _indexed_snapshot(grid, rows, cols), note
+
+    note = ""
+    if n_rows > _POINTER_MAX_ROWS or n_cols > _POINTER_MAX_COLS:
+        note = (
+            f" NOTE: the snapshot below is truncated to the first {_POINTER_MAX_ROWS} "
+            f"rows x {_POINTER_MAX_COLS} columns — answers outside it must be found=false."
+        )
+    return _grid_snapshot(grid, _POINTER_MAX_ROWS, _POINTER_MAX_COLS, _POINTER_CELL_TEXT_MAX), note
+
+
+# ---------------------------------------------------------------------------
 # Resolution
 # ---------------------------------------------------------------------------
 
@@ -225,21 +424,12 @@ async def resolve_pointers(
     if not queries or not grid:
         return {}, None
 
-    n_rows = len(grid)
-    n_cols = max((len(r) for r in grid), default=0)
-    truncation_note = ""
-    if n_rows > _POINTER_MAX_ROWS or n_cols > _POINTER_MAX_COLS:
-        truncation_note = (
-            f" NOTE: the snapshot below is truncated to the first {_POINTER_MAX_ROWS} "
-            f"rows x {_POINTER_MAX_COLS} columns — answers outside it must be found=false."
-        )
+    snapshot, truncation_note = build_snapshot(grid, queries)
     payload = {
-        "n_rows": n_rows,
-        "n_cols": n_cols,
+        "n_rows": len(grid),
+        "n_cols": max((len(r) for r in grid), default=0),
         "truncation_note": truncation_note,
-        "snapshot": _grid_snapshot(
-            grid, _POINTER_MAX_ROWS, _POINTER_MAX_COLS, _POINTER_CELL_TEXT_MAX
-        ),
+        "snapshot": snapshot,
         "queries_block": "\n".join(f"{i}. {q.desc}" for i, q in enumerate(queries)),
     }
 
@@ -305,12 +495,26 @@ def pointer_is_plausible(
         return True
     context_words = _sig_words(table_title or "")
     if 0 <= row < len(grid):
-        for v in grid[row]:
-            if isinstance(v, str):
-                context_words |= _sig_words(v)
+        context_words |= _row_words(grid[row])
     if metric_words & context_words:
         return True
     logger.info(
         "Cell pointer rejected: row %d shares no term with metric %r", row, metric_label
     )
     return False
+
+
+def metric_could_match(grid: List[List], metric_label: str, table_title: str = "") -> bool:
+    """True when SOME row of this sheet could pass `pointer_is_plausible` for the metric.
+
+    The same predicate, quantified over the whole sheet instead of one row. Asking for a
+    metric this returns False for is pure waste: whatever coordinate came back, the guard
+    would reject it — so the query can be dropped, and a sheet with no surviving query
+    skipped entirely, without any verdict changing.
+    """
+    metric_words = _sig_words(metric_label)
+    if not metric_words:
+        return True
+    if metric_words & _sig_words(table_title or ""):
+        return True
+    return any(metric_words & _row_words(row) for row in grid)
