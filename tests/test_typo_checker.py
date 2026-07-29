@@ -189,3 +189,39 @@ def test_page_markers_are_stripped_and_not_treated_as_words():
     text = "[== Halaman 1 ==]\nTeks yang bersih dan baku."
     resp = check_typos(text, llm=None)
     assert resp.total_issues == 0
+
+
+# ---------------------------------------------------------------------------
+# Optional verdict details — the model is asked to omit them when is_issue is false
+# ---------------------------------------------------------------------------
+
+def test_non_issue_verdict_needs_no_category_suggestion_or_explanation():
+    # These fields are discarded for a non-issue, so the prompt tells the model to leave
+    # them out entirely; a bare verdict must still parse and resolve cleanly.
+    llm = _llm_returning([IndexedTypoVerdict(candidate_index=0, is_issue=False)])
+
+    resp = check_typos("Inflasi tercatat rendah pada bulan ini.", llm=llm)
+
+    assert resp.total_issues == 0
+
+
+def test_issue_without_explanation_is_kept_with_an_empty_one():
+    llm = _llm_returning([
+        IndexedTypoVerdict(candidate_index=0, is_issue=True, category="ejaan",
+                           suggestion="asal-asalan"),
+    ])
+
+    resp = check_typos("Kata asalasalan ini aneh sekali.", llm=llm)
+
+    assert resp.total_issues == 1
+    assert resp.issues[0].explanation == ""
+
+
+def test_issue_without_a_suggestion_is_dropped_rather_than_shown_uncorrectable():
+    llm = _llm_returning([
+        IndexedTypoVerdict(candidate_index=0, is_issue=True, explanation="salah"),
+    ])
+
+    resp = check_typos("Kata asalasalan ini aneh sekali.", llm=llm)
+
+    assert resp.total_issues == 0

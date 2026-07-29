@@ -338,7 +338,10 @@ Each candidate has a "kind":
     * If "di"/"ke" is a PREPOSITION before a place/noun (e.g. "di rumah" = "at home" is correct
       as written) -> is_issue=false.
 
-Respond with one verdict per candidate index. Never invent a candidate_index that wasn't given."""
+Respond with one verdict per candidate index. Never invent a candidate_index that wasn't given.
+
+For a candidate you judge is_issue=false, give ONLY candidate_index and is_issue — leave
+category, suggestion and explanation out entirely. Fill them in only when is_issue=true."""
 
 _TYPO_PROMPT = ChatPromptTemplate.from_messages([
     ("system", _TYPO_SYSTEM_PROMPT),
@@ -347,13 +350,22 @@ _TYPO_PROMPT = ChatPromptTemplate.from_messages([
 
 
 class IndexedTypoVerdict(BaseModel):
+    """A verdict per candidate. The three detail fields are optional on purpose: most
+    candidates turn out NOT to be issues, and check_typos discards their category,
+    suggestion and explanation — so requiring them only pays for Indonesian prose that is
+    thrown away."""
     candidate_index: int = Field(..., description="Index of the candidate this verdict is for.")
     is_issue: bool = Field(..., description="True if this candidate is a genuine spelling/grammar issue.")
-    category: Literal["ejaan", "tidak_baku", "grammar"] = Field(
-        ..., description="Issue category. Ignored when is_issue is false."
+    category: Optional[Literal["ejaan", "tidak_baku", "grammar"]] = Field(
+        None, description="Issue category. Omit entirely when is_issue is false."
     )
-    suggestion: str = Field(..., description="Corrected form. Ignored when is_issue is false.")
-    explanation: str = Field(..., description="Brief explanation in Indonesian of the verdict.")
+    suggestion: Optional[str] = Field(
+        None, description="Corrected form. Omit entirely when is_issue is false."
+    )
+    explanation: Optional[str] = Field(
+        None,
+        description="Brief explanation in Indonesian. Omit entirely when is_issue is false.",
+    )
 
 
 class BatchTypoVerdicts(BaseModel):
@@ -404,6 +416,15 @@ def check_typos(text: str, llm: Optional[BaseChatModel] = None) -> TypoCheckResp
             verdict = verdicts.get(cand.index)
             if verdict is None or not verdict.is_issue:
                 continue
+            # An issue with no category or no correction has nothing to show the user, so
+            # it is dropped rather than reported with an invented category. The prompt asks
+            # for both whenever is_issue is true; only the explanation is safe to default.
+            if not verdict.category or not verdict.suggestion:
+                logger.warning(
+                    "Dropping typo verdict for %r: is_issue=true but no category/suggestion",
+                    cand.display_text,
+                )
+                continue
             for occ in cand.occurrences:
                 issues.append(TypoIssue(
                     word=occ.text,
@@ -411,7 +432,7 @@ def check_typos(text: str, llm: Optional[BaseChatModel] = None) -> TypoCheckResp
                     end=occ.end,
                     category=verdict.category,
                     suggestion=verdict.suggestion,
-                    explanation=verdict.explanation,
+                    explanation=verdict.explanation or "",
                     page_number=_page_for_offset(occ.start, page_ranges),
                 ))
 
