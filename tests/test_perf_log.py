@@ -50,3 +50,31 @@ def test_log_perf_emits_readable_line(caplog):
     assert "perf a.pdf" in line
     assert "total=" in line and "pdf=" in line and "extract=" in line
     assert "9 fakta" in line and "5 sumber" in line
+
+
+def test_log_perf_reports_token_totals_across_models(caplog):
+    # A run can touch a vision/primary model and a text fallback; what we tune against is
+    # the document's total, so the per-model counts are summed.
+    t = StageTimer()
+    usage = {
+        "gemini-2.5-flash": {"input_tokens": 12000, "output_tokens": 3400},
+        "llama-3.3-70b-versatile": {"input_tokens": 500, "output_tokens": 100},
+    }
+
+    with caplog.at_level(logging.INFO, logger="fact-checker"):
+        log_perf(pdf_filename="a.pdf", n_pages=1, n_facts=1, n_excel_sources=1,
+                 timer=t, usage_metadata=usage)
+
+    assert "in=12.500" in caplog.text
+    assert "out=3.500" in caplog.text
+
+
+def test_log_perf_omits_tokens_when_the_provider_reports_none(caplog):
+    # Ollama and every mocked test run report no usage — the line just drops the section.
+    t = StageTimer()
+
+    with caplog.at_level(logging.INFO, logger="fact-checker"):
+        log_perf(pdf_filename="a.pdf", n_pages=1, n_facts=1, n_excel_sources=1, timer=t)
+
+    assert "in=" not in caplog.text
+    assert "perf a.pdf" in caplog.text

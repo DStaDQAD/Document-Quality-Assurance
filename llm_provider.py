@@ -1,8 +1,10 @@
 """LLM provider selection (Google Gemini / Groq / Ollama) driven by environment config."""
 
 import os
+from typing import List, Optional
 
 from dotenv import load_dotenv
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.language_models import BaseChatModel
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_groq import ChatGroq
@@ -62,20 +64,45 @@ def _gemini_thinking_kwargs() -> dict:
     return {}
 
 
-def get_llm(temperature: float = 0.0) -> BaseChatModel:
+Callbacks = Optional[List[BaseCallbackHandler]]
+
+
+def _callback_kwargs(callbacks: Callbacks) -> dict:
+    """Attach handlers to the model itself so every chain built from it is counted.
+
+    Binding at construction rather than per-`invoke` means a caller only has to pass the
+    handler once, here, and every downstream call — extraction chunks, cell pointers, typo
+    verdicts, table-spec mapping — reports its token usage without threading a `config=`
+    argument through each call site.
+    """
+    return {"callbacks": callbacks} if callbacks else {}
+
+
+def get_llm(temperature: float = 0.0, callbacks: Callbacks = None) -> BaseChatModel:
     if LLM_PROVIDER == "groq":
-        return ChatGroq(model=GROQ_MODEL, temperature=temperature, groq_api_key=GROQ_API_KEY)
+        return ChatGroq(
+            model=GROQ_MODEL,
+            temperature=temperature,
+            groq_api_key=GROQ_API_KEY,
+            **_callback_kwargs(callbacks),
+        )
     if LLM_PROVIDER == "ollama":
-        return ChatOllama(model=OLLAMA_MODEL, temperature=temperature, base_url=OLLAMA_BASE_URL)
+        return ChatOllama(
+            model=OLLAMA_MODEL,
+            temperature=temperature,
+            base_url=OLLAMA_BASE_URL,
+            **_callback_kwargs(callbacks),
+        )
     return ChatGoogleGenerativeAI(
         model=GEMINI_MODEL,
         temperature=temperature,
         google_api_key=GOOGLE_API_KEY,
         **_gemini_thinking_kwargs(),
+        **_callback_kwargs(callbacks),
     )
 
 
-def get_vision_llm() -> BaseChatModel:
+def get_vision_llm(callbacks: Callbacks = None) -> BaseChatModel:
     """Return a vision-capable LLM for PDF image extraction.
 
     Controlled by VISION_PROVIDER in .env:
@@ -95,6 +122,7 @@ def get_vision_llm() -> BaseChatModel:
             groq_api_key=GROQ_API_KEY,
             max_tokens=GROQ_VISION_MAX_TOKENS,
             max_retries=0,  # our pdf_extraction.py handles retries with semaphore + backoff
+            **_callback_kwargs(callbacks),
         )
 
     # Default: google / Gemini
@@ -111,4 +139,5 @@ def get_vision_llm() -> BaseChatModel:
         temperature=0.0,
         google_api_key=GOOGLE_API_KEY,
         **gemini_kwargs,
+        **_callback_kwargs(callbacks),
     )

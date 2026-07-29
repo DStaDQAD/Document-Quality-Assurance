@@ -68,6 +68,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from langchain_core.callbacks import UsageMetadataCallbackHandler
 from fastapi.responses import (
     FileResponse,
     JSONResponse,
@@ -448,6 +449,12 @@ async def _run_paired_pipeline(
     # never added to the response or the frontend.
     timer = StageTimer()
 
+    # One handler per request, bound to every model built below, so the log line can
+    # report what this document actually cost in tokens. Same observability-only contract
+    # as the timings: it never reaches the API response or the frontend.
+    usage_handler = UsageMetadataCallbackHandler()
+    callbacks = [usage_handler]
+
     def _record_and_forward(event: Dict[str, Any]) -> None:
         timer.observe(event)
         if emit is not None:
@@ -458,7 +465,7 @@ async def _run_paired_pipeline(
 
     vision_llm = None
     try:
-        vision_llm = get_vision_llm()
+        vision_llm = get_vision_llm(callbacks=callbacks)
     except RuntimeError:
         logger.warning("Vision LLM not available (GOOGLE_API_KEY missing); vision fallback disabled.")
 
@@ -475,7 +482,7 @@ async def _run_paired_pipeline(
     # domain jargon (e.g. "kartal", "inflasi") more reliably than the Groq text model,
     # which was observed hallucinating a false-positive correction for "kartal" during
     # real-document testing.
-    typo_llm = vision_llm if vision_llm is not None else get_llm(temperature=0.0)
+    typo_llm = vision_llm if vision_llm is not None else get_llm(temperature=0.0, callbacks=callbacks)
 
     async def _run_typo_check():
         # check_typos is sync (dictionary pass + one batched LLM call), so it goes to a
@@ -493,7 +500,7 @@ async def _run_paired_pipeline(
         verify_paired(
             narrative_text=narrative_text,
             excel_sources=excel_sources,
-            llm=get_llm(temperature=0.0),
+            llm=get_llm(temperature=0.0, callbacks=callbacks),
             pdf_filename=pdf_filename,
             vision_llm=vision_llm,
             progress_cb=_record_and_forward,
@@ -501,13 +508,14 @@ async def _run_paired_pipeline(
         _run_typo_check(),
     )
 
-    # Server-side timing → one readable app-log line (never the response/frontend).
+    # Server-side timing + token cost → one readable app-log line (never the response/frontend).
     log_perf(
         pdf_filename=pdf_filename,
         n_pages=n_pages,
         n_facts=fact_result.total_facts,
         n_excel_sources=len(excel_sources),
         timer=timer,
+        usage_metadata=usage_handler.usage_metadata,
     )
     return fact_result.model_copy(update={"typo_check": typo_result})
 
