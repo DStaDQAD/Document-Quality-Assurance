@@ -9,6 +9,7 @@ from pdf_table_extraction import (
     PdfTable,
     _assemble_grid,
     _coerce_cell,
+    _drop_ambiguous_rows,
     _is_usable,
     _PageTables,
     _reconstruct_year_row,
@@ -585,34 +586,56 @@ def test_every_surviving_value_on_a_verified_page_comes_from_the_text_layer():
     assert all(v in from_text for v in survivors)
 
 
-def test_verification_keeps_repeated_sub_labels_in_printed_order():
-    # A Lampiran repeats 'Rupiah'/'Valas' under different parents, so only the printed order
-    # tells them apart — which is why rows are aligned as sequences, not looked up by label.
+def test_verification_survives_a_text_layer_that_repeats_labels():
+    # The grid's own labels are unique (repeats are dropped, see below), but the text layer still
+    # repeats 'Rupiah'/'Valas' under different parents. Alignment must stay in printed order so
+    # the unique rows around them are not pulled onto the wrong values.
     text = (
-        "Simpanan Berjangka 100,0 200,0 300,0\n"
         "Rupiah 10,0 20,0 30,0\n"
         "Valas 1,0 2,0 3,0\n"
-        "Tabungan Lainnya 400,0 500,0 600,0\n"
+        "Simpanan Berjangka 100,0 200,0 300,0\n"
         "Rupiah 40,0 50,0 60,0\n"
         "Valas 4,0 5,0 6,0\n"
+        "Tabungan Lainnya 400,0 500,0 600,0\n"
     )
     out = _three_col_table(rows=[
-        ["Simpanan Berjangka", "100,0", "200,0", "300,0"],
-        ["Rupiah", "99,9", "99,9", "99,9"],
-        ["Valas", "99,9", "99,9", "99,9"],
-        ["Tabungan Lainnya", "400,0", "500,0", "600,0"],
-        ["Rupiah", "99,9", "99,9", "99,9"],
-        ["Valas", "99,9", "99,9", "99,9"],
+        ["Simpanan Berjangka", "99,9", "99,9", "99,9"],
+        ["Tabungan Lainnya", "99,9", "99,9", "99,9"],
     ])
     table = _as_pdf_table(out, page=1)
     _verify_against_text_layer([table], [text])
 
-    rupiah = [r for r in table.grid if r[0] == "Rupiah"]
-    valas = [r for r in table.grid if r[0] == "Valas"]
-    assert rupiah[0][1:] == [10.0, 20.0, 30.0]
-    assert rupiah[1][1:] == [40.0, 50.0, 60.0]
-    assert valas[0][1:] == [1.0, 2.0, 3.0]
-    assert valas[1][1:] == [4.0, 5.0, 6.0]
+    assert _body(table, "Simpanan Berjangka")[1:] == [100.0, 200.0, 300.0]
+    assert _body(table, "Tabungan Lainnya")[1:] == [400.0, 500.0, 600.0]
+
+
+# ---------------------------------------------------------------------------
+# Duplicate row labels — a flat grid cannot express a nested appendix.
+# ---------------------------------------------------------------------------
+
+def test_drop_ambiguous_rows_flags_every_occurrence_of_a_repeated_label():
+    # Lampiran 3's shape: three rows called 'Giro' (under Rupiah, under Valas, and the total).
+    labels = ["Rupiah", "Giro", "Tabungan", "Valas", "Giro", "Tabungan", "Giro", "Tabungan"]
+    assert _drop_ambiguous_rows(labels) == {1, 2, 4, 5, 6, 7}
+
+
+def test_drop_ambiguous_rows_keeps_unique_labels():
+    assert _drop_ambiguous_rows(["Uang Beredar (M2)", "Uang Kuasi", "Rupiah"]) == set()
+
+
+def test_assemble_grid_drops_rows_whose_label_repeats():
+    # The measured false Refuted: the report says DPK giro grew 20,4% (yoy), which is the TOTAL
+    # row; answering from whichever 'Giro' came first gave 24,64% and called a correct claim wrong.
+    grid = _assemble_grid(_three_col_table(rows=[
+        ["Uang Beredar (M2)", "9.387,9", "9.404,3", "9.595,3"],
+        ["Giro", "1.852,4", "1.882,5", "2.001,3"],
+        ["Giro", "788,9", "792,4", "801,9"],
+        ["Giro", "2.641,2", "2.675,0", "2.803,2"],
+    ]))
+    labels = [r[0] for r in grid if isinstance(r[0], str)]
+
+    assert "Uang Beredar (M2)" in labels, "unique rows must survive"
+    assert "Giro" not in labels, "an unresolvable label answers nothing rather than guessing"
 
 
 def test_verification_leaves_a_scanned_page_untouched_and_unverified():

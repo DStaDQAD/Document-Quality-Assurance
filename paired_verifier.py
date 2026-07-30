@@ -747,11 +747,29 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # Stable sort on the negated score: ties keep source order, as before.
     candidates.sort(key=lambda c: -c.score)
-    head = candidates[0]
-    result = _compute_operation(fact, head.resolved, head.factor, head.src)
-    if len(candidates) > 1:
-        result = _attach_source_comparison(result, fact, candidates)
-    return result
+    # Every candidate is computed once — plain arithmetic over values already looked up. The
+    # results are reused for the source comparison, so this costs no more than before.
+    evaluated = [(c, _compute_operation(fact, c.resolved, c.factor, c.src)) for c in candidates]
+
+    # The best label match does not always CARRY the answer. Resolving a claim only checks the
+    # periods it names, while a yoy_growth also needs the year-ago column, so a snippet table
+    # with four columns wins the label match and then cannot compute — and the Lampiran that
+    # could was never consulted. Measured on the M2 report: 44 of 89 claims came back "no data"
+    # while another table in the same PDF held the figure.
+    #
+    # So a source that reaches a verdict outranks one that does not, but ONLY among equally good
+    # label matches. A looser match is a weaker claim to be the same series (a "Kredit" claim
+    # fuzzy-matches a "Kredit Properti" breakdown row just as readily), and answering from one of
+    # those would trade an honest "not enough data" for a confident wrong number.
+    head_index = 0
+    for index, (cand, result) in enumerate(evaluated):
+        if cand.score < evaluated[0][0].score - 1e-9:
+            break
+        if result.verdict != "Inconclusive":
+            head_index = index
+            break
+
+    return _attach_source_comparison(evaluated, head_index)
 
 
 def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
@@ -785,21 +803,23 @@ def _source_value(cand: "_Candidate", result: FactVerificationResult) -> SourceV
 
 
 def _attach_source_comparison(
-    result: FactVerificationResult,
-    fact: ExtractedFact,
-    candidates: List["_Candidate"],
+    evaluated: List[Tuple["_Candidate", FactVerificationResult]],
+    head_index: int,
 ) -> FactVerificationResult:
-    """Record what every resolving source says, and flag it when they contradict each other.
+    """The verdict of the chosen source, plus what every other resolving source said.
 
-    The headline verdict stays the best-scoring source's — a conflict says the SOURCES disagree,
-    not that the claim is wrong. Each extra source is re-run through _compute_operation, which is
-    plain Python arithmetic over values already looked up, so this costs nothing and calls no LLM.
+    A conflict says the SOURCES disagree, not that the claim is wrong, so the headline verdict is
+    left alone. `head_index` is the source that produced it — usually the best label match, but
+    see _evaluate_fact for the one case where a lower-ranked source is preferred.
     """
-    per_source = [(candidates[0], result)] + [
-        (cand, _compute_operation(fact, cand.resolved, cand.factor, cand.src))
-        for cand in candidates[1:]
+    per_source = [evaluated[head_index]] + [
+        pair for index, pair in enumerate(evaluated) if index != head_index
     ]
+    result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
+
+    if len(per_source) == 1:
+        return result
 
     head_cand, head = per_source[0][0], values[0]
     conflict: Optional[str] = None
@@ -832,8 +852,18 @@ def _attach_source_comparison(
             conflict = "internal" if head.origin == other.origin == "pdf" else "cross"
             break
 
+    # When the answer did not come from the closest label match, say so: the reader is entitled
+    # to know the headline number was taken from a table that matched the metric less exactly.
+    reasoning = result.reasoning
+    if head_index != 0:
+        reasoning += (
+            f" | Sumber dengan kecocokan label terbaik "
+            f"([{evaluated[0][0].src.label}]) tidak memuat data yang dibutuhkan; "
+            f"nilai diambil dari [{head_cand.src.label}]."
+        )
+
     if conflict is None:
-        return result.model_copy(update={"source_values": values})
+        return result.model_copy(update={"source_values": values, "reasoning": reasoning})
 
     def _fmt(sv: SourceValue) -> str:
         value = "tidak terhitung" if sv.computed_value is None else f"{sv.computed_value}"
@@ -847,7 +877,7 @@ def _attach_source_comparison(
     return result.model_copy(update={
         "source_values": values,
         "source_conflict": conflict,
-        "reasoning": result.reasoning + note,
+        "reasoning": reasoning + note,
     })
 
 

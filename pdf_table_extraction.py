@@ -41,7 +41,7 @@ import hashlib
 import logging
 import os
 import re
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -308,13 +308,20 @@ def _assemble_grid(table: _PdfTableOut) -> List[List]:
     is the unit, the first other row is the title) and `_find_header_row` skips any row with
     fewer than 2 non-empty cells — so neither can be mistaken for the header.
     """
+    # A repeated row label cannot be resolved in a flat grid — see _drop_ambiguous_rows. Applied
+    # here too so the vision route and the native route treat a nested appendix the same way.
+    rows = table.rows
+    ambiguous = _drop_ambiguous_rows([str(r[0]) if r else "" for r in rows])
+    if ambiguous:
+        rows = [r for i, r in enumerate(rows) if i not in ambiguous]
+
     header_rows = [[_coerce_cell(c) for c in r] for r in table.header_rows]
     # A year row stacked over a period row: re-derive the years from the periods (see
     # _reconstruct_year_row). Body rows are never touched — carrying a value sideways there
     # would invent data.
     if len(header_rows) >= 2:
         header_rows[-2] = _reconstruct_year_row(header_rows[-2], header_rows[-1])
-    body_rows = [[_coerce_cell(c) for c in r] for r in table.rows]
+    body_rows = [[_coerce_cell(c) for c in r] for r in rows]
 
     grid: List[List] = []
     caption = (table.caption or "").strip()
@@ -703,6 +710,29 @@ def _join_visual_line(glyphs: List[Tuple[float, float, float, str]]) -> Tuple[fl
 _PAREN_ONLY_RE = re.compile(r'^\((.+)\)$')
 
 
+def _drop_ambiguous_rows(labels: List[str]) -> set:
+    """Indices of rows whose label is not unique in the table, and so cannot be resolved.
+
+    A BI appendix nests its rows: Lampiran 3 prints THREE rows called 'Giro' — one under
+    Rupiah, one under Valas, and the total — and Lampiran 1 repeats 'Rupiah', 'Valas',
+    'Tagihan Lainnya' and 'Pinjaman yang Diberikan' the same way. A flat grid cannot express
+    that nesting, and TableData keeps the first occurrence of a repeated label, so a claim about
+    'Giro' would be answered from whichever row happened to come first.
+
+    Measured cost of not doing this: the report says DPK giro grew 20,4% (yoy), which is the
+    TOTAL row (20,36%); the Rupiah row gives 24,64%, so the claim came back Tidak Sesuai even
+    though it is correct. Indentation cannot rescue it — all three rows are printed at the same
+    x, since two are sub-rows and the third is a total.
+
+    Only the repeated labels are dropped, never the whole table: Lampiran 1's headline rows
+    ('Uang Beredar (M2)', 'Uang Kuasi', 'Aktiva Luar Negeri Bersih') are unique and answer most
+    of the report's claims. This is the same judgement _bi_parse_collapsed makes for workbooks —
+    a duplicate label is the fingerprint of data being silently dropped.
+    """
+    seen = Counter(_norm_label(label) for label in labels)
+    return {i for i, label in enumerate(labels) if seen[_norm_label(label)] > 1}
+
+
 def _tables_on_page(
     reading: List[Tuple[float, str]],
     visual: List[Tuple[float, str]],
@@ -769,6 +799,14 @@ def _tables_on_page(
             for row in [_line_row(text.strip())]
             if row is not None and len(row[1]) == len(periods)
         ]
+        ambiguous = _drop_ambiguous_rows([label for label, _ in body])
+        if ambiguous:
+            logger.info(
+                "Page %d, %s: dropping %d row(s) whose label repeats in the table (%s).",
+                page_number, caption[:40], len(ambiguous),
+                ", ".join(sorted({body[i][0] for i in ambiguous})),
+            )
+            body = [row for i, row in enumerate(body) if i not in ambiguous]
         if len(body) < 2:
             continue
 

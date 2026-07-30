@@ -134,10 +134,10 @@ def test_sources_in_different_units_are_never_treated_as_conflicting():
     assert result.verdict == "Entailed"
 
 
-def test_a_source_that_cannot_reach_a_verdict_never_raises_a_conflict():
-    # Measured on the real M2 report: the snippet table on page 1 has too few columns to
-    # compute a YoY growth, while the Lampiran does. That is missing data in one table, not a
-    # disagreement between two — and it was the single biggest source of false conflicts.
+def test_the_answer_comes_from_the_table_that_has_the_data():
+    # Measured on the real M2 report: the snippet table on page 1 wins the label match, but has
+    # too few columns to supply a YoY denominator, while the Lampiran does. 44 of 89 claims came
+    # back "not enough data" with the figure sitting in another table of the same PDF.
     thin = _make_table(unit="triliun Rp", data={("Total", 2026, "Apr"): 10355.1})
     full = _make_table(unit="triliun Rp", data={
         ("Total", 2026, "Apr"): 10355.1, ("Total", 2025, "Apr"): 9000.0,
@@ -145,8 +145,40 @@ def test_a_source_that_cannot_reach_a_verdict_never_raises_a_conflict():
     fact = _make_fact(operation="yoy_growth", claimed_value=15.1, unit="persen_yoy")
     result = _evaluate_fact(fact, [_pdf_source(thin, page=1), _pdf_source(full)])
 
-    assert result.verdict == "Inconclusive"
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(15.06, abs=0.01)
+    # A source with no verdict has no opinion to contradict — missing data is not disagreement.
     assert result.source_conflict is None
+    # The swap is stated, since the headline number no longer came from the closest label match.
+    assert "kecocokan label terbaik" in result.reasoning
+
+
+def test_a_looser_label_match_may_not_supply_the_answer():
+    # The guard that keeps the rule above from trading an honest "not enough data" for a
+    # confident wrong number: a claim about "Kredit" also fuzzy-matches "Kredit Properti", and
+    # answering a yoy from the property breakdown would be answering a different question.
+    thin = _make_table(unit="triliun Rp", data={("Kredit", 2026, "Apr"): 8759.0})
+    other = _make_table(unit="triliun Rp", data={
+        ("Kredit Properti", 2026, "Apr"): 1690.8, ("Kredit Properti", 2025, "Apr"): 1500.0,
+    })
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=10.8, unit="persen_yoy",
+        periods=[_make_period(metric_label="Kredit")],
+    )
+    result = _evaluate_fact(fact, [_pdf_source(thin, page=2), _pdf_source(other, page=4)])
+
+    assert result.verdict == "Inconclusive"
+
+
+def test_the_closest_match_still_wins_when_it_can_answer():
+    # Regression guard on the ranking that was there before: a source that CAN answer is never
+    # displaced, so nothing changes for claims that already had a verdict.
+    best = _make_table(unit="triliun Rp", data={("Total", 2026, "Apr"): 10355.1})
+    worse = _make_table(unit="triliun Rp", data={("Total lain", 2026, "Apr"): 999.9})
+    result = _evaluate_fact(_make_fact(), [_pdf_source(best), _pdf_source(worse, page=8)])
+
+    assert result.computed_value == pytest.approx(10355.1)
+    assert "kecocokan label terbaik" not in result.reasoning
 
 
 def test_a_levels_table_and_a_growth_table_are_not_compared():
