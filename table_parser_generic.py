@@ -628,12 +628,22 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
 def parse_generic_table(data: bytes, sheet_name: str) -> TableData:
     """Parse an arbitrary single-header-row table from .xls/.xlsx bytes into a TableData.
 
+    Thin bytes wrapper over parse_generic_grid — see there for the actual heuristics.
+    """
+    return parse_generic_grid(_load_grid(data, sheet_name))
+
+
+def parse_generic_grid(grid: List[List]) -> TableData:
+    """Parse an arbitrary single-header-row table from an in-memory grid into a TableData.
+
     Returns a TEMPORAL table (lookup by year/month) when the column headers read as
     calendar periods, otherwise a CATEGORICAL table (lookup by attribute/column name).
     Raises ValueError when no plausible table structure is found.
-    """
-    grid = _load_grid(data, sheet_name)
 
+    Takes a grid rather than bytes so non-spreadsheet sources can reuse the same heuristics —
+    `pdf_table_extraction` assembles grids from tables printed inside a PDF. Numeric cells must
+    already be int/float (see `_is_number`); a grid of strings parses to nothing.
+    """
     # Two-row header layout (year row over quarter/month tokens) first: on such sheets
     # the single-row heuristics below misread the token row as a categorical header.
     two_row = _parse_two_row_table(grid)

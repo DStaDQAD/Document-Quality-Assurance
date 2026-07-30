@@ -5,12 +5,14 @@ import pytest
 from langchain_core.runnables import RunnableLambda
 from openpyxl import Workbook
 
+from table_parser_generic import _load_grid
 from table_parser_llm import (
     _SPEC_CACHE,
     _ColumnSpec,
     _TableSpec,
     _grid_snapshot,
     _validate_spec,
+    parse_grid_with_llm,
     parse_table_with_llm,
 )
 
@@ -228,3 +230,25 @@ def test_parse_table_with_llm_does_not_cache_invalid_specs():
         parse_table_with_llm(data, "Gudang", llm)
 
     assert _SPEC_CACHE == {}
+
+# ---------------------------------------------------------------------------
+# The grid seam: parse_table_with_llm is now a thin wrapper over parse_grid_with_llm, and the
+# layout-fingerprint cache lives in the grid function so any kind of source can hit it.
+# ---------------------------------------------------------------------------
+
+def test_parse_grid_with_llm_matches_the_bytes_wrapper():
+    data = _messy_inventory_bytes()
+    spec = _inventory_spec()
+    from_bytes = parse_table_with_llm(data, "Gudang", _llm_returning(spec))
+    _SPEC_CACHE.clear()
+    from_grid = parse_grid_with_llm(_load_grid(data, "Gudang"), _llm_returning(spec))
+    assert from_grid == from_bytes
+
+
+def test_parse_grid_with_llm_populates_the_layout_cache():
+    grid = _load_grid(_messy_inventory_bytes(), "Gudang")
+    calls = []
+    llm = _llm_returning(_inventory_spec(), call_log=calls)
+    parse_grid_with_llm(grid, llm)
+    parse_grid_with_llm(grid, llm)
+    assert len(calls) == 1, "the same layout must be mapped only once"

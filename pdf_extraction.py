@@ -28,7 +28,7 @@ import io
 import logging
 import os
 import re
-from typing import List, Optional
+from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -413,6 +413,92 @@ def _plan_pages_per_call(is_groq: bool, is_gemini: bool) -> int:
     return 3 if is_gemini else 1
 
 
+# ---------------------------------------------------------------------------
+# Shared vision-call plumbing. Lives at module level (rather than nested inside
+# extract_text_from_pdf_vision_async, where it started) so pdf_table_extraction.py can
+# reuse the same provider detection, concurrency caps and rate-limit backoff instead of
+# copying them — the two passes hit the same provider quota and must behave identically.
+# ---------------------------------------------------------------------------
+
+# Public aliases: the underscore names stay for tests/existing callers.
+render_pages_to_b64 = _render_pages_to_b64
+plan_pages_per_call = _plan_pages_per_call
+
+# Groq says "Please try again in 9.08s"; Gemini says "Please retry in 51.95s".
+_RETRY_AFTER_RE = re.compile(r'[Pp]lease (?:try again|retry) in (\d+\.?\d*)s')
+
+
+def parse_retry_after(err: str, fallback: float) -> float:
+    """Extract the provider's suggested wait time from a rate-limit error message."""
+    m = _RETRY_AFTER_RE.search(err)
+    return float(m.group(1)) + 1.0 if m else fallback
+
+
+def is_rate_limit(exc: Exception) -> bool:
+    cls = type(exc).__name__
+    if cls == "RateLimitError":
+        return True
+    err = str(exc).lower()
+    return any(kw in err for kw in ("rate", "429", "too many", "quota"))
+
+
+def vision_provider_flags(vision_llm: BaseChatModel) -> Tuple[bool, bool]:
+    """(is_groq, is_gemini) inferred from the chat model's class name."""
+    provider_name = type(vision_llm).__name__
+    return "Groq" in provider_name, "Google" in provider_name
+
+
+def plan_vision_concurrency(
+    is_groq: bool, is_gemini: bool, n_calls: int
+) -> Tuple[asyncio.Semaphore, int]:
+    """(semaphore, max_retries) for n_calls vision requests against this provider.
+
+    Groq: ~7-10k tokens/page against a 30k TPM account-wide budget -> serialize (semaphore=1).
+    Gemini free tier: hard cap of 5 requests/minute for gemini-2.5-flash -> cap at 4 concurrent
+    to leave headroom. Other providers (e.g. local Ollama) are assumed unthrottled.
+    """
+    if is_groq:
+        return asyncio.Semaphore(1), 6
+    if is_gemini:
+        return asyncio.Semaphore(4), 6
+    return asyncio.Semaphore(n_calls + 1), 1
+
+
+async def call_vision_with_retry(
+    call: Callable[[], Awaitable[Any]],
+    *,
+    semaphore: asyncio.Semaphore,
+    max_retries: int,
+    label: str,
+    on_give_up: Callable[[], Any],
+) -> Any:
+    """Run one vision call under `semaphore`, retrying rate limits with provider-suggested backoff.
+
+    `call` is a factory (not a coroutine) because it is awaited once per attempt. Non-rate-limit
+    failures — and exhausted retries — return `on_give_up()` rather than raising: one unreadable
+    batch must degrade to a gap in the output, never fail the whole document.
+    """
+    retry_wait = 0.0
+    for attempt in range(max_retries):
+        if attempt > 0:
+            await asyncio.sleep(retry_wait)
+        async with semaphore:
+            try:
+                return await call()
+            except Exception as exc:
+                if is_rate_limit(exc) and attempt < max_retries - 1:
+                    retry_wait = parse_retry_after(str(exc), fallback=(attempt + 1) * 10)
+                    logger.warning(
+                        "Rate limit on %s (attempt %d/%d), retrying in %.1fs",
+                        label, attempt + 1, max_retries, retry_wait,
+                    )
+                else:
+                    logger.exception("Vision call failed for %s", label)
+                    return on_give_up()
+    logger.error("Vision call gave up on %s after %d retries", label, max_retries)
+    return on_give_up()
+
+
 async def extract_text_from_pdf_vision_async(
     file_bytes: bytes,
     vision_llm: BaseChatModel,
@@ -436,9 +522,7 @@ async def extract_text_from_pdf_vision_async(
     b64_pages = await asyncio.to_thread(_render_pages_to_b64, file_bytes, dpi)
     n_pages = len(b64_pages)
 
-    provider_name = type(vision_llm).__name__
-    is_groq = "Groq" in provider_name
-    is_gemini = "Google" in provider_name
+    is_groq, is_gemini = vision_provider_flags(vision_llm)
 
     pages_per_call = _plan_pages_per_call(is_groq, is_gemini)
     prompt = _get_batch_prompt(vision_llm, multi=pages_per_call > 1)
@@ -453,33 +537,7 @@ async def extract_text_from_pdf_vision_async(
         n_pages, len(batches), pages_per_call,
     )
 
-    # Groq: ~7-10k tokens/page against a 30k TPM account-wide budget -> serialize (semaphore=1).
-    # Gemini free tier: hard cap of 5 requests/minute for gemini-2.5-flash -> cap at 4 concurrent
-    # to leave headroom. Other providers (e.g. local Ollama) are assumed unthrottled.
-    if is_groq:
-        semaphore = asyncio.Semaphore(1)
-        max_retries = 6
-    elif is_gemini:
-        semaphore = asyncio.Semaphore(4)
-        max_retries = 6
-    else:
-        semaphore = asyncio.Semaphore(len(batches) + 1)
-        max_retries = 1
-
-    # Groq says "Please try again in 9.08s"; Gemini says "Please retry in 51.95s".
-    _RETRY_AFTER_RE = re.compile(r'[Pp]lease (?:try again|retry) in (\d+\.?\d*)s')
-
-    def _parse_retry_after(err: str, fallback: float) -> float:
-        """Extract the provider's suggested wait time from a rate-limit error message."""
-        m = _RETRY_AFTER_RE.search(err)
-        return float(m.group(1)) + 1.0 if m else fallback
-
-    def _is_rate_limit(exc: Exception) -> bool:
-        cls = type(exc).__name__
-        if cls == "RateLimitError":
-            return True
-        err = str(exc).lower()
-        return any(kw in err for kw in ("rate", "429", "too many", "quota"))
+    semaphore, max_retries = plan_vision_concurrency(is_groq, is_gemini, len(batches))
 
     def _empty_markers(page_nums: List[int]) -> str:
         return "\n".join(f"[== Halaman {n} ==]" for n in page_nums)
@@ -501,28 +559,19 @@ async def extract_text_from_pdf_vision_async(
                 )
         content.append({"type": "text", "text": prompt})
 
-        retry_wait = 0.0
-        for attempt in range(max_retries):
-            if attempt > 0:
-                await asyncio.sleep(retry_wait)
-            async with semaphore:
-                try:
-                    response = await vision_llm.ainvoke([HumanMessage(content=content)])
-                    text = response.content if isinstance(response.content, str) else ""
-                    text = _strip_tabular_content(text)
-                    return _renumber_markers(text, page_nums)
-                except Exception as exc:
-                    if _is_rate_limit(exc) and attempt < max_retries - 1:
-                        retry_wait = _parse_retry_after(str(exc), fallback=(attempt + 1) * 10)
-                        logger.warning(
-                            "Rate limit on pages %s (attempt %d/%d), retrying in %.1fs",
-                            page_nums, attempt + 1, max_retries, retry_wait,
-                        )
-                    else:
-                        logger.exception("Vision extraction failed for pages %s", page_nums)
-                        return _empty_markers(page_nums)
-        logger.error("Vision extraction gave up on pages %s after %d retries", page_nums, max_retries)
-        return _empty_markers(page_nums)
+        async def _one_call() -> str:
+            response = await vision_llm.ainvoke([HumanMessage(content=content)])
+            text = response.content if isinstance(response.content, str) else ""
+            text = _strip_tabular_content(text)
+            return _renumber_markers(text, page_nums)
+
+        return await call_vision_with_retry(
+            _one_call,
+            semaphore=semaphore,
+            max_retries=max_retries,
+            label=f"pages {page_nums}",
+            on_give_up=lambda: _empty_markers(page_nums),
+        )
 
     batch_texts = await asyncio.gather(*[_extract_batch(idxs) for idxs in batches])
     combined = "\n\n".join(t for t in batch_texts if t.strip())

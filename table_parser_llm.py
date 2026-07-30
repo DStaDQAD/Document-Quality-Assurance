@@ -280,10 +280,21 @@ def _extract(spec: _TableSpec, grid: List[List]) -> TableData:
 def parse_table_with_llm(data: bytes, sheet_name: str, llm: BaseChatModel) -> TableData:
     """Parse a sheet by asking the LLM for a structure spec, then extracting values in code.
 
+    Thin bytes wrapper over parse_grid_with_llm.
+    """
+    return parse_grid_with_llm(_load_grid(data, sheet_name), llm)
+
+
+def parse_grid_with_llm(grid: List[List], llm: BaseChatModel) -> TableData:
+    """Parse an in-memory grid by asking the LLM for a structure spec, then extracting in code.
+
     Raises ValueError when the LLM's spec fails validation against the grid (or the LLM call
     itself fails) — callers treat this like any other parser failure.
+
+    Takes a grid so non-spreadsheet sources (see `pdf_table_extraction`) reuse this tier too.
+    The layout-fingerprint cache lives here rather than in the wrapper, so a recurring layout
+    is mapped once regardless of which kind of source it came from.
     """
-    grid = _load_grid(data, sheet_name)
     fingerprint = _layout_fingerprint(grid)
 
     spec = _SPEC_CACHE.get(fingerprint)

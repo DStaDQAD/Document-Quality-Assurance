@@ -8,6 +8,7 @@ from table_parser_generic import (
     _load_grid,
     _parse_period,
     _parse_two_row_table,
+    parse_generic_grid,
     parse_generic_table,
 )
 
@@ -525,3 +526,20 @@ def test_two_row_qualifier_from_a_data_row_is_never_dropped():
 
     assert "Sektor Ekonomi > Perikanan > Fishery" in table.row_labels
     assert _KMK_LABEL in table.row_labels
+
+
+# ---------------------------------------------------------------------------
+# The grid seam: parse_generic_table is now a thin wrapper over parse_generic_grid, so a
+# non-spreadsheet source (tables transcribed out of a PDF) can reuse the same heuristics.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("builder,sheet", [
+    (_build_item_list_bytes, "Barang"),
+    (_build_combined_period_bytes, "Penjualan"),
+    (_build_quarterly_survey_bytes, "Survei"),
+    (_build_stacked_blocks_bytes, "S"),
+    (_build_sectioned_survey_bytes, "SK"),
+])
+def test_parse_generic_grid_matches_the_bytes_wrapper(builder, sheet):
+    data = builder()
+    assert parse_generic_grid(_load_grid(data, sheet)) == parse_generic_table(data, sheet)
