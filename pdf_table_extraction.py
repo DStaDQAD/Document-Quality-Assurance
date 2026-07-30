@@ -1,0 +1,472 @@
+"""Transcribe the data tables printed INSIDE a PDF report into grids.
+
+Why this exists: a BI report carries snippet tables on its narrative pages (Tabel 2, Tabel 3…)
+and the full series in its Lampiran pages. Those are an independent reference for the report's
+own claims — one that cannot be out of sync with the report the way a separately-uploaded Excel
+workbook can. `paired_verifier.verify_paired` consumes the grids produced here exactly like it
+consumes Excel sheets (see `_ExcelSource(origin="pdf")`).
+
+Why VISION and not the text layer, for every page, unconditionally:
+  - Reports are routinely scanned. On one sample (`M2-April-2026 (1).pdf`) 10 pages carry 337
+    characters of text layer in total — there is nothing to parse.
+  - Even with a good text layer, PDFium emits table rows with the column headers detached from
+    the body rows, and interleaves two Lampiran tables that share a page. Reconstructing the
+    row/column geometry from that stream is guesswork; a rendered page shows the model the
+    actual grid.
+
+THE HONEST CAVEAT: unlike every other path in this project, the reference numbers here are
+produced by an LLM reading an image, not by code reading a spreadsheet. Nothing in the prompt
+can make that airtight. Two things contain it: the structural rejection rules below (a garbled
+transcription is dropped, not used), and the fact that a report states most series twice —
+snippet AND Lampiran — so a hallucinated cell tends to surface as a reported CONFLICT between
+two internal sources rather than a silently wrong verdict.
+"""
+
+import asyncio
+import hashlib
+import logging
+import os
+import re
+from collections import OrderedDict
+from dataclasses import dataclass, field
+from typing import Callable, List, Optional
+
+from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel, Field
+
+from pdf_extraction import (
+    call_vision_with_retry,
+    plan_vision_concurrency,
+    render_pages_to_b64,
+    vision_provider_flags,
+)
+from structured_extractor import _parse_indonesian_number
+from table_parser_generic import _MONTH_ABBREVS, _QUARTER_CANON, _bare_period_token
+
+logger = logging.getLogger("fact-checker")
+
+# Pages per vision call. 1 by default and rarely worth raising: a Lampiran page is ~40 rows x
+# ~14 columns = ~560 cells, and batching two of those risks the output being truncated mid-table.
+# That is the worst failure mode here — a dropped row is invisible downstream, whereas a failed
+# call is logged and skipped.
+_TABLE_PAGES_PER_CALL = int(os.getenv("PDF_TABLE_PAGES_PER_CALL", "1"))
+
+# Bump when the prompt or the assembly logic changes: it is part of the cache key, so stale
+# transcriptions from a previous prompt can never be served.
+_PROMPT_VERSION = "1"
+
+_MAX_CACHE_ENTRIES = 8
+
+
+@dataclass
+class PdfTable:
+    """One data table transcribed off one PDF page."""
+    page_number: int                       # 1-based
+    caption: str                           # "Lampiran 1. Tabel Uang Beredar dan Faktor-Faktornya"
+    unit: str                              # "Triliun Rp" | "%, yoy" | ""
+    grid: List[List] = field(default_factory=list)   # assembled; numeric cells are int/float
+    index_on_page: int = 0
+
+    @property
+    def label(self) -> str:
+        """Display name used as the source's 'sheet' — e.g. 'Hal. 7 · Lampiran 1. Tabel …'."""
+        caption = self.caption.strip() or f"Tabel {self.index_on_page + 1}"
+        return f"Hal. {self.page_number} · {caption[:60]}"
+
+
+# ---------------------------------------------------------------------------
+# LLM output schema — strings only. No number crosses this boundary as a number;
+# _coerce_cell below is the single place a printed cell becomes a Python value.
+# ---------------------------------------------------------------------------
+
+class _PdfTableOut(BaseModel):
+    caption: Optional[str] = Field(
+        None, description="Judul tabel persis seperti tercetak, mis. 'Lampiran 2. Pertumbuhan …'."
+    )
+    unit: Optional[str] = Field(
+        None, description="Anotasi unit dalam tanda kurung, mis. 'Triliun Rp' atau '%, yoy'."
+    )
+    header_rows: List[List[str]] = Field(
+        default_factory=list,
+        description=(
+            "Baris header kolom, 1-2 baris. Bila baris tahun berada di atas baris bulan/triwulan, "
+            "kirim keduanya: baris tahun lebih dahulu."
+        ),
+    )
+    rows: List[List[str]] = Field(
+        default_factory=list,
+        description="Baris data. Sel pertama setiap baris adalah label baris.",
+    )
+
+
+class _PageTables(BaseModel):
+    tables: List[_PdfTableOut] = Field(default_factory=list)
+
+
+_TABLE_VISION_PROMPT = """\
+Gambar berikut adalah satu halaman dari laporan statistik Bank Indonesia.
+
+Tugasmu: transkripsi SETIAP TABEL DATA di halaman ini, sel per sel, apa adanya.
+
+ATURAN YANG TIDAK BOLEH DILANGGAR:
+1. Salin angka PERSIS seperti tercetak. Pertahankan titik ribuan dan koma desimal Indonesia
+   ("10.415,9" tetap "10.415,9"), pertahankan tanda kurung akuntansi untuk nilai negatif
+   ("(49,8)" tetap "(49,8)"), pertahankan tanda "%" bila tercetak.
+2. JANGAN menghitung, membulatkan, mengubah format, menerjemahkan, atau menebak apa pun.
+   Sel yang kosong di halaman ditulis sebagai "" (string kosong) — jangan diisi.
+3. Setiap baris data harus punya JUMLAH SEL YANG SAMA dengan baris header. Sel pertama adalah
+   label baris, ditulis lengkap beserta penanda catatan kaki ("*", "**") seperti tercetak.
+4. Bila header waktu tersusun dua tingkat (baris tahun di atas baris bulan/triwulan), kirim
+   DUA baris header: baris tahun lebih dahulu, lalu baris bulan/triwulan. Baris bulan/triwulan
+   harus LENGKAP dan berurutan sesuai cetakan — satu token untuk setiap kolom data, tanpa ada
+   yang dilewat. Pada baris tahun, tulis setiap tahun di kolom pertama rentangnya.
+5. Satu halaman BISA memuat lebih dari satu tabel (mis. "Lampiran 4." dan "Lampiran 5." pada
+   halaman yang sama). Keluarkan satu entri terpisah per tabel, berurutan dari atas ke bawah.
+6. Salin judul tabel ("Tabel 2. …" / "Lampiran 1. …") dan anotasi unit ("(Triliun Rp)",
+   "(%, yoy)") persis seperti tercetak.
+
+YANG DIABAIKAN:
+- Paragraf narasi dan kalimat biasa.
+- Grafik/chart — label data pada grafik BUKAN tabel.
+- Header/footer halaman, nomor halaman, nama departemen.
+- Baris "Keterangan:"/catatan kaki di bawah tabel.
+
+Jika halaman ini tidak memuat tabel data sama sekali, kembalikan daftar tabel yang KOSONG.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Cell coercion
+# ---------------------------------------------------------------------------
+
+# A cell that is a number. Deliberately stricter than pdf_extraction._CELL_NUMERIC_RE, which
+# allows an UNBALANCED paren and would therefore turn an enumeration cell like '1)' into 1.0.
+# Requires a leading digit, so '-' / 'n.a.' / 'Jan' stay strings.
+_NUM_CELL_RE = re.compile(r'^-?\d[\d.,]*%?$|^\(-?\d[\d.,]*%?\)$')
+
+
+def _coerce_cell(text) -> object:
+    """Printed cell text -> int | float | str | None.
+
+    Coercion is mandatory, not cosmetic: every consumer of a grid gates on
+    `table_parser_generic._is_number`, which is an `isinstance(v, (int, float))` check. A grid
+    of strings parses to an empty table and makes every cell pointer read None.
+
+    Integers come back as `int` rather than `float` on purpose — `_is_year_cell` accepts both,
+    but `parse_generic_table` renders categorical column headers with `str(cell)`, where a
+    float would produce the column label "2026.0".
+    """
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    if not _NUM_CELL_RE.match(s):
+        return s
+    value = _parse_indonesian_number(s)
+    if value is None:
+        return s
+    if float(value).is_integer() and ',' not in s:
+        return int(value)
+    return value
+
+
+# A trailing parenthetical on a table caption, e.g. 'Tabel 9. Uang Primer (triliun Rp)'.
+_CAPTION_UNIT_RE = re.compile(r'\(([^()]{1,40})\)\s*$')
+
+# Words that make a parenthetical a UNIT rather than an aside ('(M2)', '(yoy)', '(2)').
+_UNIT_WORDS = re.compile(
+    r'\b(rp|rupiah|usd|persen|indeks|index|ribu|juta|miliar|milyar|triliun|trilyun|'
+    r'orang|unit|ton|barel|%)\b|%', re.IGNORECASE
+)
+
+
+def _unit_from_caption(caption: str) -> str:
+    """Pull the unit out of a caption's trailing parenthetical, or return "".
+
+    BI captions print the unit inline — 'Lampiran 3. Tabel Dana Pihak Ketiga (Triliun Rp)' —
+    and the model then often leaves the `unit` field empty because it already copied it into
+    the caption. An empty unit is not a harmless gap: for a level claim it sends
+    paired_verifier down its no-declared-unit fallback, which normalises the CLAIM's scale
+    ('triliun Rp' -> 1e12) against a table already written in trillions, computing ~0.0 and
+    reporting a false Refuted against a perfectly good number. Measured on three tables of
+    sample_data/M2-April-2026.pdf.
+    """
+    match = _CAPTION_UNIT_RE.search(caption or "")
+    if not match:
+        return ""
+    inner = match.group(1).strip()
+    return inner if _UNIT_WORDS.search(inner) else ""
+
+
+# ---------------------------------------------------------------------------
+# Grid assembly
+# ---------------------------------------------------------------------------
+
+def _period_ordinal(cell) -> Optional[int]:
+    """1-12 for a month cell, 1-4 for a quarter cell, else None."""
+    token = _bare_period_token(cell)
+    if token is None:
+        return None
+    if token in _QUARTER_CANON:
+        return _QUARTER_CANON.index(token) + 1
+    return _MONTH_ABBREVS.index(token) + 1
+
+
+def _reconstruct_year_row(year_row: List, period_row: List) -> List:
+    """Re-derive which year each period column belongs to, from the PERIOD sequence.
+
+    Measured on the real M2 report, this is the one thing the vision model gets wrong often
+    enough to matter — and wrong in the worst possible way, since a mis-dated column is a
+    plausible-looking number filed under the wrong month:
+
+      Lampiran 1  year row: [·, 2025, 2026, ·, ·, …]   (each year written once, and 2026
+                            landing on 'Mei' — a 2025 column)
+      Lampiran 2  year row: [·, 2025 ×12, 2026 ×3]     (12 evenly spread years, so Jan/Feb/Mar
+                            2026 come out labelled 2025)
+
+    The PERIOD row, by contrast, is copied correctly every time — it is a plain row of labels
+    with no spanning to reason about. So the periods are the source of truth: they run in
+    calendar order, and each wrap (Des -> Jan, or Q4 -> Q1) starts the next year. The year row
+    is used only for the SET of years involved, never for their positions.
+
+    Rewrites the row only when the reconstruction is unambiguous: the number of year blocks the
+    period sequence implies must equal the number of distinct years written in the row. Anything
+    else is left exactly as transcribed, and the parser cascade decides whether it is usable —
+    better a table that fails to parse than one that parses into wrongly dated values.
+    """
+    ordinals = [(i, _period_ordinal(v)) for i, v in enumerate(period_row)]
+    period_cols = [(i, o) for i, o in ordinals if o is not None]
+    if len(period_cols) < 2:
+        return year_row
+
+    years = sorted({v for v in year_row if isinstance(v, int) and 1990 <= v <= 2100})
+    if not years:
+        return year_row
+
+    # Walk the period columns in order; a non-increasing period starts a new year block.
+    blocks: List[int] = []
+    block = 0
+    previous: Optional[int] = None
+    for _, ordinal in period_cols:
+        if previous is not None and ordinal <= previous:
+            block += 1
+        blocks.append(block)
+        previous = ordinal
+
+    if block + 1 != len(years):
+        logger.info(
+            "Leaving the transcribed year row alone: periods imply %d year block(s) but %d "
+            "distinct year(s) were written (%s).", block + 1, len(years), years,
+        )
+        return year_row
+
+    out: List = [None] * len(year_row)
+    for (col, _), block_index in zip(period_cols, blocks):
+        while col >= len(out):
+            out.append(None)
+        out[col] = years[block_index]
+    return out
+
+
+def _assemble_grid(table: _PdfTableOut) -> List[List]:
+    """Lay a transcribed table out as a grid the existing Excel parsers already understand.
+
+    Row 0 is the caption alone and row 1 the parenthesised unit alone, because
+    `table_parser_generic._title_and_unit` reads exactly that shape (a fully-parenthesised row
+    is the unit, the first other row is the title) and `_find_header_row` skips any row with
+    fewer than 2 non-empty cells — so neither can be mistaken for the header.
+    """
+    header_rows = [[_coerce_cell(c) for c in r] for r in table.header_rows]
+    # A year row stacked over a period row: re-derive the years from the periods (see
+    # _reconstruct_year_row). Body rows are never touched — carrying a value sideways there
+    # would invent data.
+    if len(header_rows) >= 2:
+        header_rows[-2] = _reconstruct_year_row(header_rows[-2], header_rows[-1])
+    body_rows = [[_coerce_cell(c) for c in r] for r in table.rows]
+
+    grid: List[List] = []
+    caption = (table.caption or "").strip()
+    if caption:
+        grid.append([caption])
+    unit = (table.unit or "").strip().strip("()") or _unit_from_caption(caption)
+    if unit:
+        grid.append([f"({unit})"])
+    grid.extend(header_rows)
+    grid.extend(body_rows)
+
+    width = max((len(r) for r in grid), default=0)
+    return [r + [None] * (width - len(r)) for r in grid]
+
+
+def _is_usable(table: _PdfTableOut, page_number: int) -> bool:
+    """Reject a transcription that cannot be a faithful table before it becomes a source.
+
+    Cheap structural guards, not semantic ones — they catch the shapes a garbled or truncated
+    transcription actually takes.
+    """
+    caption = (table.caption or "").strip() or "(tanpa judul)"
+    if not table.header_rows or len(table.rows) < 2:
+        logger.info(
+            "Dropping transcribed table on page %d (%s): %d header row(s), %d body row(s)",
+            page_number, caption, len(table.header_rows), len(table.rows),
+        )
+        return False
+    if not any(_coerce_cell(c) is not None and not isinstance(_coerce_cell(c), str)
+               for row in table.rows for c in row):
+        logger.info(
+            "Dropping transcribed table on page %d (%s): no numeric cell in the body",
+            page_number, caption,
+        )
+        return False
+    # A body row identical to the header row is the fingerprint of two stacked tables
+    # transcribed as one — the second table's header landed in the first table's body.
+    header_sig = [str(c).strip() for c in table.header_rows[-1]]
+    if any([str(c).strip() for c in row] == header_sig for row in table.rows):
+        logger.info(
+            "Dropping transcribed table on page %d (%s): a body row repeats the header row",
+            page_number, caption,
+        )
+        return False
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Transcription cache (in-process, same contract as table_parser_llm._SPEC_CACHE)
+# ---------------------------------------------------------------------------
+
+_TABLE_CACHE: "OrderedDict[str, List[PdfTable]]" = OrderedDict()
+
+
+def _cache_key(pdf_bytes: bytes, dpi: int, model_name: str) -> str:
+    h = hashlib.sha256(pdf_bytes)
+    h.update(f"|{dpi}|{_PROMPT_VERSION}|{model_name}|{_TABLE_PAGES_PER_CALL}".encode())
+    return h.hexdigest()
+
+
+def _cache_get(key: str) -> Optional[List[PdfTable]]:
+    tables = _TABLE_CACHE.get(key)
+    if tables is None:
+        return None
+    _TABLE_CACHE.move_to_end(key)
+    return list(tables)
+
+
+def _cache_put(key: str, tables: List[PdfTable]) -> None:
+    _TABLE_CACHE[key] = list(tables)
+    _TABLE_CACHE.move_to_end(key)
+    while len(_TABLE_CACHE) > _MAX_CACHE_ENTRIES:
+        _TABLE_CACHE.popitem(last=False)
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+async def extract_tables_from_pdf(
+    pdf_bytes: bytes,
+    vision_llm: BaseChatModel,
+    dpi: int = 150,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> List[PdfTable]:
+    """Transcribe every data table in the PDF, in page order.
+
+    Never raises for a readable PDF: a page whose call fails or whose transcription fails the
+    structural guards contributes no tables and is logged. An empty result is a valid outcome
+    (the caller then finds no internal source and every claim comes back Inconclusive).
+
+    on_progress(done, total) is called after each page's call settles, for stage reporting.
+    """
+    model_name = getattr(vision_llm, "model", None) or getattr(vision_llm, "model_name", "")
+    key = _cache_key(pdf_bytes, dpi, str(model_name))
+    cached = _cache_get(key)
+    if cached is not None:
+        logger.info("PDF table transcription served from cache (%s…): %d table(s)",
+                    key[:12], len(cached))
+        if on_progress is not None:
+            on_progress(1, 1)
+        return cached
+
+    logger.info("Rendering PDF pages at %d DPI for table transcription", dpi)
+    b64_pages = await asyncio.to_thread(render_pages_to_b64, pdf_bytes, dpi)
+    n_pages = len(b64_pages)
+    if not n_pages:
+        return []
+
+    is_groq, is_gemini = vision_provider_flags(vision_llm)
+    if not is_gemini:
+        logger.warning(
+            "Table transcription is running on a non-Gemini vision provider (%s). Lampiran "
+            "pages are large; a small output-token cap will truncate them.",
+            type(vision_llm).__name__,
+        )
+
+    batches = [
+        list(range(i, min(i + _TABLE_PAGES_PER_CALL, n_pages)))
+        for i in range(0, n_pages, _TABLE_PAGES_PER_CALL)
+    ]
+    semaphore, max_retries = plan_vision_concurrency(is_groq, is_gemini, len(batches))
+    structured = vision_llm.with_structured_output(_PageTables)
+    logger.info(
+        "Transcribing tables from %d page(s) in %d vision call(s)", n_pages, len(batches)
+    )
+
+    done = 0
+    lock = asyncio.Lock()
+
+    async def _transcribe(idxs: List[int]) -> List[PdfTable]:
+        page_nums = [i + 1 for i in idxs]
+
+        async def _one_call() -> List[PdfTable]:
+            content: list = []
+            for i in idxs:
+                if len(idxs) > 1:
+                    content.append({"type": "text", "text": f"[== Halaman {i + 1} ==]"})
+                content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{b64_pages[i]}"},
+                })
+            content.append({"type": "text", "text": _TABLE_VISION_PROMPT})
+            result = await structured.ainvoke([HumanMessage(content=content)])
+            # With one page per call (the default) every table belongs to that page. When
+            # batching, the model is not asked to attribute tables to pages, so they are all
+            # credited to the batch's FIRST page — approximate on purpose; page_number is
+            # display/provenance metadata, never used to resolve a value.
+            page_number = page_nums[0]
+            tables: List[PdfTable] = []
+            for out in result.tables:
+                if not _is_usable(out, page_number):
+                    continue
+                caption = (out.caption or "").strip()
+                tables.append(PdfTable(
+                    page_number=page_number,
+                    caption=caption,
+                    unit=(out.unit or "").strip().strip("()") or _unit_from_caption(caption),
+                    grid=_assemble_grid(out),
+                    index_on_page=len(tables),
+                ))
+            return tables
+
+        tables = await call_vision_with_retry(
+            _one_call,
+            semaphore=semaphore,
+            max_retries=max_retries,
+            label=f"table transcription, pages {page_nums}",
+            on_give_up=list,
+        )
+        nonlocal done
+        async with lock:
+            done += 1
+            if on_progress is not None:
+                on_progress(done, len(batches))
+        return tables
+
+    per_batch = await asyncio.gather(*[_transcribe(idxs) for idxs in batches])
+    tables = [t for batch in per_batch for t in batch]
+    logger.info(
+        "Transcribed %d table(s) from %d page(s): %s",
+        len(tables), n_pages, ", ".join(t.label for t in tables) or "none",
+    )
+    _cache_put(key, tables)
+    return tables

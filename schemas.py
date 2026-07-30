@@ -63,6 +63,16 @@ class PeriodResult(BaseModel):
     excel_value: Optional[float] = None
 
 
+class SourceValue(BaseModel):
+    """What ONE reference source says about a claim, when more than one could answer it."""
+    source: str                       # "filename / sheet" — the source's display label
+    origin: Literal["excel", "pdf"] = "excel"
+    matched_label: Optional[str] = None   # the row label this source resolved the claim against
+    computed_value: Optional[float] = None
+    computed_unit: Optional[str] = None
+    verdict: Literal["Entailed", "Refuted", "Inconclusive"]
+
+
 class FactVerificationResult(BaseModel):
     operation: Literal[
         "value", "yoy_growth", "average", "sum", "diff", "ratio",
@@ -85,6 +95,16 @@ class FactVerificationResult(BaseModel):
     # pointed at a coordinate; the number itself was read from the cell by code). The
     # cell references are appended to `reasoning`. None for normal table lookups.
     resolved_via: Optional[str] = None
+    # Every source that could answer this claim, best-matching first — populated ONLY when
+    # more than one could. The headline verdict above comes from the first entry.
+    source_values: List[SourceValue] = Field(default_factory=list)
+    # Set when those sources disagree beyond MATCH_TOLERANCE in the same unit:
+    #   "internal" — two tables inside the PDF contradict each other (the report is
+    #                internally inconsistent, regardless of whether the claim itself is right)
+    #   "cross"    — a table in the PDF and an uploaded Excel sheet disagree (out of sync)
+    # Deliberately NOT a fourth `verdict` value: a conflict is orthogonal to whether the claim
+    # matches its best source, and entailed+refuted+inconclusive must keep summing to total_facts.
+    source_conflict: Optional[Literal["internal", "cross"]] = None
 
 
 class TypoIssue(BaseModel):
@@ -114,14 +134,23 @@ class TableSuggestion(BaseModel):
 
 class PairedVerificationResponse(BaseModel):
     pdf_filename: str
+    # These four are positional parallel arrays, one entry per reference source. Note that in
+    # "internal"/"both" mode a source can be a table transcribed from the PDF itself, in which
+    # case excel_filenames repeats the PDF's name and excel_sheets holds "Hal. 7 · Lampiran 1…".
+    # The "excel_" prefix is historical; renaming it would break the UI's saved filters.
     excel_filenames: List[str]
     excel_sheets: List[str]
     excel_units: List[str]
     # Which cascade tier parsed each source: "bi" | "generic" | "llm" | "pointer-only"
-    # (aligned with excel_filenames). "llm" means the structure was LLM-mapped;
-    # "pointer-only" means no parser understood the sheet and claims are resolved by the
-    # tier-4 cell-pointer pass — both worth a reviewer's glance.
+    # (aligned with excel_filenames), prefixed "pdf-" for sources transcribed out of the PDF.
+    # "llm" means the structure was LLM-mapped; "pointer-only" means no parser understood the
+    # sheet and claims are resolved by the tier-4 cell-pointer pass — both worth a glance.
     excel_parsers: List[str] = Field(default_factory=list)
+    # Which reference pool was used: "excel" (uploaded workbooks), "internal" (tables inside
+    # the PDF), or "both".
+    mode: str = "excel"
+    # How many results have source_conflict set — sources that contradict each other.
+    conflict_count: int = 0
     total_facts: int
     entailed_count: int
     refuted_count: int

@@ -36,13 +36,20 @@ from cell_pointer import (
     resolve_pointers,
 )
 from excel_parser_bi import BITableData, parse_bi_table
+from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, label_match_score
-from table_parser_generic import _MONTH_ABBREVS, _load_grid, parse_generic_table
-from table_parser_llm import parse_table_with_llm
+from table_parser_generic import (
+    _MONTH_ABBREVS,
+    _load_grid,
+    parse_generic_grid,
+    parse_generic_table,
+)
+from table_parser_llm import parse_grid_with_llm, parse_table_with_llm
 from schemas import (
     FactVerificationResult,
     PairedVerificationResponse,
     PeriodResult,
+    SourceValue,
     TableSuggestion,
 )
 from structured_extractor import (
@@ -108,9 +115,17 @@ _SUBSET_PHRASE_RE = re.compile(
 # no unit conversion — so they stay out of _LEVEL_OPS.
 _THRESHOLD_OPS = {"above_threshold", "below_threshold"}
 
+# Row labels advertised to the fact extractor per source (see _source_desc). Internal mode can
+# add a dozen sources at once, and every label is printed into every extraction chunk's prompt.
+_MAX_LABELS_PER_SOURCE = 60
+
 
 # ---------------------------------------------------------------------------
-# Excel source container
+# Reference source container
+#
+# Named _ExcelSource because Excel sheets were the only kind. It now also carries tables
+# transcribed out of the PDF itself (origin="pdf"); everything below this line treats the two
+# identically on purpose — a source is a parsed table plus, optionally, its raw grid.
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -124,10 +139,27 @@ class _ExcelSource:
     # True when every parser failed but the grid loaded: the table is empty and claims
     # against this source can only be resolved by the cell-pointer pass.
     pointer_only: bool = False
+    # "excel" for an uploaded workbook sheet, "pdf" for a table transcribed from the report
+    # itself. Only two things branch on it: labelling a conflict internal-vs-cross, and
+    # suppressing the BI-workbook table suggestions in internal mode.
+    origin: str = "excel"
 
     @property
     def label(self) -> str:
         return f"{self.filename} / {self.sheet}"
+
+
+@dataclass
+class _Candidate:
+    """One source that resolved every data point a claim references."""
+    score: float                          # mean label-match quality — see _resolution_score
+    src: _ExcelSource
+    resolved: List[Tuple[str, float]]
+    factor: float                         # divide raw values by this to reach the claim's unit
+    # False when the source declared no scale of its own and only the claim's scale was
+    # applied. Such a value is fine for a verdict but cannot be compared against another
+    # source's (see _attach_source_comparison).
+    unit_comparable: bool = True
 
 
 # ---------------------------------------------------------------------------
@@ -653,8 +685,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None
     best_reason: Optional[str] = None
-    # (score, src, resolved, factor) of the best-matching source so far — see _resolution_score.
-    best_match: Optional[Tuple[float, _ExcelSource, List[Tuple[str, float]], float]] = None
+    # One _Candidate per source that resolved every data point — see _resolution_score. The
+    # best-scoring one produces the verdict; the rest become source_values and can raise a
+    # conflict (see _attach_source_comparison).
+    candidates: List[_Candidate] = []
 
     for src in sources:
         resolved, missing, col_units = _try_resolve(fact.periods, src)
@@ -664,6 +698,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             continue
 
         factor = 1.0
+        unit_comparable = True
         if needs_unit:
             # Categorical tables usually declare their unit in the COLUMN name
             # ('Harga (Rp)') rather than a table-wide unit row — prefer the matched
@@ -682,6 +717,13 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 # against a '(%, Indeks)' sheet even though the value sat right there.
                 parsed = _parse_scale_unit(fact.unit) if fact.unit else None
                 factor = parsed[0] if parsed else 1.0
+                # Only the CLAIM's scale was applied — this source never confirmed a scale of
+                # its own, so its number is not on a footing where it can corroborate or
+                # contradict another source's. Excluded from conflict comparison (but not
+                # from producing a verdict): a BI report carries the same series in
+                # 'Triliun Rp' and in percent under identical row labels, and comparing
+                # across those two would flag a conflict on nearly every claim.
+                unit_comparable = parsed is None
             if factor is None:
                 if best_reason is None:
                     best_reason = (
@@ -695,15 +737,118 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         # real breakdown row, so whichever sheet the user happened to upload first would
         # win. Keep scanning and keep the closest label match; ties keep the earlier
         # source, so single-source behaviour is unchanged.
-        score = _resolution_score(fact.periods, resolved)
-        if best_match is None or score > best_match[0]:
-            best_match = (score, src, resolved, factor)
+        candidates.append(_Candidate(
+            score=_resolution_score(fact.periods, resolved),
+            src=src, resolved=resolved, factor=factor, unit_comparable=unit_comparable,
+        ))
 
-    if best_match is not None:
-        _, src, resolved, factor = best_match
-        return _compute_operation(fact, resolved, factor, src)
+    if not candidates:
+        return _inconclusive_result(fact, best_missing, best_reason)
 
-    return _inconclusive_result(fact, best_missing, best_reason)
+    # Stable sort on the negated score: ties keep source order, as before.
+    candidates.sort(key=lambda c: -c.score)
+    head = candidates[0]
+    result = _compute_operation(fact, head.resolved, head.factor, head.src)
+    if len(candidates) > 1:
+        result = _attach_source_comparison(result, fact, candidates)
+    return result
+
+
+def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
+    """True when two sources' declared units describe the same kind of quantity.
+
+    The guard that keeps conflict detection honest. A BI report states the same series, under
+    the SAME row labels, in a levels table ('Triliun Rp') and in a growth table ('%, yoy'), and
+    a yoy_growth computed off each of those is 14,2 vs 142,9 — an artefact of applying growth to
+    an already-growth series, not a disagreement between the tables.
+
+    An unknown (blank) unit is treated as comparable only with another blank one: with nothing
+    to check, staying quiet beats inventing a contradiction.
+    """
+    left, right = (a or "").strip().lower(), (b or "").strip().lower()
+    if left == right:
+        return True
+    if not left or not right:
+        return False
+    return _unit_factor(left, right) is not None
+
+
+def _source_value(cand: "_Candidate", result: FactVerificationResult) -> SourceValue:
+    return SourceValue(
+        source=cand.src.label,
+        origin=cand.src.origin,
+        matched_label=result.periods[0].metric_label if result.periods else None,
+        computed_value=result.computed_value,
+        computed_unit=result.computed_unit,
+        verdict=result.verdict,
+    )
+
+
+def _attach_source_comparison(
+    result: FactVerificationResult,
+    fact: ExtractedFact,
+    candidates: List["_Candidate"],
+) -> FactVerificationResult:
+    """Record what every resolving source says, and flag it when they contradict each other.
+
+    The headline verdict stays the best-scoring source's — a conflict says the SOURCES disagree,
+    not that the claim is wrong. Each extra source is re-run through _compute_operation, which is
+    plain Python arithmetic over values already looked up, so this costs nothing and calls no LLM.
+    """
+    per_source = [(candidates[0], result)] + [
+        (cand, _compute_operation(fact, cand.resolved, cand.factor, cand.src))
+        for cand in candidates[1:]
+    ]
+    values = [_source_value(cand, res) for cand, res in per_source]
+
+    head_cand, head = per_source[0][0], values[0]
+    conflict: Optional[str] = None
+    conflicting: Optional[SourceValue] = None
+    for (cand, _), other in zip(per_source[1:], values[1:]):
+        # A source that could not reach a verdict has no opinion to contradict — it is missing
+        # data, not a disagreement. Without this, every claim whose best-matching table happens
+        # to lack the period reads as a conflict with whichever table does have it.
+        if "Inconclusive" in (head.verdict, other.verdict):
+            continue
+        # Only a source that matched the metric AS PRECISELY as the winner may contradict it.
+        # A looser match is a weaker assertion of being the same series: a claim about "Kredit"
+        # fuzzy-matches the "Kredit" row of the aggregate table AND a "Kredit Properti" row in a
+        # breakdown table, and those two legitimately hold different numbers.
+        if cand.score < head_cand.score - 1e-9:
+            continue
+        # Both sources must measure the same kind of quantity, and both must have had a real
+        # unit basis for the conversion (see unit_comparable in _evaluate_fact).
+        if not (head_cand.unit_comparable and cand.unit_comparable):
+            continue
+        if not _units_comparable(head_cand.src.table.unit, cand.src.table.unit):
+            continue
+        if head.computed_value is not None and other.computed_value is not None:
+            differs = abs(head.computed_value - other.computed_value) > MATCH_TOLERANCE
+        else:
+            # Trend operations compute no value; their sources disagree when their verdicts do.
+            differs = head.verdict != other.verdict
+        if differs:
+            conflicting = other
+            conflict = "internal" if head.origin == other.origin == "pdf" else "cross"
+            break
+
+    if conflict is None:
+        return result.model_copy(update={"source_values": values})
+
+    def _fmt(sv: SourceValue) -> str:
+        value = "tidak terhitung" if sv.computed_value is None else f"{sv.computed_value}"
+        return f"[{sv.source}]: {value} ({sv.verdict})"
+
+    note = (
+        f" | KONFLIK SUMBER: {_fmt(head)} vs {_fmt(conflicting)} — "
+        + ("dua tabel di dalam PDF saling bertentangan"
+           if conflict == "internal" else "tabel di PDF dan sumber Excel tidak sinkron")
+    )
+    return result.model_copy(update={
+        "source_values": values,
+        "source_conflict": conflict,
+        "reasoning": result.reasoning + note,
+    })
 
 
 # ---------------------------------------------------------------------------
@@ -817,6 +962,32 @@ def _parse_table_with_fallback(
             f"Parser generik: {generic_error}."
             + (f" Parser LLM: {llm_error}." if llm_error is not None else "")
         ) from generic_error
+
+
+def _parse_grid_with_fallback(
+    grid: List[List], llm: Optional[BaseChatModel] = None
+) -> Tuple[BITableData, str]:
+    """Return (table, parser_name) for an in-memory grid — generic heuristic → LLM mapping.
+
+    Used for grids that did not come from a spreadsheet (tables transcribed out of a PDF).
+    Tier 1 (parse_bi_table) is deliberately absent: it disambiguates repeated row labels by
+    reading the label cell's INDENT from the workbook's styling, which a transcribed grid does
+    not have — running it would produce a collapsed table (see _bi_parse_collapsed) rather than
+    an honest failure. Raises ValueError when both available tiers fail; the caller degrades the
+    source to pointer-only, which is always possible here since the grid exists by construction.
+    """
+    try:
+        return parse_generic_grid(grid), "generic"
+    except ValueError as generic_error:
+        if llm is not None:
+            try:
+                return parse_grid_with_llm(grid, llm), "llm"
+            except ValueError as llm_error:
+                logger.warning("LLM structure-mapping parser failed on PDF grid: %s", llm_error)
+                raise ValueError(
+                    f"Parser generik: {generic_error}. Parser LLM: {llm_error}."
+                ) from generic_error
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -969,8 +1140,10 @@ async def verify_paired(
     pdf_filename: str = "report.pdf",
     vision_llm: Optional[BaseChatModel] = None,
     progress_cb: ProgressCb = None,
+    pdf_tables: Optional[List[PdfTable]] = None,
+    mode: str = "excel",
 ) -> PairedVerificationResponse:
-    """Verify all quantitative claims in a PDF narrative against one or more Excel statistical tables.
+    """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
     Args:
         narrative_text: Already-extracted PDF narrative text (with [== Halaman N ==] page markers),
@@ -978,8 +1151,8 @@ async def verify_paired(
                         caller's responsibility so the same text can be reused for other checks
                         (e.g. typo_checker.check_typos) without re-running the vision LLM fallback.
         excel_sources:  List of (excel_bytes, sheet_name, filename) tuples.
-                        Claims are checked against each source in order; the first source
-                        that contains every data point a claim references is used for the verdict.
+                        Claims are checked against every source that can resolve them; the
+                        closest label match produces the verdict (see _evaluate_fact).
         llm:            Fallback chat model (used when vision_llm is unavailable).
         pdf_filename:   Display name for the PDF (metadata only).
         vision_llm:     Vision-capable model (Gemini). When provided, used as the PRIMARY
@@ -987,6 +1160,12 @@ async def verify_paired(
                         number formats more reliably than Groq.
         progress_cb:    Optional per-stage progress callback (see ProgressCb above). None
                         disables reporting; the pipeline is otherwise identical.
+        pdf_tables:     Tables transcribed from the PDF itself (pdf_table_extraction), used as
+                        reference sources alongside — or instead of — the Excel ones. Transcribing
+                        them is the caller's responsibility for the same reason as narrative_text.
+        mode:           "excel" | "internal" | "both". Metadata plus two behaviour switches:
+                        table-family suggestions are pointless in "internal" mode, and the
+                        response echoes the mode back so the UI can caveat LLM-read references.
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -1037,24 +1216,69 @@ async def verify_paired(
             table=table, filename=filename, sheet=sheet_name, grid=grid,
         ))
         excel_parsers.append(parser_used)
-    emit(
-        "excel", "done",
-        detail=f"{len(parsed_sources)} sumber · parser: {', '.join(excel_parsers)}",
-    )
+    if excel_sources:
+        emit(
+            "excel", "done",
+            detail=f"{len(parsed_sources)} sumber · parser: {', '.join(excel_parsers)}",
+        )
+
+    # Step 1b: PDF-internal tables become sources too. Appended AFTER the Excel ones so that in
+    # "both" mode an equal-scoring Excel sheet keeps the headline verdict (ties keep the earlier
+    # source) — the PDF value then shows up as the second source_values entry instead of
+    # silently changing numbers the user already trusts.
+    for table_from_pdf in (pdf_tables or []):
+        try:
+            table, parser_used = _parse_grid_with_fallback(table_from_pdf.grid, llm=llm)
+            parser_used = f"pdf-{parser_used}"
+            pointer_only = False
+        except ValueError as parse_error:
+            # The grid exists by construction, so a parse failure always degrades to
+            # pointer-only rather than dropping the table.
+            logger.warning(
+                "No parser understood the PDF table '%s' (%s) — keeping as pointer-only source.",
+                table_from_pdf.label, parse_error,
+            )
+            table = BITableData(title=table_from_pdf.caption, unit=table_from_pdf.unit, row_labels=[])
+            parser_used = "pdf-pointer-only"
+            pointer_only = True
+        # The transcription carries the printed unit annotation; trust it over a parser that
+        # inferred nothing (an empty unit blocks every level-claim unit conversion).
+        if not table.unit and table_from_pdf.unit:
+            table.unit = table_from_pdf.unit
+        parsed_sources.append(_ExcelSource(
+            table=table,
+            filename=pdf_filename,
+            sheet=table_from_pdf.label,
+            grid=table_from_pdf.grid,
+            pointer_only=pointer_only,
+            origin="pdf",
+        ))
+        excel_parsers.append(parser_used)
+    if pdf_tables:
+        emit(
+            "tables", "done",
+            detail=f"{len(pdf_tables)} tabel internal · parser: "
+                   f"{', '.join(excel_parsers[-len(pdf_tables):])}",
+        )
 
     # Per-source label groups with table title context (used by the LLM to understand
     # what generic rows like 'Total' represent in each table). Categorical sources also
     # advertise their attribute columns so the LLM can fill col_label with a real name.
     def _source_desc(src: _ExcelSource) -> str:
-        desc = f"{src.table.title} / {src.filename}"
+        origin = src.sheet if src.origin == "pdf" else src.filename
+        desc = f"{src.table.title} / {origin}"
         if src.pointer_only:
             desc += " — struktur tabel tidak terurai; gunakan nama metrik apa adanya"
         if src.table.axis_type == "categorical" and src.table.col_labels:
             desc += " — kolom atribut (non-waktu): " + ", ".join(src.table.col_labels)
         return desc
 
+    # Internal mode can produce a dozen sources, and _build_row_labels_block prints every
+    # advertised label into EVERY extraction chunk's prompt — cap the per-source list so the
+    # prompt does not grow with the page count. all_row_labels below is already deduplicated.
     source_labels_for_extractor = [
-        (_source_desc(src), src.table.row_labels) for src in parsed_sources
+        (_source_desc(src), src.table.row_labels[:_MAX_LABELS_PER_SOURCE])
+        for src in parsed_sources
     ]
 
     # Combined flat list for de-duplication (required by extract_structured_facts_async signature)
@@ -1098,6 +1322,7 @@ async def verify_paired(
             excel_sheets=excel_sheets,
             excel_units=excel_units,
             excel_parsers=excel_parsers,
+            mode=mode,
             total_facts=0,
             entailed_count=0,
             refuted_count=0,
@@ -1127,11 +1352,14 @@ async def verify_paired(
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
     inconclusive = sum(1 for r in results if r.verdict == "Inconclusive")
+    conflicts = sum(1 for r in results if r.source_conflict is not None)
     compare_detail = (
         f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"
     )
     if n_pointer:
         compare_detail += f" · {n_pointer} via sel AI"
+    if conflicts:
+        compare_detail += f" · {conflicts} sumber bertentangan"
     emit("compare", "done", detail=compare_detail)
 
     return PairedVerificationResponse(
@@ -1140,10 +1368,14 @@ async def verify_paired(
         excel_sheets=excel_sheets,
         excel_units=excel_units,
         excel_parsers=excel_parsers,
+        mode=mode,
+        conflict_count=conflicts,
         total_facts=len(results),
         entailed_count=entailed,
         refuted_count=refuted,
         inconclusive_count=inconclusive,
         results=results,
-        table_suggestions=_build_table_suggestions(results),
+        # The BI table-family hints tell the user which WORKBOOK to upload — noise in internal
+        # mode, where they deliberately opted out of uploading one.
+        table_suggestions=[] if mode == "internal" else _build_table_suggestions(results),
     )

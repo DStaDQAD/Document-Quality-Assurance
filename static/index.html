@@ -263,6 +263,50 @@ select { cursor: pointer; }
 .sheet-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
 .sheet-row label { font-size: 13px; color: var(--text-500); white-space: nowrap; }
 
+/* ── Advanced settings (in-flow disclosure) ──
+   Deliberately NOT a popover: .card has overflow:hidden, which is the only reason the
+   sheet multiselect had to go position:fixed. Growing the card in flow avoids all of that. */
+.adv-settings { margin-top: 14px; }
+.adv-toggle {
+  display: flex; align-items: center; gap: 5px;
+  font-size: 12px; color: var(--blue-500); cursor: pointer;
+  border: none; background: none; padding: 0; font-weight: 600; font-family: inherit;
+}
+.adv-toggle:hover { color: var(--blue-600); }
+.adv-toggle .material-symbols-outlined { font-size: 15px; }
+.adv-toggle .adv-chevron { transition: transform 0.15s; }
+.adv-toggle[aria-expanded="true"] .adv-chevron { transform: rotate(180deg); }
+.adv-panel {
+  display: flex; flex-direction: column; gap: 14px;
+  border-top: 1px solid var(--border); margin-top: 12px; padding-top: 14px;
+}
+.adv-field { display: flex; flex-direction: column; gap: 7px; }
+.segmented { display: flex; flex-wrap: wrap; gap: 0; }
+.seg-btn {
+  background: var(--white); border: 1px solid var(--border);
+  padding: 6px 13px; font-size: 11px; font-weight: 500;
+  color: var(--text-500); cursor: pointer; transition: all 0.15s; font-family: inherit;
+  margin-left: -1px;
+}
+.seg-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg-btn:last-child { border-radius: 0 6px 6px 0; }
+.seg-btn:hover { border-color: var(--navy-700); color: var(--navy-900); background: var(--blue-50); }
+.seg-btn.active {
+  background: linear-gradient(135deg, #1e4fba, #0B1F3A);
+  border-color: transparent; color: white; font-weight: 700; z-index: 1;
+  box-shadow: 0 2px 8px rgba(11,31,58,0.22);
+}
+.adv-hint { font-size: 11px; line-height: 1.5; color: var(--text-500); margin: 0; }
+.adv-check {
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--text-500); cursor: pointer;
+}
+.adv-check input { width: 14px; height: 14px; accent-color: var(--blue-500); cursor: pointer; }
+/* Excel column dimmed (not removed) in internal mode: the files stay selected, so switching
+   back does not lose the user's picks. */
+.upload-field.is-muted { opacity: 0.45; }
+.upload-field.is-muted .dropzone-sm, .upload-field.is-muted .add-excel-btn { pointer-events: none; }
+
 /* ── Result: claim cards ── */
 .claim-card {
   background: var(--white);
@@ -586,6 +630,26 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .fact-card.Refuted      { border-left-color: #EF4444; background: linear-gradient(to right, #FFF4F4, white 55%); }
 .fact-card.Inconclusive { border-left-color: #F59E0B; background: linear-gradient(to right, #FFFBF0, white 55%); }
 .fact-card.hidden-fact  { display: none; }
+/* An inset ring, not a border-left override: the left edge still has to carry the verdict
+   colour, because a conflicted claim can be Entailed against its best source. */
+.fact-card.has-conflict { box-shadow: inset 0 0 0 1px #C4B5FD, 0 1px 5px rgba(11,31,58,0.05); }
+.badge.Conflict { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #5B21B6; }
+.conflict-strip, .mode-caveat {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12px; line-height: 1.6; border-radius: var(--r);
+  padding: 10px 14px; margin-top: 14px;
+}
+.conflict-strip { background: #F5F3FF; border: 1px solid #DDD6FE; color: #5B21B6; }
+.mode-caveat    { background: var(--blue-50); border: 1px solid var(--blue-100); color: var(--text-500); }
+.conflict-strip .material-symbols-outlined, .mode-caveat .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
+.fact-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.fact-source-chip {
+  font-size: 10px; font-weight: 600; color: var(--text-500);
+  background: var(--white); border: 1px solid var(--border);
+  border-radius: 4px; padding: 2px 7px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.fact-source-chip.is-conflicting { background: #F5F3FF; border-color: #DDD6FE; color: #5B21B6; }
 
 .fact-card-top {
   display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
@@ -937,12 +1001,34 @@ body.auth-locked .app {
                     <span class="material-symbols-outlined">add</span> Tambah PDF
                   </button>
                 </div>
-                <div class="upload-field">
-                  <span class="upload-label">Tabel Excel</span>
+                <div class="upload-field" id="excel-upload-field">
+                  <span class="upload-label" id="excel-upload-label">Tabel Excel</span>
                   <div id="excel-sources-container"></div>
                   <button type="button" id="add-excel-btn" class="add-excel-btn">
                     <span class="material-symbols-outlined">add</span> Tambah Tabel
                   </button>
+                </div>
+              </div>
+              <div class="adv-settings">
+                <button type="button" class="adv-toggle" id="adv-toggle" aria-expanded="false" aria-controls="adv-panel">
+                  <span class="material-symbols-outlined">tune</span>
+                  <span>Pengaturan Lanjutan</span>
+                  <span class="material-symbols-outlined adv-chevron">expand_more</span>
+                </button>
+                <div class="adv-panel" id="adv-panel" hidden>
+                  <div class="adv-field">
+                    <span class="upload-label">Sumber pembanding</span>
+                    <div class="segmented" id="mode-segmented" role="radiogroup" aria-label="Sumber pembanding">
+                      <button type="button" class="seg-btn active" data-mode="excel" role="radio" aria-checked="true">Tabel Excel</button>
+                      <button type="button" class="seg-btn" data-mode="internal" role="radio" aria-checked="false">Tabel dalam PDF</button>
+                      <button type="button" class="seg-btn" data-mode="both" role="radio" aria-checked="false">Keduanya</button>
+                    </div>
+                    <p class="adv-hint" id="mode-hint"></p>
+                  </div>
+                  <label class="adv-check">
+                    <input type="checkbox" id="typo-toggle" checked>
+                    <span>Cek ejaan &amp; tata bahasa</span>
+                  </label>
                 </div>
               </div>
             </div>
@@ -1294,6 +1380,61 @@ body.auth-locked .app {
   addPdfSource(); // initialize with one PDF field
   document.getElementById("add-pdf-btn").addEventListener("click", addPdfSource);
 
+  // ── Advanced settings: which tables the claims are compared against, and whether the
+  // spelling/grammar pass runs. Both are read by the submit handler below. ──
+  let compareMode = "excel";     // "excel" | "internal" | "both"
+  let runTypoCheck = true;
+
+  const MODE_HINT = {
+    excel: "Klaim dibandingkan dengan tabel Excel yang kamu unggah.",
+    internal: "Klaim dibandingkan dengan tabel yang tercetak di dalam PDF itu sendiri — " +
+              "berguna untuk memeriksa apakah narasi laporan konsisten dengan tabel & lampirannya. " +
+              "File Excel tidak diperlukan. Tabel dibaca AI dari setiap halaman, jadi prosesnya lebih lama.",
+    both: "Klaim dibandingkan dengan tabel Excel DAN tabel di dalam PDF. Klaim yang nilainya " +
+          "berbeda antara keduanya ditandai sebagai konflik — cara tercepat menemukan Excel dan " +
+          "laporan yang tidak sinkron. Paling lambat dari ketiga mode.",
+  };
+
+  (function initAdvancedSettings() {
+    const toggle = document.getElementById("adv-toggle");
+    const panel = document.getElementById("adv-panel");
+    const hint = document.getElementById("mode-hint");
+    const excelField = document.getElementById("excel-upload-field");
+    const excelLabel = document.getElementById("excel-upload-label");
+
+    toggle.addEventListener("click", () => {
+      panel.hidden = !panel.hidden;
+      toggle.setAttribute("aria-expanded", String(!panel.hidden));
+    });
+
+    function applyMode() {
+      hint.textContent = MODE_HINT[compareMode];
+      // The Excel column is dimmed rather than hidden: the user's file picks survive a
+      // round-trip through internal mode.
+      const optional = compareMode === "internal";
+      excelField.classList.toggle("is-muted", optional);
+      excelLabel.textContent = optional ? "Tabel Excel (tidak dipakai)" : "Tabel Excel";
+    }
+
+    document.getElementById("mode-segmented").addEventListener("click", (ev) => {
+      const btn = ev.target.closest(".seg-btn");
+      if (!btn) return;
+      compareMode = btn.dataset.mode;
+      panel.querySelectorAll(".seg-btn").forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-checked", String(on));
+      });
+      applyMode();
+    });
+
+    document.getElementById("typo-toggle").addEventListener("change", (ev) => {
+      runTypoCheck = ev.target.checked;
+    });
+
+    applyMode();
+  })();
+
   // Browse table
   let tableListLoaded = false;
   let currentTable = null;
@@ -1410,7 +1551,25 @@ body.auth-locked .app {
     // Support both old single-value fields and new list fields
     const units = data.excel_units || (data.excel_unit ? [data.excel_unit] : []);
     const uniqueUnits = [...new Set(units)].filter(Boolean);
-    const unitStr = uniqueUnits.length ? ` &middot; Unit: <strong>${uniqueUnits.map(escapeHtml).join(", ")}</strong>` : '';
+    // Internal mode contributes one unit per transcribed table, so cap the list: a dozen
+    // units would push the "Total Fakta" stat card out of shape.
+    const shownUnits = uniqueUnits.slice(0, 3).map(escapeHtml).join(", ")
+      + (uniqueUnits.length > 3 ? ", …" : "");
+    const unitStr = uniqueUnits.length ? ` &middot; Unit: <strong>${shownUnits}</strong>` : '';
+
+    const mode = data.mode || "excel";
+    const conflicts = data.conflict_count || 0;
+    const caveat = mode === "excel" ? "" : `<div class="mode-caveat">
+      <span class="material-symbols-outlined">info</span>
+      <span>Nilai pembanding pada mode ini dibaca AI dari tabel di dalam PDF, bukan dari file
+      Excel resmi. Periksa temuan penting langsung ke tabel aslinya.</span>
+    </div>`;
+    const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
+      <span class="material-symbols-outlined">rule</span>
+      <span><strong>${conflicts} klaim</strong> punya lebih dari satu sumber pembanding yang
+      nilainya <strong>tidak sama</strong>. Klaimnya sendiri bisa saja benar — yang berbeda
+      adalah tabel-tabel pembandingnya.</span>
+    </div>` : "";
 
     const header = `<div class="report-top">
       <div class="donut-wrap">${renderDonutSVG(e, r, i)}</div>
@@ -1424,7 +1583,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>`;
+    </div>${caveat}${conflictStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
@@ -1432,6 +1591,7 @@ body.auth-locked .app {
       <button class="filter-btn${defaultFilter === 'Refuted' ? ' active' : ''}" data-filter="Refuted">Tidak Sesuai (${r})</button>
       <button class="filter-btn" data-filter="Entailed">Sesuai (${e})</button>
       <button class="filter-btn" data-filter="Inconclusive">Tidak Cukup Data (${i})</button>
+      ${conflicts > 0 ? `<button class="filter-btn" data-filter="conflict">Sumber Bertentangan (${conflicts})</button>` : ""}
     </div>`;
 
     const uniqueSources = [...new Set(data.results.map((it) => it.matched_excel_source).filter(Boolean))];
@@ -1439,7 +1599,7 @@ body.auth-locked .app {
       .sort((a, b) => a - b);
 
     const sourceFilter = uniqueSources.length > 1
-      ? `<select id="fact-source-select" title="Filter berdasarkan sumber Excel">
+      ? `<select id="fact-source-select" title="Filter berdasarkan sumber pembanding">
           <option value="">Semua Sumber</option>
           ${uniqueSources.map((s) => `<option value="${escapeHtml(s)}">${escapeHtml(s)}</option>`).join("")}
         </select>` : "";
@@ -1514,11 +1674,30 @@ body.auth-locked .app {
             comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">terhadap klaim tren</span>`;
           }
 
+          // Sources that disagreed. The headline verdict above still comes from the
+          // best-matching source; these chips show what each source actually said.
+          const conflict = item.source_conflict || null;
+          const conflictBadge = conflict
+            ? `<span class="badge Conflict">${conflict === "internal"
+                ? "Tabel internal tidak konsisten" : "PDF vs Excel berbeda"}</span>`
+            : "";
+          const sourceValues = item.source_values || [];
+          const sourceChips = sourceValues.length > 1
+            ? `<div class="fact-sources">${sourceValues.map((sv, n) => {
+                const v = sv.computed_value !== null && sv.computed_value !== undefined
+                  ? fmtValue(sv.computed_value, sv.computed_unit === "persen_yoy" ? "persen_yoy" : sv.computed_unit)
+                  : VERDICT_LABEL[sv.verdict] || sv.verdict;
+                const cls = conflict && n > 0 ? " is-conflicting" : "";
+                return `<span class="fact-source-chip${cls}" title="${escapeHtml(sv.source)}">${escapeHtml(sv.source)}: ${escapeHtml(String(v))}</span>`;
+              }).join("")}</div>`
+            : "";
+
           const hidden = defaultFilter !== "all" && verdict !== defaultFilter ? " hidden-fact" : "";
           const searchText = escapeHtml(`${item.metric_label} ${item.context_quote || ""}`.toLowerCase());
-          return `<div class="fact-card ${verdict}${hidden}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-search="${searchText}">
+          return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-search="${searchText}">
             <div class="fact-card-top">
               <span class="badge ${badgeCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span>
+              ${conflictBadge}
               <span class="source-badge">${escapeHtml(opLabel)}</span>
               <span class="fact-metric">${escapeHtml(item.metric_label)}</span>
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
@@ -1528,6 +1707,7 @@ body.auth-locked .app {
             ${quote}
             ${periodChips}
             <div class="fact-comparison">${comparison}</div>
+            ${sourceChips}
           </div>`;
         }).join("");
 
@@ -1609,7 +1789,12 @@ body.auth-locked .app {
     function applyFilters() {
       const q = currentSearch.trim().toLowerCase();
       resultEl.querySelectorAll(".fact-card").forEach((card) => {
-        const matchesVerdict = currentVerdict === "all" || card.dataset.verdict === currentVerdict;
+        // "conflict" is a filter over a separate axis from the verdicts, so it can't just
+        // compare against data-verdict like the other chips do.
+        const matchesVerdict = currentVerdict === "all"
+          || (currentVerdict === "conflict"
+                ? card.dataset.conflict === "1"
+                : card.dataset.verdict === currentVerdict);
         const matchesSource  = !currentSource || card.dataset.source === currentSource;
         const matchesPage    = !currentPage || card.dataset.page === currentPage;
         const matchesSearch  = !q || card.dataset.search.includes(q);
@@ -1641,16 +1826,28 @@ body.auth-locked .app {
   // pipeline stage as it happens instead of showing one opaque spinner. Rows are listed in
   // pipeline order, but "typo" actually runs concurrently with extract/compare — each row
   // tracks its own state, so no row is waiting on the one above it.
-  const PAIRED_STAGES = [
-    ["pdf",     "Membaca PDF"],
-    ["excel",   "Parsing tabel Excel"],
-    ["extract", "Ekstraksi klaim"],
-    ["compare", "Membandingkan dengan Excel"],
-    ["typo",    "Cek ejaan & tata bahasa"],
-  ];
+  const STAGE_PDF     = ["pdf",     "Membaca PDF"];
+  const STAGE_EXCEL   = ["excel",   "Parsing tabel Excel"];
+  const STAGE_TABLES  = ["tables",  "Membaca tabel di dalam PDF"];
+  const STAGE_EXTRACT = ["extract", "Ekstraksi klaim"];
+  const STAGE_TYPO    = ["typo",    "Cek ejaan & tata bahasa"];
 
-  function renderProgressShell() {
-    const rows = PAIRED_STAGES.map(([key, label]) => `
+  // Which rows to show, per comparison mode. updateProgressStage no-ops on a stage it has no
+  // row for, so an unexpected event can never break the shell.
+  const PAIRED_STAGES_BY_MODE = {
+    excel:    [STAGE_PDF, STAGE_EXCEL, STAGE_EXTRACT, ["compare", "Membandingkan dengan Excel"]],
+    internal: [STAGE_PDF, STAGE_TABLES, STAGE_EXTRACT, ["compare", "Membandingkan dengan tabel internal"]],
+    both:     [STAGE_PDF, STAGE_EXCEL, STAGE_TABLES, STAGE_EXTRACT, ["compare", "Membandingkan dengan Excel & tabel internal"]],
+  };
+
+  function stagesFor(mode, withTypo) {
+    const stages = (PAIRED_STAGES_BY_MODE[mode] || PAIRED_STAGES_BY_MODE.excel).slice();
+    if (withTypo) stages.push(STAGE_TYPO);
+    return stages;
+  }
+
+  function renderProgressShell(stages) {
+    const rows = stages.map(([key, label]) => `
       <div class="progress-stage is-pending" data-stage="${key}">
         <span class="progress-icon"></span>
         <span class="progress-label">${label}</span>
@@ -1700,8 +1897,8 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames) {
-    resultEl.innerHTML = renderProgressShell();
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo) {
+    resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
     const ticker = setInterval(() => {
@@ -1712,7 +1909,8 @@ body.auth-locked .app {
     let failure = null;
     try {
       await streamNdjson(
-        `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}`,
+        `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
+          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}`,
         { method: "POST", body: formData },
         (ev) => {
           if (ev.type === "stage") updateProgressStage(resultEl, ev);
@@ -1745,9 +1943,17 @@ body.auth-locked .app {
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
     const resultEl = document.getElementById("paired-result");
     const pdfFiles = pdfSources.map(s => s.inp.files[0]).filter(Boolean);
-    const filledSources = excelSources.filter(s => s.inp.files.length > 0);
-    if (!pdfFiles.length || filledSources.length === 0) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF dan minimal satu file Excel terlebih dahulu.</div>`;
+    // Internal mode compares against the PDF's own tables, so the Excel column is ignored
+    // entirely — including any files still sitting in it.
+    const filledSources = compareMode === "internal"
+      ? []
+      : excelSources.filter(s => s.inp.files.length > 0);
+    if (!pdfFiles.length) {
+      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF terlebih dahulu.</div>`;
+      return;
+    }
+    if (compareMode !== "internal" && filledSources.length === 0) {
+      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu file Excel, atau pilih mode "Tabel dalam PDF" di Pengaturan Lanjutan.</div>`;
       return;
     }
     // One (file, sheet) source per SELECTED sheet: the same file part is appended once
@@ -1763,6 +1969,10 @@ body.auth-locked .app {
       perSource.push({ file: s.inp.files[0], sheets: selected });
     }
     const sheetNames = perSource.flatMap((p) => p.sheets).join(",");
+    // Snapshot the settings for the whole run, so flipping a toggle mid-run cannot make one
+    // PDF in the loop use different settings from the next.
+    const mode = compareMode;
+    const withTypo = runTypoCheck;
     const buildFormData = (pdf) => {
       const fd = new FormData();
       fd.append("pdf_file", pdf);
@@ -1791,7 +2001,7 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo);
       }
     });
   });
