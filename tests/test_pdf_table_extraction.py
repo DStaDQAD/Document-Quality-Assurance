@@ -14,6 +14,11 @@ from pdf_table_extraction import (
     _reconstruct_year_row,
     _unit_from_caption,
     _align_rows,
+    _cluster_visual_lines,
+    _join_visual_line,
+    _line_periods,
+    _line_row,
+    _tables_on_page,
     _labels_match,
     _text_layer_rows,
     _verify_against_text_layer,
@@ -231,6 +236,168 @@ def test_assemble_grid_omits_unit_row_when_no_unit_was_printed():
     grid = _assemble_grid(_table_out(unit=None))
     assert grid[0][0].startswith("Lampiran 1.")
     assert grid[1][0] == "Uang Beredar (M2)" or grid[1][1] == 2026
+
+
+# ---------------------------------------------------------------------------
+# Native reader — rebuild the table from the PDF's own text objects, no LLM at all.
+# The line shapes below are all measured on sample_data/M2-April-2026.pdf.
+# ---------------------------------------------------------------------------
+
+def test_line_periods_finds_the_longest_run_of_period_tokens():
+    # Page 8's header reassembles with its own label and stray neighbours attached; only the RUN
+    # is the header, which is why a fraction-of-the-line test is the wrong rule.
+    line = "Uraian Apr Mei Jun Jul Agu Sep Okt Nov Des Jan Feb Mar Apr Mei* Keterangan"
+    assert _line_periods(line) == [
+        "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+        "Jan", "Feb", "Mar", "Apr", "Mei*",
+    ]
+
+
+def test_line_periods_reads_years_written_into_the_tokens():
+    # Lampiran 5's header carries the year per column, so no year row is needed at all.
+    assert _line_periods("Mar'25 Apr'25 Mei'25 Jun'25") == \
+        ["Mar'25", "Apr'25", "Mei'25", "Jun'25"]
+
+
+@pytest.mark.parametrize("line", [
+    "M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun atau tumbuh 9,7% (yoy).",
+    "Uang Beredar (M2) 9.387,9 9.404,3 9.595,3",
+    "Apr Mei",                     # a run of two is not a header
+    "Keterangan:",
+])
+def test_line_periods_rejects_non_headers(line):
+    assert _line_periods(line) is None
+
+
+def test_line_row_splits_a_label_from_its_trailing_values():
+    assert _line_row("Uang Beredar (M2) 9.387,9 9.404,3 9.595,3") == \
+        ("Uang Beredar (M2)", [9387.9, 9404.3, 9595.3])
+
+
+def test_line_row_handles_a_label_that_contains_digits_and_footnotes():
+    label, values = _line_row("Surat Berharga Selain Saham ** 53,6 64,0 (49,8)")
+    assert label == "Surat Berharga Selain Saham **"
+    assert values == [53.6, 64.0, -49.8]
+
+
+@pytest.mark.parametrize("line", [
+    "M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun atau tumbuh 9,7% (yoy).",
+    "9.387,9 9.404,3 9.595,3",     # values with no label
+    "Keterangan:",
+    "Uang Kuasi 4.060,8",          # fewer than three values
+])
+def test_line_row_rejects_non_rows(line):
+    assert _line_row(line) is None
+
+
+def _m2_page_lines():
+    """Page 7's shape: caption, a wrapped unit, the year row, header, then rows."""
+    reading = [
+        (764.5, "Lampiran 1. Tabel Uang Beredar dan Faktor -Faktor yang Memengaruhinya"),
+        (758.0, "Valuta (Triliun Rp)"),
+        (747.7, "2025"),
+        (731.6, "Uang Beredar (M2) 9.387,9 9.404,3 9.595,3"),
+        (723.0, "Uang Beredar Sempit (M1) 5.223,6 5.224,9 5.407,7"),
+        (714.5, "Uang Kuasi 4.060,8 4.076,3 4.123,0"),
+        (700.0, "Keterangan:"),
+    ]
+    # The header arrives split across text objects; only the visual view reassembles it.
+    visual = [(739.9, "Uraian Apr Mei Jun"), (747.7, "2025")] + reading
+    return reading, visual
+
+
+def test_tables_on_page_rebuilds_a_table_from_lines():
+    tables, captions = _tables_on_page(*_m2_page_lines(), 7)
+    assert captions == 1
+    assert len(tables) == 1
+    table = tables[0]
+    assert table.verified is True, "a natively read table IS the text layer"
+    assert table.unit == "Triliun Rp", "the unit rides the caption's continuation line"
+
+    parsed = parse_generic_grid(table.grid)
+    assert parsed.axis_type == "temporal"
+    # The year is printed once; the periods say which columns it covers.
+    assert parsed.lookup_fuzzy("Uang Beredar (M2)", 2025, "Apr") == ("Uang Beredar (M2)", 9387.9)
+    assert parsed.lookup_fuzzy("Uang Kuasi", 2025, "Jun") == ("Uang Kuasi", 4123.0)
+
+
+def test_tables_on_page_refuses_to_date_an_ambiguous_header():
+    # Three months under TWO years cannot be assigned without guessing — there is no month wrap
+    # to place the boundary. The table is still read; it just does not claim to be a time series.
+    reading, visual = _m2_page_lines()
+    reading = reading + [(747.7, "2026")]
+    visual = visual + [(747.7, "2026")]
+    table = _tables_on_page(reading, visual, 7)[0][0]
+
+    parsed = parse_generic_grid(table.grid)
+    assert parsed.axis_type == "categorical"
+    assert "Uang Beredar (M2)" in parsed.row_labels
+
+
+def test_tables_on_page_separates_two_tables_sharing_a_page():
+    reading = [
+        (764.5, "Lampiran 4. Kredit yang Disalurkan (Triliun Rp)"),
+        (733.2, "Kredit Investasi 2.215,9 2.219,0 2.213,6"),
+        (724.0, "Kredit Modal Kerja 3.411,4 3.431,6 3.472,3"),
+        (530.7, "Keterangan:"),
+        (502.6, "Lampiran 5. Pertumbuhan Kredit (%, yoy)"),
+        (470.0, "Kredit Investasi 5,1 5,2 5,3"),
+        (460.0, "Kredit Modal Kerja 6,1 6,2 6,3"),
+    ]
+    reading = reading + [(745.0, "2025")]
+    visual = [(741.7, "Apr Mei Jun"), (478.8, "Mar'25 Apr'25 Mei'25")] + reading
+    tables, captions = _tables_on_page(reading, visual, 9)
+
+    assert captions == 2
+    assert [t.caption[:11] for t in tables] == ["Lampiran 4.", "Lampiran 5."]
+    assert [t.unit for t in tables] == ["Triliun Rp", "%, yoy"]
+    # Each table kept its OWN rows, not the other's.
+    first = parse_generic_grid(tables[0].grid)
+    second = parse_generic_grid(tables[1].grid)
+    assert first.lookup_fuzzy("Kredit Investasi", 2025, "Apr")[1] == 2215.9
+    assert second.lookup_fuzzy("Kredit Investasi", 2025, "Mar")[1] == 5.1
+
+
+def test_tables_on_page_drops_rows_that_do_not_fit_the_header():
+    # A row with more values than the header has columns cannot be placed, so it is left out
+    # rather than guessed at — the same policy the verification pass applies.
+    reading = [
+        (764.5, "Tabel 9. Komponen Uang Primer (triliun Rp)"),
+        (723.1, "Uang Primer adjusted 2.232,2 2.214,6 -0,8 14,3 14,2"),
+        (714.8, "Uang Kartal 1.301,1 1.323,7 1,7"),
+        (706.5, "Giro Bank Umum 887,5 837,6 -5,6"),
+    ]
+    visual = [(731.8, "Apr Mei* Apr'26")] + reading
+    tables, captions = _tables_on_page(reading, visual, 6)
+
+    assert captions == 1
+    assert len(tables) == 1
+    labels = parse_generic_grid(tables[0].grid).row_labels
+    assert "Uang Kartal" in labels
+    assert "Uang Primer adjusted" not in labels
+
+
+def test_tables_on_page_reports_a_caption_it_could_not_turn_into_a_table():
+    # SK-Juni-2026's appendix pages: the caption is text, the table itself is an image. The
+    # count mismatch is what makes the caller hand the page to the vision pass.
+    reading = [(753.3, "Tabel 2 Indeks Keyakinan Konsumen per Kelompok Pengeluaran")]
+    tables, captions = _tables_on_page(reading, list(reading), 9)
+    assert (tables, captions) == ([], 1)
+
+
+def test_join_visual_line_inserts_a_space_only_at_a_real_gap():
+    # (top, left, right, char) — 'ab' adjacent, then a wide gap, then 'cd'.
+    glyphs = [(700.0, 10.0, 15.0, "a"), (700.0, 15.2, 20.0, "b"),
+              (700.0, 40.0, 45.0, "c"), (700.0, 45.1, 50.0, "d")]
+    assert _join_visual_line(glyphs)[1] == "ab cd"
+
+
+def test_cluster_visual_lines_keeps_descenders_on_their_own_line():
+    # 'g' and ',' hang below the baseline; grouping by raw y would split one row in two.
+    glyphs = [(700.0, 10.0, 15.0, "P"), (698.5, 15.0, 20.0, "g"),
+              (680.0, 10.0, 15.0, "X")]
+    lines = _cluster_visual_lines(glyphs)
+    assert [text for _, text in lines] == ["Pg", "X"]
 
 
 # ---------------------------------------------------------------------------

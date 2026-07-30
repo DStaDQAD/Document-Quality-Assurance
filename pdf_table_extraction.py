@@ -56,8 +56,15 @@ from pdf_extraction import (
     render_pages_to_b64,
     vision_provider_flags,
 )
+from statistics import median
+
 from structured_extractor import _parse_indonesian_number
-from table_parser_generic import _MONTH_ABBREVS, _QUARTER_CANON, _bare_period_token
+from table_parser_generic import (
+    _MONTH_ABBREVS,
+    _QUARTER_CANON,
+    _bare_period_token,
+    _parse_period,
+)
 
 logger = logging.getLogger("fact-checker")
 
@@ -216,6 +223,10 @@ def _unit_from_caption(caption: str) -> str:
     if not match:
         return ""
     inner = match.group(1).strip()
+    if not inner or inner[0].isdigit():
+        # A numeric aside, not a unit — '(5,5%)' in 'Posisi GWM ... Januari 2020 (5,5%)'. A unit
+        # annotation never opens with a digit ('triliun Rp', '%, yoy', 'Indeks').
+        return ""
     return inner if _UNIT_WORDS.search(inner) else ""
 
 
@@ -543,6 +554,274 @@ def _verify_against_text_layer(tables: List["PdfTable"], pages_text: List[str]) 
 
 
 # ---------------------------------------------------------------------------
+# Native reader: rebuild the table from the PDF's own text objects, no LLM at all.
+#
+# Tried before the vision pass, and on a digital report it answers for every page, which is
+# what makes internal mode cheap: 10 vision calls and ~60s become zero and ~1s.
+#
+# It leans on the one thing PDFium gets right that raw geometry does not. Column x-positions
+# are clean (right edges land on a 27pt grid) but UNUSABLE on their own, because a label too
+# long for its column is drawn straight over the first data cell and their glyphs interleave:
+# '...dan Perikan' + '2' + 'a' + '9' + 'n' + '6,5'. Reading order, by contrast, follows the
+# content stream, which draws the whole label and then the values — so it separates them
+# perfectly. Coordinates are therefore used only for the y of each line, which is all that is
+# needed to put lines in visual order and to tell two tables on one page apart.
+# ---------------------------------------------------------------------------
+
+# A caption that opens a table. 'Grafik' is deliberately absent: a chart's data labels are not
+# a table, and reading them as one is the mistake the vision prompt also has to guard against.
+_CAPTION_RE = re.compile(r'^(?:Tabel|Lampiran)\s*[IVX\d]+[.\s]', re.IGNORECASE)
+
+# A line is the period header when this fraction of its tokens read as calendar periods.
+_HEADER_PERIOD_FRAC = 0.6
+
+
+def _line_row(line: str) -> Optional[Tuple[str, List[float]]]:
+    """(label, values) when a line is a data row, else None — the same rule as _text_layer_rows."""
+    tokens = line.split()
+    run = 0
+    for token in reversed(tokens):
+        if not _NUM_CELL_RE.match(token):
+            break
+        run += 1
+    if run < _MIN_ROW_CELLS or run == len(tokens):
+        return None
+    label = " ".join(tokens[:len(tokens) - run]).strip()
+    values = [_parse_indonesian_number(t) for t in tokens[-run:]]
+    if not label or any(v is None for v in values):
+        return None
+    return label, values
+
+
+def _line_periods(line: str) -> Optional[List[str]]:
+    """The longest run of consecutive period tokens on a line, else None.
+
+    A RUN rather than a fraction of the whole line, because a report page is two columns wide:
+    clustering glyphs by y to reassemble a header also drags in whatever the narrative column
+    prints at the same height, and a header row often carries its own label ('Uraian') too.
+    A run of three is already more than prose produces by accident.
+    """
+    tokens = line.split()
+    best: List[str] = []
+    current: List[str] = []
+    for token in tokens:
+        if _bare_period_token(token) or _parse_period(token):
+            current.append(token)
+            if len(current) > len(best):
+                best = list(current)
+        else:
+            current = []
+    return best if len(best) >= 3 else None
+
+
+# Glyphs whose tops sit within this many points belong to the same visual line. Needs to absorb
+# descenders ('g', ',') and the half-point drift PDFium reports across one row.
+_LINE_TOLERANCE = 3.0
+
+
+def _page_lines(pdf_bytes: bytes) -> Dict[int, Tuple[List[Tuple[float, str]], List[Tuple[float, str]]]]:
+    """Per page, two views of the same glyphs: (reading-order lines, visual lines).
+
+    Both are needed, for different jobs, because each is wrong for the other's:
+      - READING order follows the content stream, which draws a row's label and then its values.
+        It is the only view that separates the two when a label too long for its column is drawn
+        over the first data cell. Used for captions and data rows.
+      - VISUAL order (glyphs clustered by y, then sorted by x) is the only view that reassembles
+        a header split across several text objects — on page 8 of the M2 report the month row
+        arrives as 'Apr Mei Jun … Feb Apr' plus a stray 'Mar' and 'Mei*', and reading order
+        appends those at the end, giving 12 tokens for a 14-column table. Used for headers,
+        years and unit annotations.
+    """
+    import pypdfium2 as pdfium
+
+    pages: Dict[int, Tuple[List[Tuple[float, str]], List[Tuple[float, str]]]] = {}
+    doc = pdfium.PdfDocument(pdf_bytes)
+    try:
+        for index in range(len(doc)):
+            page = doc[index]
+            textpage = page.get_textpage()
+
+            reading: List[Tuple[float, str]] = []
+            buffer: List[str] = []
+            tops: List[float] = []
+            glyphs: List[Tuple[float, float, float, str]] = []   # (top, left, right, char)
+            for i in range(textpage.count_chars()):
+                char = textpage.get_text_range(i, 1)
+                if char == "\n":
+                    if buffer and tops:
+                        reading.append((median(tops), "".join(buffer)))
+                    buffer, tops = [], []
+                    continue
+                buffer.append(char)
+                if char.strip():
+                    left, _, right, top = textpage.get_charbox(i)
+                    tops.append(top)
+                    glyphs.append((top, left, right, char))
+            if buffer and tops:
+                reading.append((median(tops), "".join(buffer)))
+
+            pages[index + 1] = (reading, _cluster_visual_lines(glyphs))
+            textpage.close()
+            page.close()
+    finally:
+        doc.close()
+    return pages
+
+
+def _cluster_visual_lines(glyphs: List[Tuple[float, float, float, str]]) -> List[Tuple[float, str]]:
+    """Group glyphs into visual lines by y, then order each line left to right."""
+    if not glyphs:
+        return []
+    lines: List[Tuple[float, str]] = []
+    current: List[Tuple[float, float, float, str]] = []
+    for glyph in sorted(glyphs, key=lambda g: -g[0]):
+        if current and abs(current[0][0] - glyph[0]) > _LINE_TOLERANCE:
+            lines.append(_join_visual_line(current))
+            current = []
+        current.append(glyph)
+    lines.append(_join_visual_line(current))
+    return lines
+
+
+# A gap this wide between one glyph's right edge and the next one's left is a word/cell boundary.
+# Well under a space's own advance so a header cell like "Mei*" is never split, well over the
+# hairline PDFium leaves between adjacent letters.
+_CELL_GAP = 1.2
+
+
+def _join_visual_line(glyphs: List[Tuple[float, float, float, str]]) -> Tuple[float, str]:
+    parts: List[str] = []
+    previous_right: Optional[float] = None
+    for _, left, right, char in sorted(glyphs, key=lambda g: g[1]):
+        if previous_right is not None and left - previous_right > _CELL_GAP:
+            parts.append(" ")
+        parts.append(char)
+        previous_right = max(right, previous_right or right)
+    return median([g[0] for g in glyphs]), "".join(parts)
+
+
+_PAREN_ONLY_RE = re.compile(r'^\((.+)\)$')
+
+
+def _tables_on_page(
+    reading: List[Tuple[float, str]],
+    visual: List[Tuple[float, str]],
+    page_number: int,
+) -> Tuple[List[PdfTable], int]:
+    """(tables, captions_seen) for one page.
+
+    A table is a caption, the first period header below it, and the data rows below that until
+    the next caption. `captions_seen` lets the caller notice that a caption produced no table —
+    the page then counts as not understood, so the vision pass still gets a look at it instead
+    of the table going missing without a trace.
+
+    Rows whose value count disagrees with the header are dropped, for the same reason the
+    verification pass empties them: the line says how many values a row has, but not which
+    columns its gaps are in, so they cannot be placed.
+    """
+    # Captions from the READING view: a report page is two columns wide, so clustering glyphs by
+    # y merges the narrative column's prose into the caption's line and the anchor no longer bites.
+    captions = [(y, text.strip()) for y, text in reading
+                if _CAPTION_RE.match(text.strip())]
+    captions.sort(key=lambda item: -item[0])
+    if not captions:
+        return [], 0
+
+    tables: List[PdfTable] = []
+    for order, (caption_y, caption) in enumerate(captions):
+        floor = captions[order + 1][0] if order + 1 < len(captions) else float("-inf")
+
+        # Header, years and unit come from the VISUAL view: a header split across text objects
+        # only reassembles when its glyphs are sorted by x.
+        header_y: Optional[float] = None
+        periods: Optional[List[str]] = None
+        for y, text in sorted(visual, key=lambda item: -item[0]):
+            if not (floor < y < caption_y):
+                continue
+            found = _line_periods(text.strip())
+            if found is not None:
+                header_y, periods = y, found
+                break
+        if periods is None:
+            continue
+
+        # Years and the unit annotation come from the READING view for the same reason captions
+        # do: '(triliun Rp)' is its own line there, but in the visual view it is glued to
+        # whatever the narrative column prints beside it.
+        years: List[int] = []
+        unit = _unit_from_caption(caption)
+        for y, text in reading:
+            if not (header_y <= y < caption_y):
+                continue
+            for token in text.split():
+                if token.isdigit() and 1990 <= int(token) <= 2100:
+                    years.append(int(token))
+            # A long caption wraps, and the unit rides the continuation line: 'Tabel 3.
+            # Penghimpunan Dana Pihak Ketiga Berdasarkan' / 'Valuta (triliun Rp)'.
+            if not unit:
+                unit = _unit_from_caption(text.strip())
+
+        # Data rows come from the READING view, the only one that separates a label from the
+        # values it is printed over.
+        body = [
+            row for y, text in sorted(reading, key=lambda item: -item[0])
+            if floor < y < header_y
+            for row in [_line_row(text.strip())]
+            if row is not None and len(row[1]) == len(periods)
+        ]
+        if len(body) < 2:
+            continue
+
+        grid: List[List] = [[caption]]
+        if unit:
+            grid.append([f"({unit})"])
+        distinct = sorted(set(years))
+        if distinct:
+            grid.append(_reconstruct_year_row(
+                [None] + distinct + [None] * max(0, len(periods) - len(distinct)),
+                [None] + list(periods),
+            ))
+        grid.append([None] + list(periods))
+        grid.extend([label] + list(values) for label, values in body)
+        width = max(len(r) for r in grid)
+        tables.append(PdfTable(
+            page_number=page_number, caption=caption, unit=unit,
+            grid=[r + [None] * (width - len(r)) for r in grid],
+            index_on_page=len(tables), verified=True,
+        ))
+
+    return tables, len(captions)
+
+
+def extract_tables_natively(pdf_bytes: bytes) -> Tuple[List[PdfTable], set, int]:
+    """(tables, pages_answered, page_count) read straight out of the PDF, with no LLM involved.
+
+    A page counts as answered only when every caption on it became a table. A page with no text
+    layer, no caption, or a caption we could not turn into a table is left out of
+    `pages_answered`, and the caller sends that page through the vision pass — a page we only
+    half understand must not silently lose a table.
+    """
+    tables: List[PdfTable] = []
+    answered: set = set()
+    pages = _page_lines(pdf_bytes)
+    for page_number, (reading, visual) in pages.items():
+        found, captions_seen = _tables_on_page(reading, visual, page_number)
+        if found and len(found) == captions_seen:
+            tables.extend(found)
+            answered.add(page_number)
+        elif captions_seen:
+            logger.info(
+                "Page %d: read %d of %d captioned table(s) natively — leaving the page to the "
+                "vision pass.", page_number, len(found), captions_seen,
+            )
+    logger.info(
+        "Native reader recovered %d table(s) from %d of %d page(s) with no LLM call.",
+        len(tables), len(answered), len(pages),
+    )
+    return tables, answered, len(pages)
+
+
+# ---------------------------------------------------------------------------
 # Transcription cache (in-process, same contract as table_parser_llm._SPEC_CACHE)
 # ---------------------------------------------------------------------------
 
@@ -580,13 +859,17 @@ async def extract_tables_from_pdf(
     dpi: int = 150,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[PdfTable]:
-    """Transcribe every data table in the PDF, in page order.
+    """Every data table in the PDF, in page order.
+
+    Two strategies, native first: a page whose tables can be rebuilt from the PDF's own text
+    objects never reaches the vision model at all, which on a digital report means no LLM call
+    and no wait. Only the pages the native reader could not fully account for are transcribed.
 
     Never raises for a readable PDF: a page whose call fails or whose transcription fails the
     structural guards contributes no tables and is logged. An empty result is a valid outcome
     (the caller then finds no internal source and every claim comes back Inconclusive).
 
-    on_progress(done, total) is called after each page's call settles, for stage reporting.
+    on_progress(done, total) is called after each vision call settles, for stage reporting.
     """
     model_name = getattr(vision_llm, "model", None) or getattr(vision_llm, "model_name", "")
     key = _cache_key(pdf_bytes, dpi, str(model_name))
@@ -598,11 +881,33 @@ async def extract_tables_from_pdf(
             on_progress(1, 1)
         return cached
 
-    logger.info("Rendering PDF pages at %d DPI for table transcription", dpi)
+    def in_page_order(tables: List[PdfTable]) -> List[PdfTable]:
+        return sorted(tables, key=lambda t: (t.page_number, t.index_on_page))
+
+    native: List[PdfTable] = []
+    answered: set = set()
+    n_pages = 0
+    try:
+        native, answered, n_pages = await asyncio.to_thread(extract_tables_natively, pdf_bytes)
+    except Exception:
+        # A text layer we cannot walk simply means every page goes to the vision pass.
+        logger.exception("Native table reader failed; falling back to vision for every page")
+
+    if n_pages and len(answered) == n_pages:
+        logger.info(
+            "Every page read natively — no vision call needed for %d table(s).", len(native)
+        )
+        tables = in_page_order(native)
+        if on_progress is not None:
+            on_progress(1, 1)
+        _cache_put(key, tables)
+        return tables
+
+    logger.info("Rendering pages at %d DPI for table transcription", dpi)
     b64_pages = await asyncio.to_thread(render_pages_to_b64, pdf_bytes, dpi)
-    n_pages = len(b64_pages)
-    if not n_pages:
-        return []
+    todo = [i for i in range(len(b64_pages)) if (i + 1) not in answered]
+    if not todo:
+        return in_page_order(native)
 
     is_groq, is_gemini = vision_provider_flags(vision_llm)
     if not is_gemini:
@@ -613,13 +918,13 @@ async def extract_tables_from_pdf(
         )
 
     batches = [
-        list(range(i, min(i + _TABLE_PAGES_PER_CALL, n_pages)))
-        for i in range(0, n_pages, _TABLE_PAGES_PER_CALL)
+        todo[i:i + _TABLE_PAGES_PER_CALL]
+        for i in range(0, len(todo), _TABLE_PAGES_PER_CALL)
     ]
     semaphore, max_retries = plan_vision_concurrency(is_groq, is_gemini, len(batches))
     structured = vision_llm.with_structured_output(_PageTables)
     logger.info(
-        "Transcribing tables from %d page(s) in %d vision call(s)", n_pages, len(batches)
+        "Transcribing tables from %d page(s) in %d vision call(s)", len(todo), len(batches)
     )
 
     done = 0
@@ -673,21 +978,24 @@ async def extract_tables_from_pdf(
         return tables
 
     per_batch = await asyncio.gather(*[_transcribe(idxs) for idxs in batches])
-    tables = [t for batch in per_batch for t in batch]
+    transcribed = [t for batch in per_batch for t in batch]
 
     # The model has now read the layout. Wherever the file states the numbers itself, they
-    # replace the transcribed ones — see _verify_against_text_layer.
+    # replace the transcribed ones — see _verify_against_text_layer. Native tables are skipped:
+    # they ARE the text layer, so there is nothing to check them against.
     try:
         pages_text = await asyncio.to_thread(_extract_pages_raw, pdf_bytes)
-        _verify_against_text_layer(tables, pages_text)
+        _verify_against_text_layer(transcribed, pages_text)
     except Exception:
         # A text layer we cannot read leaves the transcription exactly as it was; the tables
         # stay marked unverified, which is the honest outcome, not a reason to fail.
         logger.exception("Text-layer verification skipped")
 
+    tables = in_page_order(native + transcribed)
     logger.info(
-        "Transcribed %d table(s) from %d page(s): %s",
-        len(tables), n_pages, ", ".join(t.label for t in tables) or "none",
+        "%d table(s) in total — %d read natively, %d transcribed: %s",
+        len(tables), len(native), len(transcribed),
+        ", ".join(t.label for t in tables) or "none",
     )
     _cache_put(key, tables)
     return tables
