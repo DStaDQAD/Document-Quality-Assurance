@@ -13,6 +13,10 @@ from pdf_table_extraction import (
     _PageTables,
     _reconstruct_year_row,
     _unit_from_caption,
+    _align_rows,
+    _labels_match,
+    _text_layer_rows,
+    _verify_against_text_layer,
     _PdfTableOut,
     extract_tables_from_pdf,
 )
@@ -227,6 +231,272 @@ def test_assemble_grid_omits_unit_row_when_no_unit_was_printed():
     grid = _assemble_grid(_table_out(unit=None))
     assert grid[0][0].startswith("Lampiran 1.")
     assert grid[1][0] == "Uang Beredar (M2)" or grid[1][1] == 2026
+
+
+# ---------------------------------------------------------------------------
+# Text-layer verification — where the file states the numbers, the file wins.
+# ---------------------------------------------------------------------------
+
+_PAGE_7_TEXT = """\
+ Departemen Statistik 7
+Lampiran 1. Tabel Uang Beredar dan Faktor -Faktor yang Memengaruhinya (Triliun Rp)
+Keterangan:
+*Angka sementara
+Apr Mei Jun
+Uang Beredar (M2) 9.387,9 9.404,3 9.595,3
+Uang Beredar Sempit (M1) 5.223,6 5.224,9 5.407,7
+Uang Kuasi 4.060,8 4.076,3 4.123,0
+"""
+
+
+def _three_col_table(**overrides):
+    base = dict(
+        caption="Lampiran 1. Tabel Uang Beredar dan Faktor-Faktor yang Memengaruhinya",
+        unit="(Triliun Rp)",
+        header_rows=[["", "2025", "2025", "2025"], ["", "Apr", "Mei", "Jun"]],
+        rows=[
+            ["Uang Beredar (M2)", "9.387,9", "9.404,3", "9.595,3"],
+            ["Uang Beredar Sempit (M1)", "5.223,6", "5.224,9", "5.407,7"],
+            ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],
+        ],
+    )
+    base.update(overrides)
+    return _PdfTableOut(**base)
+
+
+def _as_pdf_table(out, page=7):
+    return PdfTable(page_number=page, caption=out.caption or "", unit="Triliun Rp",
+                    grid=_assemble_grid(out))
+
+
+def _body(table, label):
+    return next(r for r in table.grid if r[0] == label)
+
+
+def test_text_layer_rows_reads_label_and_values():
+    rows = _text_layer_rows(_PAGE_7_TEXT)
+    assert [label for label, _ in rows] == [
+        "Uang Beredar (M2)", "Uang Beredar Sempit (M1)", "Uang Kuasi",
+    ]
+    assert rows[0][1] == [9387.9, 9404.3, 9595.3]
+
+
+def test_text_layer_rows_ignores_prose_and_headers():
+    text = (
+        "M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun atau tumbuh 9,7% (yoy).\n"
+        "Apr Mei Jun Jul\n"
+        "Posisi GWM Januari 2020 (5,5%), Mei 2020 (3%)\n"
+    )
+    assert _text_layer_rows(text) == []
+
+
+def test_verification_repairs_a_misread_digit():
+    # The measured case: 5.224,9 read as 5.274,9, which turned a correct 'M1 tumbuh 15,3%'
+    # into Tidak Sesuai.
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "9.387,9", "9.404,3", "9.595,3"],
+        ["Uang Beredar Sempit (M1)", "5.223,6", "5.274,9", "5.407,7"],
+        ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], ["", "", "", "", "", "", _PAGE_7_TEXT])
+
+    assert _body(table, "Uang Beredar Sempit (M1)")[1:] == [5223.6, 5224.9, 5407.7]
+    assert table.verified is True
+
+
+def test_verification_repairs_values_attached_to_the_wrong_label():
+    # The failure no structural check can see: the grid is well-formed, but a value row is
+    # attached to the label above it. Measured on Lampiran 6 of the M2 report.
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "5.223,6", "5.224,9", "5.407,7"],       # M1's values
+        ["Uang Beredar Sempit (M1)", "4.060,8", "4.076,3", "4.123,0"],  # Uang Kuasi's
+        ["Uang Kuasi", "1.000,0", "1.000,0", "1.000,0"],
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], ["", "", "", "", "", "", _PAGE_7_TEXT])
+
+    assert _body(table, "Uang Beredar (M2)")[1:] == [9387.9, 9404.3, 9595.3]
+    assert _body(table, "Uang Beredar Sempit (M1)")[1:] == [5223.6, 5224.9, 5407.7]
+    assert _body(table, "Uang Kuasi")[1:] == [4060.8, 4076.3, 4123.0]
+
+
+def test_verification_empties_a_row_whose_cell_count_disagrees():
+    # The text layer says how many values the row has, but not which columns the gaps are in.
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "9.387,9", "", "9.595,3"],
+        ["Uang Beredar Sempit (M1)", "5.223,6", "5.224,9", "5.407,7"],
+        ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], ["", "", "", "", "", "", _PAGE_7_TEXT])
+
+    assert all(c is None for c in _body(table, "Uang Beredar (M2)")[1:])
+    # An emptied row stops being an answer rather than becoming a wrong one.
+    assert "Uang Beredar (M2)" not in parse_generic_grid(table.grid).row_labels
+    # Its neighbours are untouched.
+    assert _body(table, "Uang Kuasi")[1:] == [4060.8, 4076.3, 4123.0]
+
+
+@pytest.mark.parametrize("transcribed,printed", [
+    # Measured on page 9 of the M2 report: the PDF prints these labels into columns too narrow
+    # to hold them, so the page is visually truncated and the model copies what it can see.
+    ("pertanianpeternakankehutanan", "pertanianpeternakankehutanandanperikanan"),
+    ("industripengolahandansejenisny", "industripengolahandansejenisnya"),
+    ("perdaganganhoteldanrestorar", "perdaganganhoteldanrestoran"),   # misread final letter
+    ("keuanganrealestatdanjasape", "keuanganrealestatdanjasaperusahaan"),
+])
+def test_labels_match_tolerates_visual_truncation(transcribed, printed):
+    assert _labels_match(transcribed, printed)
+
+
+@pytest.mark.parametrize("a,b", [
+    ("kreditinvestasi", "kreditkonsumsi"),
+    ("kreditmodalkerja", "kreditinvestasi"),
+    ("uangkuasi", "uangkartal"),
+    ("rupiah", "valas"),
+])
+def test_labels_match_rejects_different_rows(a, b):
+    assert not _labels_match(a, b)
+
+
+def test_align_rows_keeps_repeated_labels_in_order():
+    # 'pertambangan' appears once per credit type; only order tells the two apart.
+    transcribed = ["kreditinvestasi", "pertambangan", "kreditmodalkerja", "pertambangan"]
+    printed = ["kreditinvestasi", "pertambangan", "kreditmodalkerja", "pertambangan"]
+    assert _align_rows(transcribed, printed) == {0: 0, 1: 1, 2: 2, 3: 3}
+
+
+def test_align_rows_never_fuzzy_matches_a_label_that_exists_verbatim():
+    # Measured on page 10: 'Giro Bank Umum di BI' is a legitimate prefix of the SEPARATE row
+    # 'Giro Bank Umum di BI Adjusted 2)'. Fuzzy-pairing them filed one row's numbers under the
+    # other's name — 15 wrong cells. Both exist verbatim, so there was nothing to guess.
+    both = ["girobankumumdibi", "girobankumumdibiadjusted2"]
+    assert _align_rows(both, both) == {0: 0, 1: 1}
+    # Only the longer row transcribed: it must still take its OWN printed row, not the prefix.
+    assert _align_rows(["girobankumumdibiadjusted2"], both) == {0: 1}
+    # And the prefix row alone must take the prefix row.
+    assert _align_rows(["girobankumumdibi"], both) == {0: 0}
+
+
+def test_align_rows_skips_a_row_only_one_side_has():
+    transcribed = ["alpha", "hantu", "gamma"]
+    printed = ["alpha", "beta", "gamma"]
+    pairs = _align_rows(transcribed, printed)
+    assert pairs == {0: 0, 2: 2}, "the extra row must not drag the alignment out of order"
+
+
+def test_verification_empties_a_row_the_text_layer_does_not_contain():
+    # On a page whose text layer we can read, a real table row has to be in there. In practice
+    # these are the rows the model emitted out of order — the ones most likely to be carrying
+    # another row's numbers, which is exactly why they must not be kept.
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "9.387,9", "9.404,3", "9.595,3"],
+        ["Baris Yang Tidak Ada Di Text Layer", "1,0", "2,0", "3,0"],
+        ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], ["", "", "", "", "", "", _PAGE_7_TEXT])
+
+    assert all(c is None for c in _body(table, "Baris Yang Tidak Ada Di Text Layer")[1:])
+    assert _body(table, "Uang Beredar (M2)")[1:] == [9387.9, 9404.3, 9595.3]
+
+
+def test_every_surviving_value_on_a_verified_page_comes_from_the_text_layer():
+    # The invariant the whole pass exists to establish.
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "1,0", "2,0", "3,0"],                  # all wrong
+        ["Hantu", "9,9", "9,9", "9,9"],                              # not in the text layer
+        ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],             # correct already
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], ["", "", "", "", "", "", _PAGE_7_TEXT])
+
+    from_text = {v for _, values in _text_layer_rows(_PAGE_7_TEXT) for v in values}
+    survivors = [c for row in table.grid for c in row[1:] if isinstance(c, float)]
+    assert survivors, "the pass must not empty everything"
+    assert all(v in from_text for v in survivors)
+
+
+def test_verification_keeps_repeated_sub_labels_in_printed_order():
+    # A Lampiran repeats 'Rupiah'/'Valas' under different parents, so only the printed order
+    # tells them apart — which is why rows are aligned as sequences, not looked up by label.
+    text = (
+        "Simpanan Berjangka 100,0 200,0 300,0\n"
+        "Rupiah 10,0 20,0 30,0\n"
+        "Valas 1,0 2,0 3,0\n"
+        "Tabungan Lainnya 400,0 500,0 600,0\n"
+        "Rupiah 40,0 50,0 60,0\n"
+        "Valas 4,0 5,0 6,0\n"
+    )
+    out = _three_col_table(rows=[
+        ["Simpanan Berjangka", "100,0", "200,0", "300,0"],
+        ["Rupiah", "99,9", "99,9", "99,9"],
+        ["Valas", "99,9", "99,9", "99,9"],
+        ["Tabungan Lainnya", "400,0", "500,0", "600,0"],
+        ["Rupiah", "99,9", "99,9", "99,9"],
+        ["Valas", "99,9", "99,9", "99,9"],
+    ])
+    table = _as_pdf_table(out, page=1)
+    _verify_against_text_layer([table], [text])
+
+    rupiah = [r for r in table.grid if r[0] == "Rupiah"]
+    valas = [r for r in table.grid if r[0] == "Valas"]
+    assert rupiah[0][1:] == [10.0, 20.0, 30.0]
+    assert rupiah[1][1:] == [40.0, 50.0, 60.0]
+    assert valas[0][1:] == [1.0, 2.0, 3.0]
+    assert valas[1][1:] == [4.0, 5.0, 6.0]
+
+
+def test_verification_leaves_a_scanned_page_untouched_and_unverified():
+    out = _three_col_table(rows=[
+        ["Uang Beredar (M2)", "9.387,9", "9.404,3", "9.595,3"],
+        ["Uang Kuasi", "4.060,8", "4.076,3", "4.123,0"],
+    ])
+    table = _as_pdf_table(out)
+    _verify_against_text_layer([table], [""] * 10)   # no text layer on any page
+
+    assert _body(table, "Uang Beredar (M2)")[1:] == [9387.9, 9404.3, 9595.3]
+    assert table.verified is False, "a scanned page's numbers really are the model's"
+
+
+def test_verification_aligns_across_two_tables_sharing_a_page():
+    text = (
+        "Alpha 1,0 2,0 3,0\n"
+        "Beta 4,0 5,0 6,0\n"
+        "Gamma 7,0 8,0 9,0\n"
+        "Delta 10,0 11,0 12,0\n"
+    )
+    first = _as_pdf_table(_three_col_table(caption="Lampiran 4. Satu", rows=[
+        ["Alpha", "0,0", "0,0", "0,0"], ["Beta", "0,0", "0,0", "0,0"],
+    ]), page=9)
+    second = _as_pdf_table(_three_col_table(caption="Lampiran 5. Dua", rows=[
+        ["Gamma", "0,0", "0,0", "0,0"], ["Delta", "0,0", "0,0", "0,0"],
+    ]), page=9)
+    second.index_on_page = 1
+    _verify_against_text_layer([first, second], [""] * 8 + [text])
+
+    assert _body(first, "Alpha")[1:] == [1.0, 2.0, 3.0]
+    assert _body(second, "Delta")[1:] == [10.0, 11.0, 12.0]
+
+
+def test_extract_tables_marks_tables_verified_when_a_text_layer_exists():
+    llm, _ = _gemini_llm(_PageTables(tables=[_three_col_table()]))
+    with patch("pdf_table_extraction.render_pages_to_b64", return_value=["a"]), \
+         patch("pdf_table_extraction._extract_pages_raw", return_value=[_PAGE_7_TEXT]):
+        tables = asyncio.run(extract_tables_from_pdf(b"%PDF-fake", llm))
+
+    assert tables[0].verified is True
+
+
+def test_extract_tables_survives_an_unreadable_text_layer():
+    llm, _ = _gemini_llm(_PageTables(tables=[_three_col_table()]))
+    with patch("pdf_table_extraction.render_pages_to_b64", return_value=["a"]), \
+         patch("pdf_table_extraction._extract_pages_raw", side_effect=RuntimeError("corrupt")):
+        tables = asyncio.run(extract_tables_from_pdf(b"%PDF-fake", llm))
+
+    assert len(tables) == 1
+    assert tables[0].verified is False
 
 
 # ---------------------------------------------------------------------------

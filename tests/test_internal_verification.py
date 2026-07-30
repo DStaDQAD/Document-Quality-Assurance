@@ -60,7 +60,8 @@ def _facts_returning(facts):
     )
 
 
-def _internal_pdf_table(page=7, caption="Lampiran 1. Uang Beredar", apr="10.355,1", unit="(Triliun Rp)"):
+def _internal_pdf_table(page=7, caption="Lampiran 1. Uang Beredar", apr="10.355,1",
+                        unit="(Triliun Rp)", verified=True):
     out = _PdfTableOut(
         caption=caption, unit=unit,
         header_rows=[["", "2026", "2026"], ["", "Mar", "Apr"]],
@@ -68,7 +69,7 @@ def _internal_pdf_table(page=7, caption="Lampiran 1. Uang Beredar", apr="10.355,
     )
     return PdfTable(
         page_number=page, caption=caption, unit=(unit or "").strip("()"),
-        grid=_assemble_grid(out),
+        grid=_assemble_grid(out), verified=verified,
     )
 
 
@@ -278,7 +279,8 @@ def test_internal_mode_reports_a_conflict_between_two_pdf_tables():
 
 
 def test_unparseable_pdf_table_degrades_to_pointer_only_instead_of_failing():
-    junk = PdfTable(page_number=3, caption="Grafik 1", unit="", grid=[["only"], ["text"]])
+    junk = PdfTable(page_number=3, caption="Grafik 1", unit="", grid=[["only"], ["text"]],
+                    verified=True)
     with _facts_returning([]):
         response = asyncio.run(verify_paired(
             narrative_text="[== Halaman 1 ==]\nteks", excel_sources=[], llm=None,
@@ -286,6 +288,19 @@ def test_unparseable_pdf_table_degrades_to_pointer_only_instead_of_failing():
         ))
 
     assert response.excel_parsers == ["pdf-pointer-only"]
+
+
+def test_a_table_off_a_scanned_page_is_reported_as_unverified():
+    # The one case where the numbers really are the model's: no text layer to check against.
+    # A reviewer weighing a verdict has to be able to tell those tables apart.
+    with _facts_returning([]):
+        response = asyncio.run(verify_paired(
+            narrative_text="[== Halaman 1 ==]\nteks", excel_sources=[], llm=Mock(),
+            pdf_filename="scan.pdf", mode="internal",
+            pdf_tables=[_internal_pdf_table(verified=False)],
+        ))
+
+    assert response.excel_parsers == ["pdf-generic-unverified"]
 
 
 def test_excel_mode_response_is_unchanged_by_the_new_fields():

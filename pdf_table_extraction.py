@@ -14,28 +14,43 @@ Why VISION and not the text layer, for every page, unconditionally:
     row/column geometry from that stream is guesswork; a rendered page shows the model the
     actual grid.
 
-THE HONEST CAVEAT: unlike every other path in this project, the reference numbers here are
-produced by an LLM reading an image, not by code reading a spreadsheet. Nothing in the prompt
-can make that airtight. Two things contain it: the structural rejection rules below (a garbled
-transcription is dropped, not used), and the fact that a report states most series twice —
-snippet AND Lampiran — so a hallucinated cell tends to surface as a reported CONFLICT between
-two internal sources rather than a silently wrong verdict.
+So the model reads the LAYOUT off the image. It does not get to supply the numbers whenever
+they can be obtained otherwise: on a page that has a text layer, every transcribed value is
+replaced by the one PDFium reads out of the file, and a row that cannot be matched up is
+emptied rather than trusted (see _verify_against_text_layer). That keeps this module inside the
+project's standing rule — the LLM points, code reads the value — which is the same division of
+labour cell_pointer.py uses.
+
+Measured on sample_data/M2-April-2026.pdf before that verification existed, against the text
+layer of its two single-table pages: Lampiran 1 (29x15) came back ~98% correct, but Lampiran 6
+(46x18) only ~73%, and its errors were not misread digits — whole value ROWS were attached to
+the wrong label, which no structural check can see because the result stays perfectly
+well-formed. One misread digit is enough to flip a verdict: 5.224,9 read as 5.274,9 turned a
+correct "M1 tumbuh 15,3%" into Tidak Sesuai.
+
+THE REMAINING CAVEAT: a scanned page has no text layer to check against, so there the numbers
+really are the model's. Such tables are reported as "pdf-*-unverified" so a reviewer can tell
+them apart. What contains them is self-consistency — a report states most series twice, snippet
+AND Lampiran, so a bad cell tends to surface as a reported CONFLICT between two internal
+sources rather than a silently wrong verdict.
 """
 
 import asyncio
+import difflib
 import hashlib
 import logging
 import os
 import re
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from typing import Callable, List, Optional
+from typing import Callable, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from pydantic import BaseModel, Field
 
 from pdf_extraction import (
+    _extract_pages_raw,
     call_vision_with_retry,
     plan_vision_concurrency,
     render_pages_to_b64,
@@ -52,9 +67,9 @@ logger = logging.getLogger("fact-checker")
 # call is logged and skipped.
 _TABLE_PAGES_PER_CALL = int(os.getenv("PDF_TABLE_PAGES_PER_CALL", "1"))
 
-# Bump when the prompt or the assembly logic changes: it is part of the cache key, so stale
-# transcriptions from a previous prompt can never be served.
-_PROMPT_VERSION = "1"
+# Bump when the prompt, the assembly logic or the verification pass changes: it is part of the
+# cache key, so stale transcriptions from a previous version can never be served.
+_PROMPT_VERSION = "2"
 
 _MAX_CACHE_ENTRIES = 8
 
@@ -67,6 +82,10 @@ class PdfTable:
     unit: str                              # "Triliun Rp" | "%, yoy" | ""
     grid: List[List] = field(default_factory=list)   # assembled; numeric cells are int/float
     index_on_page: int = 0
+    # True when this table's page had a text layer, so every value the grid still carries was
+    # read out of the file by code rather than off the image by the model. False for a scanned
+    # page — worth surfacing, since only then are the numbers the model's own.
+    verified: bool = False
 
     @property
     def label(self) -> str:
@@ -333,6 +352,197 @@ def _is_usable(table: _PdfTableOut, page_number: int) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Text-layer verification: where the file states the numbers, the file wins
+# ---------------------------------------------------------------------------
+
+# A text-layer line needs a run of at least this many numeric tokens at its end to be read as a
+# table row. 3 is the floor prose never reaches: numbers in a sentence are separated by words,
+# so its longest trailing run is 1-2 (the same reasoning as pdf_extraction._trailing_numeric_run).
+_MIN_ROW_CELLS = 3
+
+
+def _norm_label(text) -> str:
+    """Collapse a row label to comparable form: letters and digits only, lowercased.
+
+    PDFium reproduces BI labels with stray spacing around hyphens ('Faktor -Faktor') and the
+    model does not, so anything but alphanumerics has to go before the two can be compared.
+    """
+    return re.sub(r'[^a-z0-9]', '', str(text).lower())
+
+
+# How similar two normalised labels must be to be the same row. Below this, a pair like
+# 'kreditinvestasi' / 'kreditkonsumsi' (~0.55) must not be treated as a match.
+_LABEL_SIM = 0.85
+# Shortest label for which one being a prefix of the other is evidence rather than coincidence.
+_PREFIX_MIN = 12
+
+
+def _labels_match(transcribed: str, printed: str) -> bool:
+    """Whether a transcribed row label could be a garbled rendering of a printed one.
+
+    Exact equality is not enough, because a BI table prints long labels into columns too narrow
+    to hold them and the page is VISUALLY truncated — the model copies what it can see
+    ('Industri Pengolahan dan sejenisny.', 'Perdagangan, Hotel, dan Restorar') while the text
+    layer carries the whole string. Both a clean truncation and a misread final character have
+    to be tolerated, or those rows lose their values for no good reason.
+
+    Only ever consulted for labels that have NO exact counterpart (see _align_rows). On its own
+    this test is too generous to be safe: 'Giro Bank Umum di BI' is a legitimate prefix of the
+    separate row 'Giro Bank Umum di BI Adjusted 2)', and pairing those two put one row's numbers
+    under the other's name — measured on page 10 of the M2 report.
+    """
+    if transcribed == printed:
+        return True
+    if len(transcribed) >= _PREFIX_MIN and printed.startswith(transcribed):
+        return True
+    if len(printed) >= _PREFIX_MIN and transcribed.startswith(printed):
+        return True
+    return difflib.SequenceMatcher(None, transcribed, printed).ratio() >= _LABEL_SIM
+
+
+def _align_rows(transcribed: List[str], printed: List[str]) -> Dict[int, int]:
+    """Map transcribed row index -> text-layer row index, preserving printed order.
+
+    A longest-common-subsequence alignment rather than a label lookup: a Lampiran repeats
+    sub-labels ('Pertambangan dan Penggalian' once per credit type, 'Rupiah' and 'Valas' under
+    several parents), so order is the only thing that tells two same-named rows apart. Keeping
+    the alignment monotonic is also what stops a fuzzy label match from pairing rows that sit in
+    different parts of the table.
+
+    Fuzzy matching is a LAST RESORT, permitted only between two labels that each have no exact
+    counterpart on the other side. When a label appears verbatim in both sequences there is
+    nothing to guess about, and guessing anyway is what mispaired 'Giro Bank Umum di BI Adjusted
+    2)' with 'Giro Bank Umum di BI'.
+    """
+    transcribed_set, printed_set = set(transcribed), set(printed)
+
+    def match(a: str, b: str) -> bool:
+        if a == b:
+            return True
+        if a in printed_set or b in transcribed_set:
+            return False
+        return _labels_match(a, b)
+
+    n, m = len(transcribed), len(printed)
+    # best[i][j] = size of the best alignment of transcribed[i:] against printed[j:]
+    best = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n - 1, -1, -1):
+        for j in range(m - 1, -1, -1):
+            if match(transcribed[i], printed[j]):
+                best[i][j] = 1 + best[i + 1][j + 1]
+            else:
+                best[i][j] = max(best[i + 1][j], best[i][j + 1])
+
+    pairs: Dict[int, int] = {}
+    i = j = 0
+    while i < n and j < m:
+        if match(transcribed[i], printed[j]) and best[i][j] == 1 + best[i + 1][j + 1]:
+            pairs[i] = j
+            i += 1
+            j += 1
+        elif best[i + 1][j] >= best[i][j + 1]:
+            i += 1
+        else:
+            j += 1
+    return pairs
+
+
+def _text_layer_rows(page_text: str) -> List[Tuple[str, List[float]]]:
+    """The (label, values) pairs a page's text layer states, in printed order.
+
+    A row is a line ending in a run of >= _MIN_ROW_CELLS numeric cells; everything before that
+    run is the label. Returns [] for a page with no text layer, which is the scanned case.
+    """
+    rows: List[Tuple[str, List[float]]] = []
+    for line in page_text.split("\n"):
+        tokens = line.split()
+        run = 0
+        for token in reversed(tokens):
+            if not _NUM_CELL_RE.match(token):
+                break
+            run += 1
+        if run < _MIN_ROW_CELLS or run == len(tokens):
+            continue
+        label = " ".join(tokens[:len(tokens) - run]).strip()
+        values = [_parse_indonesian_number(t) for t in tokens[-run:]]
+        if not label or any(v is None for v in values):
+            continue
+        rows.append((label, values))
+    return rows
+
+
+def _verify_against_text_layer(tables: List["PdfTable"], pages_text: List[str]) -> None:
+    """Replace transcribed numbers with the ones the PDF itself states. Mutates `tables`.
+
+    Rows are aligned as SEQUENCES, not looked up by label — see _align_rows.
+
+    A matched row's values are taken from the text layer wholesale — that repairs a misread
+    digit AND a value row attached to the wrong label, the failure mode that defeats every
+    structural check.
+
+    Two kinds of row are EMPTIED rather than patched, which makes the invariant absolute: on a
+    page with a text layer, every number a grid still carries was read out of the file by code.
+      - the cell COUNT disagrees. The text layer says how many values the row has but not which
+        columns its gaps are in, so there is no honest way to place them.
+      - no text-layer row aligned to it. On a page whose text layer we can read, a real table
+        row has to be in there; failing to find it means we cannot vouch for the values, and in
+        practice these are the rows whose labels the model emitted out of order — the very ones
+        most likely to be carrying another row's numbers.
+    An emptied row simply stops being an answer (parse_generic_grid keeps no label that has no
+    value), which sends the claim to another source or to Inconclusive rather than to a wrong
+    verdict.
+    """
+    by_page: Dict[int, List["PdfTable"]] = {}
+    for table in tables:
+        by_page.setdefault(table.page_number, []).append(table)
+
+    for page_number, page_tables in by_page.items():
+        page_text = pages_text[page_number - 1] if page_number <= len(pages_text) else ""
+        truth = _text_layer_rows(page_text)
+        if not truth:
+            continue   # scanned page: nothing to check against, transcription stands as-is
+
+        # Every body row on the page, across its tables, in printed order.
+        body: List[Tuple["PdfTable", List]] = [
+            (table, row)
+            for table in sorted(page_tables, key=lambda t: t.index_on_page)
+            for row in table.grid
+            if row and isinstance(row[0], str) and any(isinstance(c, (int, float)) for c in row[1:])
+        ]
+        if not body:
+            continue
+
+        matched = _align_rows(
+            [_norm_label(row[0]) for _, row in body],
+            [_norm_label(label) for label, _ in truth],
+        )
+
+        fixed = emptied = unmatched = 0
+        for index, (table, row) in enumerate(body):
+            table.verified = True
+            positions = [c for c, cell in enumerate(row) if c and isinstance(cell, (int, float))]
+            values = truth[matched[index]][1] if index in matched else None
+            if values is None or len(positions) != len(values):
+                for c in positions:
+                    row[c] = None
+                if values is None:
+                    unmatched += 1
+                else:
+                    emptied += 1
+                continue
+            for c, value in zip(positions, values):
+                if abs(row[c] - value) >= 0.05:
+                    fixed += 1
+                row[c] = value
+
+        logger.info(
+            "Page %d verified against the text layer: %d cell(s) corrected, %d row(s) emptied "
+            "(cell count disagreed), %d row(s) emptied (no matching text-layer row).",
+            page_number, fixed, emptied, unmatched,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Transcription cache (in-process, same contract as table_parser_llm._SPEC_CACHE)
 # ---------------------------------------------------------------------------
 
@@ -464,6 +674,17 @@ async def extract_tables_from_pdf(
 
     per_batch = await asyncio.gather(*[_transcribe(idxs) for idxs in batches])
     tables = [t for batch in per_batch for t in batch]
+
+    # The model has now read the layout. Wherever the file states the numbers itself, they
+    # replace the transcribed ones — see _verify_against_text_layer.
+    try:
+        pages_text = await asyncio.to_thread(_extract_pages_raw, pdf_bytes)
+        _verify_against_text_layer(tables, pages_text)
+    except Exception:
+        # A text layer we cannot read leaves the transcription exactly as it was; the tables
+        # stay marked unverified, which is the honest outcome, not a reason to fail.
+        logger.exception("Text-layer verification skipped")
+
     logger.info(
         "Transcribed %d table(s) from %d page(s): %s",
         len(tables), n_pages, ", ".join(t.label for t in tables) or "none",

@@ -1227,9 +1227,14 @@ async def verify_paired(
     # source) — the PDF value then shows up as the second source_values entry instead of
     # silently changing numbers the user already trusts.
     for table_from_pdf in (pdf_tables or []):
+        # "verified" means the values came out of the PDF's text layer rather than off the
+        # rendered image (see pdf_table_extraction._verify_against_text_layer). Surfaced in the
+        # parser name because it is the difference between a code-read number and a model-read
+        # one, which a reviewer weighing a verdict needs to know.
+        suffix = "" if table_from_pdf.verified else "-unverified"
         try:
             table, parser_used = _parse_grid_with_fallback(table_from_pdf.grid, llm=llm)
-            parser_used = f"pdf-{parser_used}"
+            parser_used = f"pdf-{parser_used}{suffix}"
             pointer_only = False
         except ValueError as parse_error:
             # The grid exists by construction, so a parse failure always degrades to
@@ -1239,7 +1244,7 @@ async def verify_paired(
                 table_from_pdf.label, parse_error,
             )
             table = BITableData(title=table_from_pdf.caption, unit=table_from_pdf.unit, row_labels=[])
-            parser_used = "pdf-pointer-only"
+            parser_used = f"pdf-pointer-only{suffix}"
             pointer_only = True
         # The transcription carries the printed unit annotation; trust it over a parser that
         # inferred nothing (an empty unit blocks every level-claim unit conversion).
