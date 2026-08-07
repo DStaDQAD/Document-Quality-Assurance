@@ -29,6 +29,8 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+from table_model import _sig_words
+
 logger = logging.getLogger("fact-checker")
 
 # Maps full month names (English and Indonesian) to 3-letter abbreviations.
@@ -438,8 +440,16 @@ _PAGE_MARKER_PATTERN = re.compile(r'\[== Halaman (\d+) ==\]')
 # Indonesian abbreviations ("s.d.", "a.l.") and list numbering ("1.") from splitting a
 # sentence. Digit-internal dots ("10.355,1") never match because no whitespace follows.
 # "==]" treats the end of a page marker as a boundary too.
-_SENT_START_RE = re.compile(r"(?:(?<!\b\w)[.!?]|==\])\s+(?=[\"'“(\[*]*\s*[A-Z0-9])")
-_SENT_END_RE = re.compile(r"(?<!\b\w)[.!?](?=\s|$)")
+#
+# (?<=[,.]\d) exempts the final digit of a DECIMAL from that guard. These reports end
+# sentences on a figure constantly ("...meskipun lebih rendah dibandingkan bulan sebelumnya
+# sebesar 112,2."), and because the '2' sits at a word boundary after the comma, the bare
+# guard read it as a one-letter abbreviation and the sentence never terminated. Expansion
+# then ran past the paragraph until the 600-char cap gave up, so a claim was quoted — and
+# located — against three sentences at once.
+_SENT_BOUNDARY = r"(?:(?<=[,.]\d)|(?<!\b\w))[.!?]"
+_SENT_START_RE = re.compile(rf"(?:{_SENT_BOUNDARY}|==\])\s+(?=[\"'“(\[*]*\s*[A-Z0-9])")
+_SENT_END_RE = re.compile(rf"{_SENT_BOUNDARY}(?=\s|$)")
 
 
 def _normalize_ws(text: str) -> str:
@@ -447,19 +457,26 @@ def _normalize_ws(text: str) -> str:
     return re.sub(r'\s+', ' ', text)
 
 
-def _locate_anchor(anchor: str, normalized: str) -> Optional[Tuple[int, int]]:
-    """Find a verbatim anchor inside whitespace-normalized text.
+def _all_occurrences(needle: str, haystack: str) -> List[Tuple[int, int]]:
+    spans = []
+    pos = haystack.find(needle)
+    while pos != -1:
+        spans.append((pos, pos + len(needle)))
+        pos = haystack.find(needle, pos + 1)
+    return spans
 
-    Tries an exact substring match first (the common case for short anchors), then
-    falls back to sliding a 6-word window across the anchor so longer quotes whose
-    first words differ from the source (mid-sentence starts, LLM prefix drift) still
-    match. Returns the (start, end) span of whatever was matched, or None.
+
+def _anchor_candidates(anchor_norm: str, normalized: str) -> List[Tuple[int, int]]:
+    """Every span where the anchor occurs, in document order.
+
+    Exact match first (the common case for short anchors), then a 6-word window slid across
+    the anchor so longer quotes whose first words differ from the source (mid-sentence starts,
+    LLM prefix drift) still match. The first form that matches anything wins outright.
     """
-    anchor_norm = _normalize_ws(anchor.strip())
     if len(anchor_norm) >= 10:
-        pos = normalized.find(anchor_norm)
-        if pos != -1:
-            return pos, pos + len(anchor_norm)
+        spans = _all_occurrences(anchor_norm, normalized)
+        if spans:
+            return spans
 
     words = anchor_norm.split()
     n = 6  # window length in words
@@ -470,10 +487,53 @@ def _locate_anchor(anchor: str, normalized: str) -> Optional[Tuple[int, int]]:
         window = " ".join(words[start : start + n])
         if len(window) < 15:
             continue
-        pos = normalized.find(window)
-        if pos != -1:
-            return pos, pos + len(window)
-    return None
+        spans = _all_occurrences(window, normalized)
+        if spans:
+            return spans
+    return []
+
+
+def _anchor_fit(
+    normalized: str, span: Tuple[int, int], metric_words: set, value_text: Optional[str]
+) -> Tuple[int, bool]:
+    """How well the sentence around one candidate span matches the fact that quoted it.
+
+    Ranked on metric-name overlap FIRST and the claimed number only as a tie-break. A report
+    repeats its stock phrases ("berada pada level optimis" occurs 7 times in SK Juni 2026) while
+    naming a different indicator each time, so the indicator is the reliable signal; the number
+    is not, because a threshold claim's bound ("100") is often printed in sentences about other
+    metrics too. Weighing the number first would have pulled the IPDG claim onto page 1's IKK
+    sentence, which is exactly the mislocation this function exists to prevent.
+    """
+    sentence = _expand_anchor_to_sentence(normalized, span[0], span[1]) or normalized[
+        max(0, span[0] - 200) : span[1] + 200
+    ]
+    overlap = len(metric_words & _sig_words(sentence))
+    return overlap, bool(value_text and value_text in sentence)
+
+
+def _locate_anchor(
+    anchor: str,
+    normalized: str,
+    metric_words: Optional[set] = None,
+    value_text: Optional[str] = None,
+) -> Optional[Tuple[int, int]]:
+    """Find a verbatim anchor inside whitespace-normalized text.
+
+    Returns the (start, end) span of the best occurrence, or None. Without `metric_words` the
+    FIRST occurrence wins, which is all a caller holding a whole sentence needs. Facts pass
+    their metric names so an anchor that occurs several times lands on the sentence that
+    actually made the claim — see _anchor_fit. Getting this wrong is not merely cosmetic: the
+    quote and page shown to the reader come from here, and so does the text every narrative
+    guard reads, so a mislocated anchor silently disarms them.
+    """
+    spans = _anchor_candidates(_normalize_ws(anchor.strip()), normalized)
+    if not spans:
+        return None
+    if metric_words is None or len(spans) == 1:
+        return spans[0]
+    # max() keeps the first of equally-fitting spans, so ties still resolve to the earliest.
+    return max(spans, key=lambda s: _anchor_fit(normalized, s, metric_words, value_text))
 
 
 def _page_at(normalized: str, pos: int) -> Optional[int]:
@@ -551,6 +611,31 @@ def _classify_line(line: str) -> str:
     return "table" if numeric / len(tokens) > 0.55 else "narrative"
 
 
+# A wrapped sentence's TAIL: starts lowercase (so not a heading, a caption, or a new
+# sentence) and the line before it did not close a sentence. Both halves matter — "kota."
+# alone could be a table cell, and a lowercase line after a completed sentence is more
+# likely stray layout text than prose.
+_CONTINUATION_START_RE = re.compile(r'^[\"\'“(\[]*[a-z]')
+_SENTENCE_CLOSED_RE = re.compile(r'[.!?][\"\'”)\]]*$')
+
+
+def _is_sentence_continuation(line: str, prev_kept: Optional[str]) -> bool:
+    """True when a too-short line is the tail of the previous line's sentence.
+
+    Rule 4 drops lines under 6 tokens to get rid of table cells and headings, and in a
+    two-column report that also swallows the last fragment of a wrapped sentence. Observed on
+    SK Juni 2026: "…sementara peningkatan IKK terjadi" / "di beberapa kota." split across two
+    lines, and dropping the 3-token tail cost BOTH the subset phrase the unnamed-subset guard
+    keys on AND the full stop — so sentence expansion then ran past the end of the paragraph
+    and the claim was displayed, and checked, as a bare anchor (see _expand_anchor_to_sentence).
+    """
+    if prev_kept is None:
+        return False
+    return bool(
+        _CONTINUATION_START_RE.match(line) and not _SENTENCE_CLOSED_RE.search(prev_kept.rstrip())
+    )
+
+
 def _filter_narrative(full_text: str) -> str:
     """Return only narrative prose, skipping appendix pages and non-narrative lines.
 
@@ -603,6 +688,10 @@ def _filter_narrative(full_text: str) -> str:
                 narrative.append(line)
             elif cls == "table":
                 table_count += 1
+            elif _is_sentence_continuation(line, narrative[-1] if narrative else None):
+                # Reattached, not counted: a sentence tail is not evidence either way about
+                # whether this page is a table page (rule 2).
+                narrative.append(line)
 
         # Rule 2: drop pages dominated by table rows
         total_classified = len(narrative) + table_count
@@ -699,7 +788,12 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
                 logger.warning("Skipping fact with unparseable claimed_value_raw=%r", f.claimed_value_raw)
                 continue
 
-        span = _locate_anchor(f.anchor_quote, normalized)
+        span = _locate_anchor(
+            f.anchor_quote,
+            normalized,
+            metric_words=_sig_words(" ".join(p.metric_label for p in periods)),
+            value_text=(f.claimed_value_raw or "").strip() or None,
+        )
         if span is not None:
             page_num = _page_at(normalized, span[0])
             quote = _expand_anchor_to_sentence(normalized, span[0], span[1]) or f.anchor_quote

@@ -195,6 +195,39 @@ def test_filter_narrative_drops_page_dominated_by_numeric_table_rows():
     assert _filter_narrative(full_text) == ""
 
 
+def test_filter_narrative_keeps_the_wrapped_tail_of_a_sentence():
+    # Two-column layout wraps the last words of a sentence onto a line of their own. Rule 4
+    # dropped it for being under 6 tokens, which cost both the subset phrase the unnamed-subset
+    # guard keys on AND the full stop — so the sentence never terminated and the claim was
+    # quoted, located and checked as a bare anchor.
+    full_text = (
+        "[== Halaman 2 ==]\n"
+        "Secara spasial, IKK mengalami penurunan terbesar di Makassar, Banten, dan Medan, "
+        "sementara peningkatan IKK terjadi\n"
+        "di beberapa kota.\n"
+    )
+
+    result = _filter_narrative(full_text)
+
+    assert result.endswith("di beberapa kota.")
+
+
+def test_filter_narrative_still_drops_short_lines_that_are_not_continuations():
+    # The guard must stay narrow: a chart caption following a COMPLETED sentence is still junk,
+    # and so is a capitalised heading, whatever precedes it.
+    full_text = (
+        "[== Halaman 2 ==]\n"
+        "Secara spasial, IKK mengalami penurunan terbesar di Makassar dan Medan.\n"
+        "Grafik 2 IKK per Kelompok\n"
+        "A.2. Indeks Kondisi Ekonomi\n"
+    )
+
+    result = _filter_narrative(full_text)
+
+    assert "Grafik 2" not in result
+    assert "A.2." not in result
+
+
 # ---------------------------------------------------------------------------
 # _split_into_page_chunks
 # ---------------------------------------------------------------------------
@@ -293,6 +326,101 @@ def test_finalize_facts_expansion_extracts_middle_sentence_only():
     assert facts[0].context_quote == (
         "Uang beredar M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun."
     )
+
+
+_REPEATED_PHRASE_TEXT = (
+    "[== Halaman 1 ==]\n"
+    "Indeks Keyakinan Konsumen (IKK) Juni 2026 berada pada level optimis sebesar 117,8.\n"
+    "[== Halaman 3 ==]\n"
+    "Dari sisi pengeluaran, IPDG berada pada level optimis pada sebagian besar "
+    "kelompok pengeluaran.\n"
+)
+
+
+def test_finalize_facts_picks_the_anchor_occurrence_matching_the_metric():
+    # "berada pada level optimis" is a stock phrase — it occurs 7 times in SK Juni 2026, naming
+    # a different indicator each time. Taking the first occurrence pinned an IPDG claim to the
+    # IKK sentence on page 1, which showed the reader the wrong quote and page AND hid the
+    # "sebagian besar" hedge from the unnamed-subset guard.
+    fact = _fake_fact(
+        operation="above_threshold",
+        periods=[_fake_period(
+            metric_label="Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta",
+            month="Jun",
+        )],
+        claimed_value_raw="100",
+        anchor_quote="berada pada level optimis",
+    )
+
+    facts = _finalize_facts([fact], _REPEATED_PHRASE_TEXT)
+
+    assert facts[0].page_number == 3
+    assert "IPDG" in facts[0].context_quote
+    assert "sebagian besar" in facts[0].context_quote
+
+
+def test_finalize_facts_anchor_disambiguation_ranks_metric_above_the_number():
+    # The claimed number is only a tie-break: a threshold bound like "100" is printed in
+    # sentences about other metrics too, so weighing it first would undo the fix above.
+    text = _REPEATED_PHRASE_TEXT.replace("optimis sebesar 117,8", "optimis (indeks >100) sebesar 117,8")
+    fact = _fake_fact(
+        operation="above_threshold",
+        periods=[_fake_period(
+            metric_label="Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta",
+            month="Jun",
+        )],
+        claimed_value_raw="100",
+        anchor_quote="berada pada level optimis",
+    )
+
+    facts = _finalize_facts([fact], text)
+
+    assert facts[0].page_number == 3, "the metric name must outrank the bound appearing on page 1"
+
+
+def test_finalize_facts_keeps_the_first_occurrence_when_nothing_distinguishes_them():
+    # Ranking only ever reorders occurrences that differ; when the metric name tells the
+    # candidates apart no better than a coin toss, behaviour stays what it was before.
+    fact = _fake_fact(
+        periods=[_fake_period(metric_label="Tidak Ada Kaitannya")],
+        anchor_quote="berada pada level optimis",
+    )
+
+    facts = _finalize_facts([fact], _REPEATED_PHRASE_TEXT)
+
+    assert facts[0].page_number == 1
+
+
+def test_finalize_facts_expansion_ends_a_sentence_that_closes_on_a_decimal():
+    # These reports end sentences on a figure constantly. The abbreviation guard read the '2'
+    # of "112,2." as a one-letter token, so the sentence never terminated and expansion ran on
+    # to swallow the next one — observed as a 553-character three-sentence quote.
+    text = (
+        "[== Halaman 1 ==]\n"
+        "Uang beredar M2 pada April 2026 tercatat sebesar Rp10.355,1 triliun.\n"
+        "Angka tersebut lebih rendah dibandingkan bulan sebelumnya sebesar 112,2.\n"
+        "Kalimat ketiga membahas proyeksi bulan berikutnya secara lebih umum.\n"
+    )
+    fact = _fake_fact(anchor_quote="lebih rendah dibandingkan bulan sebelumnya")
+
+    facts = _finalize_facts([fact], text)
+
+    assert facts[0].context_quote == (
+        "Angka tersebut lebih rendah dibandingkan bulan sebelumnya sebesar 112,2."
+    )
+
+
+def test_finalize_facts_expansion_does_not_split_on_list_numbering():
+    # The decimal exemption must not reopen the case the abbreviation guard was built for:
+    # "1." starting a list item is still not a sentence end.
+    text = (
+        "[== Halaman 1 ==]\n"
+        "Perkembangan tersebut dipengaruhi oleh 1. ekspansi keuangan pemerintah "
+        "yang tercatat sebesar Rp10.355,1 triliun pada April 2026.\n"
+    )
+    facts = _finalize_facts([_fake_fact()], text)
+
+    assert facts[0].context_quote.startswith("Perkembangan tersebut dipengaruhi oleh 1. ekspansi")
 
 
 def test_finalize_facts_expansion_does_not_split_on_sd_abbreviation():
