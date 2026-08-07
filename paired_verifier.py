@@ -37,7 +37,7 @@ from cell_pointer import (
 )
 from excel_parser_bi import BITableData, parse_bi_table
 from pdf_table_extraction import PdfTable
-from table_model import QUAL_SEP, label_match_score
+from table_model import QUAL_SEP, _sig_words, label_match_score
 from table_parser_generic import (
     _MONTH_ABBREVS,
     _load_grid,
@@ -93,15 +93,23 @@ _TEMPORAL_ONLY_OPS = {"yoy_growth", "is_increasing", "is_decreasing", "is_stable
 # points (nothing to trend) — see the guard in _evaluate_fact.
 _TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
 
+# Half-width of the "relatif stabil" window, as a fraction of the level being tracked.
+# is_stable used MATCH_TOLERANCE, which is half a PRINTING unit — the right question for "does
+# 10.415,9 in the PDF match the sheet", the wrong one for "did this series hold roughly flat".
+# It refuted every stability claim whose two numbers were not near-identical: a debt-to-income
+# ratio written as "10,0%, relatif stabil dibandingkan proporsi bulan sebelumnya sebesar 10,2%"
+# came back Tidak Sesuai over 0,2pp. Judging the move against the level fixes that without
+# blessing real swings — 0,2 on a ratio of 10 is stable, 0,2 on a ratio of 0,5 is not.
+_STABLE_RELATIVE_BAND = 0.025
+
 # Narrative markers of an UNNAMED subset: "peningkatan IKK terjadi di beberapa kota",
-# "sebagian besar kota mencatat penurunan IEK", "pada kelompok pengeluaran lainnya ...
-# menurun". No row corresponds to such a subset, so a trend claim about it that resolved to
-# an UNQUALIFIED metric was silently checked against the national series and came back
-# Refuted for saying the opposite of the national move — a confident, wrong verdict on a
-# sentence that is in fact true. The extractor is told to skip these (rule 9), and this is
-# the deterministic backstop for when it does not. It deliberately does NOT fire on the
-# per-member facts split out of the same sentence ("… terutama di Makassar, Banten, dan
-# Medan"), because those carry the member in their metric label.
+# "sebagian besar kota mencatat penurunan IEK", "IPDG berada pada level optimis pada sebagian
+# besar kelompok pengeluaran". No single row corresponds to such a subset, so a claim about it
+# cannot be settled by reading one — whichever row is read answers a different question, and
+# the answer comes back Refuted on a sentence that is in fact true. The extractor is told to
+# skip these (rule 9), and this is the deterministic backstop for when it does not. It
+# deliberately does NOT fire on the per-member facts split out of the same sentence
+# ("… terutama di Makassar, Banten, dan Medan") — see _quote_names_qualifier.
 _SUBSET_PHRASE_RE = re.compile(
     r"\b(?:beberapa|sejumlah|banyak|sebagian(?:\s+besar)?)\s+(?:\w+\s+)?"
     r"(?:kota|daerah|wilayah|provinsi|kelompok|responden|komponen)\b"
@@ -364,6 +372,16 @@ def _previous_period(
     return ((py, pm), val) if val is not None else None
 
 
+def _stable_band(a: float, b: float) -> float:
+    """Largest move between two consecutive points still readable as "relatif stabil".
+
+    Proportional to the pair's own magnitude, floored at MATCH_TOLERANCE so a series hovering
+    near zero (SBT balances, growth rates that cross sign) still admits two readings that are
+    identical to the precision they were printed at, instead of getting a band of nearly zero.
+    """
+    return max(MATCH_TOLERANCE, _STABLE_RELATIVE_BAND * (abs(a) + abs(b)) / 2)
+
+
 def _numeric_verdict(claimed: float, computed: float) -> Tuple[float, str]:
     delta = round(abs(claimed - computed), 4)
     return delta, ("Entailed" if delta <= MATCH_TOLERANCE else "Refuted")
@@ -498,12 +516,17 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             ),
         )
 
+    band_note = ""
     if fact.operation == "is_increasing":
         ok = all(values[i + 1] >= values[i] for i in range(len(values) - 1))
     elif fact.operation == "is_decreasing":
         ok = all(values[i + 1] <= values[i] for i in range(len(values) - 1))
-    else:  # is_stable
-        ok = all(abs(values[i + 1] - values[i]) <= MATCH_TOLERANCE for i in range(len(values) - 1))
+    else:  # is_stable — see _stable_band
+        bands = [_stable_band(values[i], values[i + 1]) for i in range(len(values) - 1)]
+        ok = all(
+            abs(values[i + 1] - values[i]) <= bands[i] for i in range(len(values) - 1)
+        )
+        band_note = f" (ambang stabil ±{round(max(bands), 4)})"
 
     verdict = "Entailed" if ok else "Refuted"
     breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, v in zip(used_periods, values))
@@ -511,7 +534,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         fact, periods, matched_source, None, None, None, src.table.unit, None, verdict,
         reasoning=(
             f"Klaim tren '{fact.operation}' untuk '{fact.display_label}' | "
-            f"Excel [{matched_source}]: {breakdown} | "
+            f"Excel [{matched_source}]: {breakdown}{band_note} | "
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
@@ -549,6 +572,60 @@ def _compute_threshold(
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
+
+
+def _reinterpret_diff_as_value(
+    fact: ExtractedFact,
+    resolved: List[Tuple[str, float]],
+    converted: List[float],
+    computed_diff: float,
+    src: _ExcelSource,
+) -> Optional[FactVerificationResult]:
+    """A 'diff' whose claimed number is really one of the endpoint LEVELS, re-checked as a value.
+
+    "Posisi cadangan devisa … pada akhir Mei 2026 tercatat 144,9 miliar dolar AS, lebih rendah
+    dibandingkan dengan posisi akhir April 2026 sebesar 146,2 miliar dolar AS" states two levels
+    and a direction — it states no difference at all. The extractor read the comparison as a
+    subtraction and put April's level in claimed_value, so 146,2 was checked against a difference
+    of -1,3 and Refuted: a sentence that agrees with the reference table to three digits was
+    reported as wrong.
+
+    The mislabelling is unambiguous from the numbers alone — the claimed "difference" misses the
+    real one by 147,5 while matching an endpoint to 0,002 — and this is only consulted after the
+    diff check has already failed, so a claim that genuinely states its difference is never
+    rerouted. Returns None when no endpoint matches, leaving the Refuted verdict to stand.
+    """
+    if fact.claimed_value is None:
+        return None
+    match = next(
+        (i for i, v in enumerate(converted) if abs(fact.claimed_value - v) <= MATCH_TOLERANCE),
+        None,
+    )
+    if match is None:
+        return None
+
+    label = resolved[match][0]
+    point = fact.periods[match]
+    value = round(converted[match], 4)
+    delta = round(abs(fact.claimed_value - value), 4)
+    result = _make_result(
+        fact,
+        [PeriodResult(
+            metric_label=label, year=point.year, month=point.month,
+            col_label=point.col_label, excel_value=value,
+        )],
+        src.label, fact.claimed_value, fact.unit, value, fact.unit, delta, "Entailed",
+        reasoning=(
+            f"PDF: {fact.claimed_value} {fact.unit} | "
+            f"Klaim ini ditandai sebagai selisih, tetapi nilainya cocok dengan level "
+            f"{_point_desc(point)} ({value} {fact.unit}) dan bukan dengan selisih antarperiode "
+            f"({computed_diff} {fact.unit}) — dinilai sebagai klaim nilai. | "
+            f"Excel [{src.label}] ({label}): {value} {fact.unit} | "
+            f"Δ = {delta} → within tolerance {MATCH_TOLERANCE}"
+        ),
+    )
+    # The operation is corrected too, so the reported claim type matches what was actually checked.
+    return result.model_copy(update={"operation": "value"})
 
 
 def _compute_operation(
@@ -597,6 +674,10 @@ def _compute_operation(
         computed = round(converted[-1] - converted[0], 4)
         periods = _build_periods(fact.periods, resolved, converted)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        if verdict == "Refuted":
+            recovered = _reinterpret_diff_as_value(fact, resolved, converted, computed, src)
+            if recovered is not None:
+                return recovered
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
@@ -636,6 +717,25 @@ def _inconclusive_result(
 # periods resolved AND a compatible unit (if the operation needs one) wins.
 # ---------------------------------------------------------------------------
 
+def _quote_names_qualifier(metric_label: str, quote: str) -> bool:
+    """True when a qualified metric's leaf ('… > Makassar') is actually named in the sentence.
+
+    Separates the two ways a claim ends up carrying a breakdown member. When the sentence names
+    it ("… terutama di Makassar, Banten, dan Medan"), the qualifier is the AUTHOR'S and the
+    claim really is about that row. When the sentence only hedges ("pada sebagian besar kelompok
+    pengeluaran"), the qualifier is the EXTRACTOR'S — it picked one group to stand in for a
+    statement about most of them — and reading that row settles a question nobody asked.
+
+    Requiring every significant word of the leaf, not just one, is what makes the distinction
+    work: "Pengeluaran Rp2,1 - 3 juta" shares 'pengeluaran' with a sentence about expenditure
+    groups in general, and matching on that alone would wave the invented qualifier through.
+    """
+    if QUAL_SEP not in metric_label:
+        return False
+    leaf_words = _sig_words(metric_label.rsplit(QUAL_SEP, 1)[1])
+    return bool(leaf_words) and leaf_words <= _sig_words(quote)
+
+
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     # A time-only operation over categorical data points can never be computed — fail fast
     # with an explanation instead of scanning sources for data that cannot qualify.
@@ -648,6 +748,27 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             ),
         )
 
+    # A claim attributed to an unnamed subset cannot be settled by reading any single row.
+    # Thresholds need this as much as trends do: "IPDG berada pada level optimis pada sebagian
+    # besar kelompok pengeluaran" was pinned to the one expenditure group of five that sat below
+    # 100 and Refuted — for being exactly the exception the sentence allows for. Only reject when
+    # NO data point names its own member, so the per-member facts split out of the same sentence
+    # still verify normally (see _SUBSET_PHRASE_RE and _quote_names_qualifier).
+    if fact.operation in _TREND_OPS | _THRESHOLD_OPS:
+        quote = fact.context_quote or ""
+        if _SUBSET_PHRASE_RE.search(quote) and not any(
+            _quote_names_qualifier(p.metric_label, quote) for p in fact.periods
+        ):
+            return _make_result(
+                fact, [], None, None, None, None, None, None, "Inconclusive",
+                reasoning=(
+                    f"Klaim ini hanya berlaku untuk sebagian kelompok/kota tanpa menyebut "
+                    f"yang mana, sedangkan '{fact.display_label}' harus diperiksa sebagai satu "
+                    "baris tertentu — memeriksanya akan menilai hal yang berbeda dari yang "
+                    "diklaim."
+                ),
+            )
+
     # A trend must follow ONE metric. When the extractor bundles several DIFFERENT metrics
     # into one fact (e.g. "SBT meningkat pada KMK, KI, dan KK" — three metrics at the same
     # quarter), monotonicity would be checked across unrelated series and wrongly Refuted;
@@ -655,22 +776,6 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # have been one trend per metric). A single-period trend is NOT rejected here — the
     # baseline is auto-completed from the table in _compute_trend.
     if fact.operation in _TREND_OPS:
-        # A trend attributed to an unnamed subset cannot be checked against any single row;
-        # only reject when the metric itself names no member, so the per-member facts split
-        # out of the same sentence still verify normally (see _SUBSET_PHRASE_RE).
-        if all(QUAL_SEP not in p.metric_label for p in fact.periods) and (
-            _SUBSET_PHRASE_RE.search(fact.context_quote or "")
-        ):
-            return _make_result(
-                fact, [], None, None, None, None, None, None, "Inconclusive",
-                reasoning=(
-                    f"Klaim tren ini menyebut sebagian kelompok/kota tanpa menamainya, "
-                    f"sedangkan '{fact.display_label}' hanya tersedia sebagai seri "
-                    "keseluruhan — membandingkannya dengan seri keseluruhan akan menilai "
-                    "hal yang berbeda dari yang diklaim."
-                ),
-            )
-
         distinct_metrics = {p.metric_label.strip().lower() for p in fact.periods}
         if len(distinct_metrics) > 1:
             return _make_result(
@@ -811,9 +916,19 @@ def _attach_source_comparison(
     A conflict says the SOURCES disagree, not that the claim is wrong, so the headline verdict is
     left alone. `head_index` is the source that produced it — usually the best label match, but
     see _evaluate_fact for the one case where a lower-ranked source is preferred.
+
+    Only sources that matched the metric AS PRECISELY as the winner are reported at all. A looser
+    match is a different series, not a second reading of the same one: a claim about "Kredit"
+    fuzzy-matches a "Kredit Properti" breakdown row, and "IPDG > Pengeluaran Rp2,1 - 3 juta"
+    resolves against the respondent-profile sheet's bare "Rp2,1 - 3 juta" row — printing that
+    sheet's 17,9 (a share of respondents) beside the index's 99,0 invites the reader to doubt a
+    number that was never in question. This is the same score test the conflict loop needs, so
+    hiding these costs no signal: a source too loose to contradict the winner had nothing to add.
     """
+    head_score = evaluated[head_index][0].score
     per_source = [evaluated[head_index]] + [
-        pair for index, pair in enumerate(evaluated) if index != head_index
+        pair for index, pair in enumerate(evaluated)
+        if index != head_index and pair[0].score >= head_score - 1e-9
     ]
     result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
@@ -830,12 +945,8 @@ def _attach_source_comparison(
         # to lack the period reads as a conflict with whichever table does have it.
         if "Inconclusive" in (head.verdict, other.verdict):
             continue
-        # Only a source that matched the metric AS PRECISELY as the winner may contradict it.
-        # A looser match is a weaker assertion of being the same series: a claim about "Kredit"
-        # fuzzy-matches the "Kredit" row of the aggregate table AND a "Kredit Properti" row in a
-        # breakdown table, and those two legitimately hold different numbers.
-        if cand.score < head_cand.score - 1e-9:
-            continue
+        # Every source that got this far already ties the winner's label score — see the
+        # filter above, which is what keeps a looser match from contradicting a better one.
         # Both sources must measure the same kind of quantity, and both must have had a real
         # unit basis for the conversion (see unit_comparable in _evaluate_fact).
         if not (head_cand.unit_comparable and cand.unit_comparable):

@@ -285,6 +285,49 @@ def test_evaluate_diff_entailed_later_minus_earlier():
     assert result.computed_value == pytest.approx(50.0)
 
 
+def _devisa_case(claimed_value):
+    # Cadangan devisa, SEKI 5.9: "…pada akhir Mei 2026 tercatat 144,9 miliar dolar AS, lebih
+    # rendah dibandingkan dengan posisi akhir April 2026 sebesar 146,2 miliar dolar AS."
+    table = _make_table(unit="Juta USD", data={
+        ("Total", 2026, "Apr"): 146201.96, ("Total", 2026, "May"): 144898.4,
+    })
+    fact = _make_fact(
+        operation="diff", claimed_value=claimed_value, unit="miliar dolar AS",
+        periods=[_make_period(month="Apr"), _make_period(month="May")],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_diff_whose_claimed_number_is_really_a_level_is_checked_as_a_value():
+    # The sentence states two levels and a direction, never a difference. The extractor read the
+    # comparison as a subtraction and put April's level in claimed_value, so 146,2 was checked
+    # against a difference of -1,3 and Refuted — a report matching the table to three digits.
+    result = _devisa_case(146.2)
+
+    assert result.verdict == "Entailed"
+    assert result.operation == "value"
+    assert result.computed_value == pytest.approx(146.202)
+    assert len(result.periods) == 1 and result.periods[0].month == "Apr"
+    assert "ditandai sebagai selisih" in result.reasoning
+
+
+def test_diff_that_really_states_its_difference_is_never_rerouted():
+    # 144,8984 - 146,202 = -1,3036. The reinterpretation is only consulted once the diff check
+    # has failed, so a genuine diff claim keeps both its operation and its verdict.
+    result = _devisa_case(-1.3036)
+
+    assert result.verdict == "Entailed"
+    assert result.operation == "diff"
+
+
+def test_a_wrong_diff_matching_no_level_stays_refuted():
+    # The signal the recovery must not swallow: a claimed difference that is simply wrong.
+    result = _devisa_case(-5.0)
+
+    assert result.verdict == "Refuted"
+    assert result.operation == "diff"
+
+
 # ---------------------------------------------------------------------------
 # _evaluate_fact — operation="ratio"
 # ---------------------------------------------------------------------------
@@ -364,6 +407,59 @@ def test_evaluate_is_stable_entailed_when_within_tolerance():
     result = _evaluate_fact(fact, [_make_source(table)])
 
     assert result.verdict == "Entailed"
+
+
+def test_evaluate_is_stable_entailed_for_a_small_move_relative_to_the_level():
+    # The observed false positive: "proporsi cicilan sebesar 10,0%, relatif stabil dibandingkan
+    # bulan sebelumnya sebesar 10,2%" was Refuted, because the stability band was MATCH_TOLERANCE
+    # (0,05) — half a PRINTING unit, which asks whether two numbers are the same number, not
+    # whether a series held flat. 0,2pp on a ratio of 10 is what "relatif stabil" means.
+    table = _make_table(unit="", data={
+        ("Total > Cicilan pinjaman", 2026, "May"): 10.2,
+        ("Total > Cicilan pinjaman", 2026, "Jun"): 10.0,
+    })
+    fact = _make_fact(
+        operation="is_stable", claimed_value=None, unit=None,
+        periods=[
+            _make_period(metric_label="Total > Cicilan pinjaman", year=2026, month="May"),
+            _make_period(metric_label="Total > Cicilan pinjaman", year=2026, month="Jun"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
+def test_evaluate_is_stable_refuted_when_the_move_is_large_for_the_level():
+    # The band is proportional, so it must not bless the same 0,4 absolute move on a series an
+    # order of magnitude smaller — that is a swing of more than half the level.
+    table = _make_table(unit="", data={
+        ("Total", 2026, "May"): 0.3, ("Total", 2026, "Jun"): 0.7,
+    })
+    fact = _make_fact(
+        operation="is_stable", claimed_value=None, unit=None,
+        periods=[_make_period(month="May"), _make_period(month="Jun")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"
+
+
+def test_evaluate_is_stable_refuted_when_the_series_actually_moved():
+    # The signal the widened band must not suppress: 10,0 → 13,1 is a real change.
+    table = _make_table(unit="", data={
+        ("Total", 2026, "May"): 10.0, ("Total", 2026, "Jun"): 13.1,
+    })
+    fact = _make_fact(
+        operation="is_stable", claimed_value=None, unit=None,
+        periods=[_make_period(month="May"), _make_period(month="Jun")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Refuted"
 
 
 def test_evaluate_is_increasing_autocompletes_previous_quarter():
@@ -1426,3 +1522,73 @@ def test_trend_naming_its_member_is_still_verified_from_the_same_sentence():
     result = _evaluate_fact(fact, [source])
 
     assert result.verdict == "Entailed"
+
+
+def _ipdg_source():
+    return _make_source(_make_table(title="Indeks per Kelompok Pengeluaran", unit="", data={
+        ("Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta", 2026, "Jun"): 99.0,
+        ("Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran >Rp5 juta", 2026, "Jun"): 108.8,
+    }), sheet="Tabel 2")
+
+
+def test_threshold_claim_about_an_unnamed_subset_is_inconclusive_not_refuted():
+    # Four of the five expenditure groups sit above 100, so "sebagian besar" is TRUE. The
+    # extractor pinned the claim to the one group that does not, and the threshold check
+    # Refuted it for being exactly the exception the sentence allows for. The subset guard
+    # used to cover trends only, and its QUAL_SEP test would have waved this through anyway
+    # because the invented qualifier looks just like an author-named one.
+    fact = _make_fact(
+        operation="above_threshold", claimed_value=100.0, unit=None,
+        context_quote=("Dari sisi pengeluaran, IPDG berada pada level optimis pada "
+                       "sebagian besar kelompok pengeluaran."),
+        periods=[_make_period(
+            metric_label="Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta",
+            year=2026, month="Jun",
+        )],
+    )
+
+    result = _evaluate_fact(fact, [_ipdg_source()])
+
+    assert result.verdict == "Inconclusive"
+
+
+def test_threshold_claim_naming_its_group_is_still_verified_from_a_hedged_sentence():
+    # The counterpart guard: when the sentence NAMES the group, the qualifier is the author's
+    # and the claim really is about that row — the widened guard must not swallow it.
+    fact = _make_fact(
+        operation="above_threshold", claimed_value=100.0, unit=None,
+        context_quote=("IPDG optimis pada sebagian besar kelompok pengeluaran, "
+                       "tertinggi pada Pengeluaran >Rp5 juta."),
+        periods=[_make_period(
+            metric_label="Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran >Rp5 juta",
+            year=2026, month="Jun",
+        )],
+    )
+
+    result = _evaluate_fact(fact, [_ipdg_source()])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(108.8)
+
+
+def test_a_source_matching_only_the_qualifier_is_not_reported_beside_the_winner():
+    # The respondent-profile sheet carries a bare 'Rp2,1 - 3 juta' row holding a SHARE of
+    # respondents, which fuzzy-resolves the same claim as the index sheet. Printing its 17,9
+    # next to the index's 99,0 invited doubt about a number that was never in question.
+    profile = _make_source(_make_table(title="Profil Responden", unit="", data={
+        ("Rp2,1 - 3 juta", 2026, "Jun"): 17.9,
+    }), sheet="Tabel 7")
+    fact = _make_fact(
+        claimed_value=99.0, unit=None,
+        periods=[_make_period(
+            metric_label="Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta",
+            year=2026, month="Jun",
+        )],
+    )
+
+    result = _evaluate_fact(fact, [_ipdg_source(), profile])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source.endswith("Tabel 2")
+    assert [sv.source for sv in result.source_values] == []
+    assert "17.9" not in result.reasoning
