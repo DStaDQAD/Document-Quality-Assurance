@@ -173,7 +173,9 @@ class TableData:
              sub-item of a different section) is contained in "simpanan berjangka" and, when
              ranked shortest-first in the same pool as tier 2, shadowed the correct row —
              observed on BI I.1, producing a false Refuted against the negative 'Simpanan'
-             liability row.
+             liability row. Candidates here are additionally filtered by
+             _query_is_about_the_label: the words the query adds must not name a different
+             quantity from the one the row holds.
 
         Containment (not shared-prefix) in the full-label tiers keeps distinct metrics that
         merely start alike apart: "Uang Beredar Digital" binds to nothing ("Uang Beredar
@@ -191,7 +193,7 @@ class TableData:
                 tier_exact.append((label, 0))
             if q_canon and q_canon in l_canon:
                 tier_q_in_l.append((label, len(label)))
-            if l_canon and l_canon in q_canon:
+            if l_canon and l_canon in q_canon and self._query_is_about_the_label(query, label):
                 tier_l_in_q.append((label, -len(label)))
             if QUAL_SEP in label:
                 leaf = _canon(label.rsplit(QUAL_SEP, 1)[1])
@@ -202,6 +204,48 @@ class TableData:
 
     def _match_tiers(self, query: str):
         return self._match_tiers_over(query, self.row_labels)
+
+    # Least share of a query's significant words a bare label-in-query match must account for.
+    # At exactly half, "pertumbuhan kredit" still binds to 'Kredit'; at a third, "suku bunga
+    # simpanan berjangka tenor 1 bulan" no longer binds to 'Simpanan Berjangka'.
+    _LABEL_IN_QUERY_MIN_COVERAGE: ClassVar[float] = 0.5
+
+    # A claim often carries the period it is about into the metric name ("pertumbuhan giro
+    # valas pada Januari"). Such words say WHEN, never WHAT, so they neither corroborate nor
+    # contradict a row label. Bare years are dropped alongside them (see _query_is_about_the_label).
+    _PERIOD_WORDS: ClassVar[frozenset] = frozenset({
+        "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus",
+        "september", "oktober", "november", "desember",
+        "jan", "feb", "mar", "apr", "jun", "jul", "agu", "ags", "sep", "okt", "nov", "des",
+        "january", "february", "march", "june", "july", "august", "october", "december",
+        "triwulan", "kuartal", "semester", "tahun", "bulan", "yoy",
+    })
+
+    def _query_is_about_the_label(self, query: str, label: str) -> bool:
+        """False when the words a query adds beyond the label name a DIFFERENT quantity.
+
+        Guards the label-in-query tier, the permissive one: any short row label that happens
+        to appear inside a longer claim binds to it. On the M2 report that produced ten
+        confident false Refuteds in one run — "suku bunga simpanan berjangka tenor 1 bulan
+        4,20%" was answered by the 'Simpanan Berjangka' row of a %-yoy DPK table (3,7), and
+        "DPK nasabah lainnya" by a determinants row merely called 'Lainnya'. The report
+        carries no interest-rate table at all, so the honest answer was 'no data'.
+
+        The extra words are acceptable when the TABLE's own title accounts for them — they
+        are then context ("pertumbuhan kredit" against a table titled "Pertumbuhan …"), not a
+        new subject. Otherwise the label must still cover most of the query on its own.
+        """
+        q_words = {
+            w for w in _sig_words(query) - self._TITLE_STOP_WORDS - self._PERIOD_WORDS
+            if not w.isdigit()
+        }
+        if not q_words:
+            return True
+        covered = q_words & _sig_words(label)
+        leftover = q_words - covered - _sig_words(self.title)
+        if not leftover:
+            return True
+        return len(covered) >= self._LABEL_IN_QUERY_MIN_COVERAGE * len(q_words)
 
     @staticmethod
     def _qualifier_kept(query: str, label: str) -> bool:

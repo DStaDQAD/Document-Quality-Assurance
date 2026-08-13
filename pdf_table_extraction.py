@@ -300,6 +300,43 @@ def _reconstruct_year_row(year_row: List, period_row: List) -> List:
     return out
 
 
+def _align_header_to_body(header_rows: List[List], body_rows: List[List]) -> List[List]:
+    """Pad header rows that omit the label column, so each header sits over its own values.
+
+    The model is asked for a leading empty cell above the row-label column and usually gives
+    one, but on a scanned page it often starts the header at the first DATA column instead:
+
+        header : [2026, 2026, None, None]        rows: ['Uang Beredar (M2)', 10355.7, 10253.7, …]
+                 ['Mar', "Apr*", "Mar'26", …]
+
+    Every header then names the column to its left. Observed on M2-April-2026 (1).pdf, where
+    it made a level claim ("M2 April tercatat Rp10.253,7 triliun") resolve against a growth
+    cell — 9,7 — and come back Refuted with a delta of 10.244.
+
+    The test is the PERIOD row (the last header row), which is the one that must sit over the
+    values; a year row above it is routinely shorter because BI writes each year once across a
+    merged span, and _reconstruct_year_row re-derives its positions afterwards anyway. The
+    repair is deliberately narrow: only when that row is exactly one cell shorter than the
+    body's own width, and only by prepending a blank. Anything else is left alone — a header
+    short for some other reason is a table we do not understand, and shifting it would move
+    values under the wrong dates just as silently.
+    """
+    if not header_rows or not body_rows:
+        return header_rows
+    body_width = Counter(len(r) for r in body_rows).most_common(1)[0][0]
+    if body_width < 2 or len(header_rows[-1]) != body_width - 1:
+        return header_rows
+    # The body's own first cell must be the label (text), or there is no label column for the
+    # header to be missing and the widths differ for some other reason.
+    if not any(isinstance(r[0], str) and r[0].strip() for r in body_rows if r):
+        return header_rows
+    logger.info(
+        "Header row(s) are one cell narrower than the body (%d vs %d) — padding the label "
+        "column so each period sits over its own values.", body_width - 1, body_width,
+    )
+    return [[None] + r for r in header_rows]
+
+
 def _assemble_grid(table: _PdfTableOut) -> List[List]:
     """Lay a transcribed table out as a grid the existing Excel parsers already understand.
 
@@ -316,12 +353,13 @@ def _assemble_grid(table: _PdfTableOut) -> List[List]:
         rows = [r for i, r in enumerate(rows) if i not in ambiguous]
 
     header_rows = [[_coerce_cell(c) for c in r] for r in table.header_rows]
+    body_rows = [[_coerce_cell(c) for c in r] for r in rows]
+    header_rows = _align_header_to_body(header_rows, body_rows)
     # A year row stacked over a period row: re-derive the years from the periods (see
     # _reconstruct_year_row). Body rows are never touched — carrying a value sideways there
     # would invent data.
     if len(header_rows) >= 2:
         header_rows[-2] = _reconstruct_year_row(header_rows[-2], header_rows[-1])
-    body_rows = [[_coerce_cell(c) for c in r] for r in rows]
 
     grid: List[List] = []
     caption = (table.caption or "").strip()

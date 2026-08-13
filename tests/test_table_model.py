@@ -164,3 +164,47 @@ def test_label_match_score_penalises_an_over_specific_label():
     one_city = label_match_score(query, "15. Mataram > Indeks Kondisi Ekonomi Saat Ini (IKE)")
 
     assert national > one_city
+
+
+# ---------------------------------------------------------------------------
+# The label-in-query tier: extra words in the query must not name another quantity
+# ---------------------------------------------------------------------------
+
+def _growth_table():
+    """A %-yoy DPK table, as printed in the M2 report's Lampiran 2."""
+    return TableData(
+        title="Lampiran 2. Pertumbuhan Uang Beredar dan Faktor yang Memengaruhinya",
+        unit="%, yoy",
+        row_labels=["Simpanan Berjangka", "Kredit", "Lainnya"],
+        _data={("Simpanan Berjangka", 2026, "Apr"): 3.7, ("Kredit", 2026, "Apr"): 9.4},
+    )
+
+
+def test_an_interest_rate_claim_does_not_bind_to_a_balance_row():
+    # The report states "suku bunga simpanan berjangka tenor 1 bulan 4,20%" but carries no
+    # interest-rate table at all; answering from the DPK growth row produced a confident
+    # Refuted (4,20 vs 3,7) on ten claims in one run.
+    table = _growth_table()
+
+    assert table._resolve_label("Suku bunga simpanan berjangka tenor 1 bulan") is None
+    assert table.lookup_fuzzy("Suku bunga simpanan berjangka tenor 24 bulan", 2026, "Apr") == (None, None)
+
+
+def test_a_qualified_deposit_claim_does_not_bind_to_a_bare_generic_row():
+    table = _growth_table()
+
+    assert table._resolve_label("DPK nasabah lainnya") is None
+
+
+def test_words_the_table_title_accounts_for_do_not_block_a_match():
+    # "pertumbuhan" is this table's own subject, not a different quantity.
+    table = _growth_table()
+
+    assert table._resolve_label("pertumbuhan kredit") == "Kredit"
+    assert table._resolve_label("Kredit") == "Kredit"
+
+
+def test_a_verbose_query_still_binds_when_the_label_carries_most_of_it():
+    table = _growth_table()
+
+    assert table._resolve_label("posisi Simpanan Berjangka") == "Simpanan Berjangka"

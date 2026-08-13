@@ -5,6 +5,7 @@ import pytest
 from openpyxl import Workbook
 
 from table_parser_generic import (
+    _drop_colliding_period_cols,
     _load_grid,
     _parse_period,
     _parse_two_row_table,
@@ -543,3 +544,32 @@ def test_two_row_qualifier_from_a_data_row_is_never_dropped():
 def test_parse_generic_grid_matches_the_bytes_wrapper(builder, sheet):
     data = builder()
     assert parse_generic_grid(_load_grid(data, sheet)) == parse_generic_table(data, sheet)
+
+
+# ---------------------------------------------------------------------------
+# Colliding period columns — levels and growth printed under the same months
+# ---------------------------------------------------------------------------
+
+def test_columns_claiming_the_same_period_are_all_dropped():
+    # BI snippet tables print 'Mar | Apr | Mar | Apr', the first pair in triliun Rp and the
+    # second in %, yoy. Keeping either one silently would answer a level claim with a growth
+    # figure, and the headers alone cannot say which is which.
+    kept = _drop_colliding_period_cols({
+        1: (2026, "Mar"), 2: (2026, "Apr"), 3: (2026, "Mar"), 4: (2026, "Apr"),
+    })
+
+    assert kept == {}
+
+
+def test_a_table_whose_periods_are_stated_once_is_untouched():
+    keys = {1: (2026, "Mar"), 2: (2026, "Apr")}
+
+    assert _drop_colliding_period_cols(keys) == keys
+
+
+def test_only_the_colliding_periods_are_dropped():
+    kept = _drop_colliding_period_cols({
+        1: (2026, "Jan"), 2: (2026, "Feb"), 3: (2026, "Feb"),
+    })
+
+    assert kept == {1: (2026, "Jan")}

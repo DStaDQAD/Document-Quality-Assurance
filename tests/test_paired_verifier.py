@@ -1592,3 +1592,45 @@ def test_a_source_matching_only_the_qualifier_is_not_reported_beside_the_winner(
     assert result.matched_excel_source.endswith("Tabel 2")
     assert [sv.source for sv in result.source_values] == []
     assert "17.9" not in result.reasoning
+
+
+# ---------------------------------------------------------------------------
+# yoy_growth against a table that ALREADY holds growth figures
+# ---------------------------------------------------------------------------
+
+def test_yoy_claim_reads_a_growth_table_instead_of_computing_over_it():
+    # Lampiran 2 of the M2 report is in '%, yoy'. Computing growth over it gave growth OF a
+    # growth: 15,7% claimed against a computed 56,3%, a Refuted verdict on a correct sentence.
+    table = _make_table(
+        title="Lampiran 2. Pertumbuhan Uang Beredar", unit="%, yoy",
+        data={("Uang Kartal", 2026, "Apr"): 15.7, ("Uang Kartal", 2025, "Apr"): 8.7},
+    )
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=15.7, unit="persen",
+        periods=[_make_period(metric_label="Uang Kartal")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == 15.7
+    assert "dibaca langsung" in result.reasoning
+    # The prior-year cell exists but must not have been used as a denominator.
+    assert len(result.periods) == 1
+
+
+def test_yoy_claim_against_a_levels_table_still_computes_growth():
+    table = _make_table(
+        unit="triliun Rp",
+        data={("Uang Kartal", 2026, "Apr"): 1186.3, ("Uang Kartal", 2025, "Apr"): 1025.3},
+    )
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=15.7, unit="persen",
+        periods=[_make_period(metric_label="Uang Kartal")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(15.7, abs=0.05)
+    assert len(result.periods) == 2

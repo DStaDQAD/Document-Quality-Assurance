@@ -420,13 +420,43 @@ def _make_result(
 # Per-operation computation (all arithmetic here is plain Python, never LLM output)
 # ---------------------------------------------------------------------------
 
+def _is_growth_series(unit: Optional[str]) -> bool:
+    """True when a table's cells ARE year-on-year growth figures, e.g. unit '%, yoy'.
+
+    A BI report states the same series twice under identical row labels: Lampiran 1 in
+    'Triliun Rp' and Lampiran 2 in '%, yoy'. Growth computed over the second is growth OF a
+    growth — 15,7% claimed against a computed 56,3% on the M2 report — which is not a
+    disagreement with the claim but an operation that should never have run.
+    """
+    return bool(unit and re.search(r'\byoy\b', unit, re.IGNORECASE))
+
+
 def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
     p = fact.periods[0]
     matched_label, curr_raw = resolved[0]
     matched_source = src.label
     prior_year = p.year - 1
-    prior_label, prior_raw = src.table.lookup_fuzzy(matched_label, prior_year, p.month)
     current_period = PeriodResult(metric_label=matched_label, year=p.year, month=p.month, excel_value=round(curr_raw, 4))
+
+    if _is_growth_series(src.table.unit):
+        # The cell already holds the answer, so read it instead of computing one (the same
+        # division of labour every other lookup follows). No prior-year column is needed,
+        # which also stops such a table from being ruled out for lacking one.
+        computed = round(curr_raw, 4)
+        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        return _make_result(
+            fact, [current_period], matched_source,
+            fact.claimed_value, "persen_yoy", computed, "persen_yoy", delta, verdict,
+            reasoning=(
+                f"PDF: {fact.claimed_value}% yoy | "
+                f"Excel [{matched_source}] ({matched_label}): {computed}% yoy "
+                f"(dibaca langsung; tabel ini sudah dalam satuan '{src.table.unit}') | "
+                f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} "
+                f"tolerance {MATCH_TOLERANCE}%"
+            ),
+        )
+
+    prior_label, prior_raw = src.table.lookup_fuzzy(matched_label, prior_year, p.month)
 
     if prior_raw is None:
         return _make_result(

@@ -38,11 +38,15 @@ structure-mapping tier):
 """
 
 import io
+import logging
 import re
+from collections import Counter
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
 
 from table_model import QUAL_SEP, TableData
+
+logger = logging.getLogger(__name__)
 
 _MONTH_ABBREVS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -428,6 +432,32 @@ def _block_col_keys(grid: List[List], year_row: int, period_row: int) -> Dict[in
     return keys
 
 
+def _drop_colliding_period_cols(col_keys: Dict[int, Tuple]) -> Dict[int, Tuple]:
+    """Remove every column whose period is claimed by more than one column.
+
+    A BI snippet table prints levels and growth side by side in the SAME row — 'Mar | Apr* |
+    Mar'26 | Apr'26*' under one caption, the first pair in triliun Rp and the second in %,
+    yoy. Both pairs read as the same two months, so one column silently shadowed the other
+    and a level claim could be answered with a growth figure: "M2 April 2026 tercatat
+    Rp10.253,7 triliun" was checked against 9,7 and Refuted with a delta of 10.244.
+
+    Which column is the level cannot be told from the headers alone — and on a transcribed
+    page a header shifted by one produces exactly the same collision — so neither is kept.
+    The claim then resolves against a table that states its periods once (the Lampiran
+    series), or comes back Inconclusive. Both beat a confident wrong number.
+    """
+    seen = Counter(col_keys.values())
+    kept = {c: key for c, key in col_keys.items() if seen[key] == 1}
+    if len(kept) != len(col_keys):
+        dropped = sorted({key for key, n in seen.items() if n > 1})
+        logger.info(
+            "Dropping %d column(s): period(s) %s are claimed by more than one column, so the "
+            "table states two different quantities under one date.",
+            len(col_keys) - len(kept), dropped,
+        )
+    return kept
+
+
 def _find_label_cols(
     grid: List[List], first_data_col: int, row_lo: int, row_hi: int
 ) -> List[int]:
@@ -548,7 +578,7 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
     reduced: Dict[str, str] = {}
     for i, (year_row, period_row) in enumerate(blocks):
         region_end = blocks[i + 1][0] if i + 1 < len(blocks) else len(grid)
-        col_keys = _block_col_keys(grid, year_row, period_row)
+        col_keys = _drop_colliding_period_cols(_block_col_keys(grid, year_row, period_row))
         if not col_keys:
             continue
         label_cols = _find_label_cols(grid, min(col_keys), year_row, region_end)
@@ -668,7 +698,13 @@ def parse_generic_grid(grid: List[List]) -> TableData:
     col_keys: Dict[int, Tuple] = {}
     col_labels: List[str] = []
     if temporal:
-        col_keys = {c: p for c, p in col_periods.items() if p is not None}
+        col_keys = _drop_colliding_period_cols(
+            {c: p for c, p in col_periods.items() if p is not None}
+        )
+        if not col_keys:
+            raise ValueError(
+                "Setiap kolom periode diklaim lebih dari satu kolom; struktur tabel ambigu."
+            )
     else:
         for c in data_cols:
             name = str(header[c]).strip()

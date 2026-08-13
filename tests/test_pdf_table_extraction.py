@@ -885,3 +885,57 @@ def test_a_vision_run_is_not_served_from_the_cache_of_a_native_only_run():
 
 def test_pdf_table_label_falls_back_when_caption_is_missing():
     assert PdfTable(page_number=3, caption="", unit="", index_on_page=1).label == "Hal. 3 · Tabel 2"
+
+
+# ---------------------------------------------------------------------------
+# _align_header_to_body — a header transcribed without its label column
+# ---------------------------------------------------------------------------
+
+def _shifted_m2_table():
+    """The transcription M2-April-2026 (1).pdf page 1 actually produced.
+
+    The header starts at the first DATA column, so every period names the column to its left:
+    'Apr*' sits over March's level and "Apr'26*" over March's growth.
+    """
+    return _PdfTableOut(
+        caption="Tabel 1. Uang Beredar dan Komponennya",
+        unit="(triliun Rp)",
+        header_rows=[["2026", "2026"], ["Mar", "Apr*", "Mar'26", "Apr'26*"]],
+        rows=[
+            ["Uang Beredar Luas (M2)", "10.355,7", "10.253,7", "9,7", "9,2"],
+            ["Uang Beredar Sempit (M1)", "6.033,8", "5.936,1", "14,4", "13,6"],
+            ["Uang Kartal di Luar Bank Umum dan BPR", "1.206,1", "1.186,3", "10,8", "15,7"],
+        ],
+    )
+
+
+def test_a_header_missing_its_label_column_is_padded_back_into_place():
+    grid = _assemble_grid(_shifted_m2_table())
+    table, _ = _parse_grid_with_fallback(grid)
+
+    # Without the padding April read 9,7 — March's GROWTH — and a claim of Rp10.253,7 triliun
+    # came back Refuted with a delta of 10.244.
+    assert table.lookup("Uang Beredar Luas (M2)", 2026, "Apr") == 10253.7
+    assert table.lookup("Uang Beredar Luas (M2)", 2026, "Mar") == 10355.7
+    assert table.lookup("Uang Kartal di Luar Bank Umum dan BPR", 2026, "Apr") == 1186.3
+
+
+def test_an_already_aligned_header_is_left_alone():
+    out = _table_out()  # header_rows carry their own leading label cell
+    before = [list(r) for r in out.header_rows]
+
+    _assemble_grid(out)
+
+    assert [list(r) for r in out.header_rows] == before
+
+
+def test_a_header_short_by_more_than_the_label_column_is_not_shifted():
+    # Two cells missing is not a missing label column but a table we do not understand;
+    # shifting it would file values under the wrong dates just as silently.
+    out = _shifted_m2_table()
+    out.header_rows = [["2026", "2026"], ["Mar", "Apr*", "Mar'26"]]
+
+    grid = _assemble_grid(out)
+    header = next(r for r in grid if "Mar" in r)
+
+    assert header[0] == "Mar", "no padding should have been applied"
