@@ -92,6 +92,44 @@ touches a number:
    unique word so the call is bounded by vocabulary size rather than document length. Returned
    as `typo_check` alongside the fact-verification results.
 
+### Reference pool: `mode=excel` | `internal` | `both`
+
+A report carries its own data tables - snippet tables on the narrative pages, the full series in
+its Lampiran pages - so it can be checked against itself, with no workbook uploaded. The `mode`
+parameter on both paired endpoints (and the segmented control in the UI) picks what the claims
+are compared against:
+
+| Mode | Reference pool | Excel upload |
+|---|---|---|
+| `excel` (default) | the uploaded workbook sheets only | required |
+| `internal` | the tables printed inside the PDF itself | not accepted |
+| `both` | both pools at once | required |
+
+Tables are read out of the PDF by `pdf_table_extraction.py`, native reader first:
+
+- **Native (no LLM at all)** - captions (`Tabel N.` / `Lampiran N.`), the period header under
+  them, and the data rows below are rebuilt from the PDF's own text objects. A digital report
+  that is fully readable this way costs zero vision calls and about a second.
+- **Vision, per unaccounted page** - a page the native reader could not fully explain is
+  rendered and transcribed by Gemini. The model supplies the **layout**, not the numbers: on a
+  page that has a text layer every transcribed value is replaced by the one PDFium reads out of
+  the file, and a row that cannot be matched up is emptied rather than trusted.
+- **The remaining caveat** - a scanned page has no text layer to check against, so there the
+  numbers really are the model's. Those tables are reported as `pdf-*-unverified` in
+  `excel_parsers`, and the UI marks every verdict resting on one ("Angka dibaca AI").
+
+Because a report usually states each series twice (snippet **and** Lampiran), the two internal
+copies cross-check each other: a disagreement is reported as `source_conflict: "internal"` on
+the claim. In `both` mode a PDF table that disagrees with an uploaded sheet is reported as
+`"cross"` instead. A conflict is deliberately *not* a fourth verdict - it says the references
+disagree, which is a separate question from whether the claim matches its best source.
+
+`GOOGLE_API_KEY` is only needed for pages the native reader cannot account for. Without it,
+internal mode still runs on whatever the text layer yields and fails - with a message naming
+both causes - only when that comes back empty (i.e. a scanned report). `/api/extract-pdf-tables`
+returns the transcribed grids without verifying anything, which is the cheapest way to see what
+the pipeline actually read.
+
 ## Setup
 
 ```bash
@@ -197,6 +235,17 @@ curl -X POST http://127.0.0.1:8000/api/verify-paired \
 
 `excel_file` accepts multiple files (repeat the `-F "excel_file=@..."` flag); `sheet_names` is a
 comma-separated list, one sheet name per file, and is reused for any remaining files if shorter.
+
+To check the report against its own printed tables instead, drop the workbook and pass the mode
+(see [Reference pool](#reference-pool-modeexcel--internal--both)):
+
+```bash
+curl -X POST "http://127.0.0.1:8000/api/verify-paired?mode=internal" \
+  -F "pdf_file=@laporan.pdf;type=application/pdf"
+```
+
+The response then repeats the PDF's name in `excel_filenames`, puts the table's page and caption
+in `excel_sheets` ("Hal. 7 · Lampiran 1. …"), and prefixes `excel_parsers` with `pdf-`.
 
 ```json
 {

@@ -335,6 +335,23 @@ def test_a_table_off_a_scanned_page_is_reported_as_unverified():
     assert response.excel_parsers == ["pdf-generic-unverified"]
 
 
+def test_a_result_names_its_source_the_way_the_source_arrays_spell_it():
+    # The frontend pairs a verdict with its parser by rebuilding "<filename> / <sheet>" from the
+    # parallel source arrays and looking up matched_excel_source. That is the only link between
+    # a fact and the "-unverified" marker, so it is pinned here rather than left to the UI.
+    with _facts_returning([_make_fact(claimed_value=10355.1, unit="triliun Rp")]):
+        response = asyncio.run(verify_paired(
+            narrative_text="[== Halaman 1 ==]\nteks", excel_sources=[], llm=Mock(),
+            pdf_filename="scan.pdf", mode="internal",
+            pdf_tables=[_internal_pdf_table(verified=False)],
+        ))
+
+    labels = [f"{name} / {sheet}"
+              for name, sheet in zip(response.excel_filenames, response.excel_sheets)]
+    assert response.results[0].matched_excel_source in labels
+    assert len(labels) == len(response.excel_parsers)
+
+
 def test_excel_mode_response_is_unchanged_by_the_new_fields():
     with _facts_returning([]):
         response = asyncio.run(verify_paired(

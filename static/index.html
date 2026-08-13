@@ -544,6 +544,12 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   border-radius: 4px; padding: 1px 6px; white-space: nowrap;
   max-width: 240px; overflow: hidden; text-overflow: ellipsis;
 }
+/* A source whose numbers the model read off a page image, because that page carried no text
+   layer to read them from. Worth telling apart from a code-read number when weighing a
+   verdict — see pdf_table_extraction._verify_against_text_layer. */
+.source-badge.is-unverified, .fact-source-chip.is-unverified {
+  background: #FFF7ED; border-color: #FED7AA; color: #9A3412;
+}
 
 /* ── Paired legacy (kept for safety) ── */
 .na { color: var(--text-400); }
@@ -1559,10 +1565,34 @@ body.auth-locked .app {
 
     const mode = data.mode || "excel";
     const conflicts = data.conflict_count || 0;
-    const caveat = mode === "excel" ? "" : `<div class="mode-caveat">
+
+    // excel_filenames / excel_sheets / excel_parsers are parallel arrays, one entry per
+    // reference source, and "<filename> / <sheet>" is exactly the label the results carry in
+    // matched_excel_source and source_values[].source — so the parser of the source behind any
+    // given verdict can be looked up here. Parsers prefixed "pdf-" come from a table inside the
+    // PDF; the "-unverified" suffix means that page had no text layer, so the numbers are the
+    // model's reading of an image rather than values read out of the file by code.
+    const parserBySource = new Map();
+    const srcFiles = data.excel_filenames || [], srcSheets = data.excel_sheets || [];
+    const srcParsers = data.excel_parsers || [];
+    const nSources = Math.min(srcFiles.length, srcSheets.length, srcParsers.length);
+    for (let n = 0; n < nSources; n++) {
+      parserBySource.set(`${srcFiles[n]} / ${srcSheets[n]}`, srcParsers[n] || "");
+    }
+    const isUnverified = (source) => (parserBySource.get(source) || "").endsWith("-unverified");
+    const internalCount = srcParsers.filter((p) => (p || "").startsWith("pdf-")).length;
+    const unverifiedCount = srcParsers.filter((p) => (p || "").endsWith("-unverified")).length;
+
+    // No internal table was read (a scanned PDF in "both" mode, say) — then nothing about the
+    // PDF's own tables is worth saying, and the Excel sources answered everything.
+    const caveat = (mode === "excel" || internalCount === 0) ? "" : `<div class="mode-caveat">
       <span class="material-symbols-outlined">info</span>
-      <span>Nilai pembanding pada mode ini dibaca AI dari tabel di dalam PDF, bukan dari file
-      Excel resmi. Periksa temuan penting langsung ke tabel aslinya.</span>
+      ${unverifiedCount > 0
+        ? `<span><strong>${unverifiedCount} dari ${internalCount} tabel</strong> di dalam PDF ada
+           di halaman tanpa lapisan teks, jadi angkanya dibaca AI dari gambar halaman. Klaim yang
+           bersumber dari tabel itu ditandai — periksa langsung ke tabel aslinya.</span>`
+        : `<span>Pembanding diambil dari <strong>${internalCount} tabel</strong> di dalam PDF.
+           Angkanya dibaca dari lapisan teks dokumen, bukan dari pembacaan gambar oleh AI.</span>`}
     </div>`;
     const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
       <span class="material-symbols-outlined">rule</span>
@@ -1643,6 +1673,10 @@ body.auth-locked .app {
           const valCls   = verdict === "Refuted" ? "bad" : verdict === "Entailed" ? "ok" : "";
           const pageBadge = item.page_number != null ? `<span class="page-badge">Hal.&nbsp;${item.page_number}</span>` : "";
           const sourceBadge = item.matched_excel_source ? `<span class="source-badge" title="${escapeHtml(item.matched_excel_source)}">${escapeHtml(item.matched_excel_source)}</span>` : "";
+          // The verdict above rests on a number nobody could check against a text layer.
+          const unverifiedBadge = isUnverified(item.matched_excel_source)
+            ? `<span class="source-badge is-unverified" title="Halaman tabel ini tidak punya lapisan teks, jadi angkanya dibaca AI dari gambar halaman">Angka dibaca AI</span>`
+            : "";
           const quote    = item.context_quote ? `<div class="fact-quote">"${escapeHtml(item.context_quote)}"</div>` : "";
 
           const periodChips = periods.length > 1
@@ -1687,8 +1721,11 @@ body.auth-locked .app {
                 const v = sv.computed_value !== null && sv.computed_value !== undefined
                   ? fmtValue(sv.computed_value, sv.computed_unit === "persen_yoy" ? "persen_yoy" : sv.computed_unit)
                   : VERDICT_LABEL[sv.verdict] || sv.verdict;
-                const cls = conflict && n > 0 ? " is-conflicting" : "";
-                return `<span class="fact-source-chip${cls}" title="${escapeHtml(sv.source)}">${escapeHtml(sv.source)}: ${escapeHtml(String(v))}</span>`;
+                const cls = (conflict && n > 0 ? " is-conflicting" : "")
+                  + (isUnverified(sv.source) ? " is-unverified" : "");
+                const hint = isUnverified(sv.source)
+                  ? `${sv.source} — angka dibaca AI dari gambar halaman` : sv.source;
+                return `<span class="fact-source-chip${cls}" title="${escapeHtml(hint)}">${escapeHtml(sv.source)}: ${escapeHtml(String(v))}</span>`;
               }).join("")}</div>`
             : "";
 
@@ -1703,6 +1740,7 @@ body.auth-locked .app {
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
               ${pageBadge}
               ${sourceBadge}
+              ${unverifiedBadge}
             </div>
             ${quote}
             ${periodChips}
