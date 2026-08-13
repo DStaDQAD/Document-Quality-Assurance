@@ -531,18 +531,25 @@ async def _run_paired_pipeline(
     # and rate-limit budget, so overlapping them buys little and makes progress illegible.
     pdf_tables: List[PdfTable] = []
     if mode in ("internal", "both"):
-        if vision_llm is None:
-            raise ValueError(
-                "Mode tabel internal membutuhkan model vision (GOOGLE_API_KEY belum diatur)."
-            )
         _emit("tables", "running")
 
         def _on_table_progress(done: int, total: int) -> None:
             _emit("tables", "running", current=done, total=total, detail=f"{total} panggilan")
 
+        # A vision model is not a precondition: on a digital report the text-layer reader
+        # answers every page on its own (see extract_tables_from_pdf). Only when that reader
+        # comes back empty-handed does the missing key actually cost the user anything, so
+        # that is where the refusal belongs.
         pdf_tables = await extract_tables_from_pdf(
             pdf_bytes, vision_llm, on_progress=_on_table_progress
         )
+        if not pdf_tables and vision_llm is None:
+            raise ValueError(
+                "Tidak ada tabel yang bisa dibaca dari lapisan teks PDF ini, dan mode tabel "
+                "internal tidak dapat memindai halamannya karena GOOGLE_API_KEY belum diatur."
+            )
+        # Only the empty case is reported here; when tables were found, verify_paired closes the
+        # stage with a detail that names each one's parser (see its "tables" done event).
         if not pdf_tables:
             _emit("tables", "done", detail="Tidak ada tabel terbaca di dalam PDF")
 

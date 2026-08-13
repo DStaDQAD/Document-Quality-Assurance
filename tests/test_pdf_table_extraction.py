@@ -834,5 +834,54 @@ def test_extract_tables_reports_progress():
     assert seen == [(1, 2), (2, 2)]
 
 
+# ---------------------------------------------------------------------------
+# extract_tables_from_pdf without a vision model — the native half on its own
+# ---------------------------------------------------------------------------
+
+def _native_table(page=7, caption="Lampiran 1. Uang Beredar"):
+    table = _as_pdf_table(_three_col_table(caption=caption), page=page)
+    table.verified = True
+    return table
+
+
+def test_extract_tables_without_vision_keeps_what_the_text_layer_gave():
+    # Page 2 was not answered natively; with no model to transcribe it, page 1's table is
+    # still a perfectly good reference and is returned rather than discarded.
+    with patch("pdf_table_extraction.extract_tables_natively",
+               return_value=([_native_table(page=1)], {1}, 2)), \
+         patch("pdf_table_extraction.render_pages_to_b64") as render:
+        tables = asyncio.run(extract_tables_from_pdf(b"%PDF-fake", None))
+
+    assert [t.page_number for t in tables] == [1]
+    assert not render.called, "rendering pages is pointless with no model to read them"
+
+
+def test_extract_tables_without_vision_returns_empty_for_a_scanned_pdf():
+    with patch("pdf_table_extraction.extract_tables_natively", return_value=([], set(), 3)), \
+         patch("pdf_table_extraction.render_pages_to_b64") as render:
+        assert asyncio.run(extract_tables_from_pdf(b"%PDF-scan", None)) == []
+    assert not render.called
+
+
+def test_extract_tables_without_vision_still_reports_progress():
+    seen = []
+    with patch("pdf_table_extraction.extract_tables_natively",
+               return_value=([_native_table()], {1}, 2)):
+        asyncio.run(extract_tables_from_pdf(
+            b"%PDF-fake", None, on_progress=lambda done, total: seen.append((done, total))
+        ))
+    assert seen == [(1, 1)]
+
+
+def test_a_vision_run_is_not_served_from_the_cache_of_a_native_only_run():
+    # The two runs read the same bytes but not the same pages, so they must not share a key.
+    llm, structured = _gemini_llm(_PageTables(tables=[_table_out()]))
+    with patch("pdf_table_extraction.extract_tables_natively", return_value=([], set(), 1)), \
+         patch("pdf_table_extraction.render_pages_to_b64", return_value=["a"]):
+        assert asyncio.run(extract_tables_from_pdf(b"%PDF-fake", None)) == []
+        assert len(asyncio.run(extract_tables_from_pdf(b"%PDF-fake", llm))) == 1
+    assert structured.ainvoke.call_count == 1
+
+
 def test_pdf_table_label_falls_back_when_caption_is_missing():
     assert PdfTable(page_number=3, caption="", unit="", index_on_page=1).label == "Hal. 3 · Tabel 2"

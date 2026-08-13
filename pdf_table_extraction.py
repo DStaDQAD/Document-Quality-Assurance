@@ -893,7 +893,7 @@ def _cache_put(key: str, tables: List[PdfTable]) -> None:
 
 async def extract_tables_from_pdf(
     pdf_bytes: bytes,
-    vision_llm: BaseChatModel,
+    vision_llm: Optional[BaseChatModel],
     dpi: int = 150,
     on_progress: Optional[Callable[[int, int], None]] = None,
 ) -> List[PdfTable]:
@@ -902,6 +902,11 @@ async def extract_tables_from_pdf(
     Two strategies, native first: a page whose tables can be rebuilt from the PDF's own text
     objects never reaches the vision model at all, which on a digital report means no LLM call
     and no wait. Only the pages the native reader could not fully account for are transcribed.
+
+    `vision_llm=None` keeps the native half and drops the other: a digital report still comes
+    back complete, a scanned one comes back empty. Callers get the same partial-coverage
+    outcome a failed vision call already produces, so no key configured is a reason to read
+    less, not a reason to refuse.
 
     Never raises for a readable PDF: a page whose call fails or whose transcription fails the
     structural guards contributes no tables and is logged. An empty result is a valid outcome
@@ -934,6 +939,21 @@ async def extract_tables_from_pdf(
     if n_pages and len(answered) == n_pages:
         logger.info(
             "Every page read natively — no vision call needed for %d table(s).", len(native)
+        )
+        tables = in_page_order(native)
+        if on_progress is not None:
+            on_progress(1, 1)
+        _cache_put(key, tables)
+        return tables
+
+    if vision_llm is None:
+        # Cached like any other result: the answer for these bytes is fixed until a vision
+        # model appears, and the key already carries the (empty) model name to tell the two
+        # runs apart.
+        logger.warning(
+            "No vision model configured — %d of %d page(s) go unread; keeping the %d table(s) "
+            "the text layer yielded.",
+            max(n_pages - len(answered), 0), n_pages, len(native),
         )
         tables = in_page_order(native)
         if on_progress is not None:

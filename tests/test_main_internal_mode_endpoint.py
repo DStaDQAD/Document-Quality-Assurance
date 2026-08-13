@@ -122,18 +122,46 @@ def test_excel_mode_never_transcribes_pdf_tables(
 
 @patch("main.check_typos")
 @patch("main.verify_paired")
+@patch("main.extract_tables_from_pdf")
 @patch("main.extract_narrative_text")
 @patch("main.get_vision_llm")
-def test_internal_mode_fails_clearly_without_a_vision_model(
-    mock_vision, mock_narrative, mock_verify, mock_typos
+def test_internal_mode_runs_on_the_text_layer_alone_without_a_vision_model(
+    mock_vision, mock_narrative, mock_tables, mock_verify, mock_typos
 ):
+    # A digital report is read by the native table reader, which needs no model at all — so a
+    # missing key is not a reason to refuse the run.
     mock_vision.side_effect = RuntimeError("no key configured")
     mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_tables.return_value = [Mock()]
+    mock_verify.return_value = _fact_response(mode="internal")
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired?mode=internal", files=_PDF_ONLY)
+
+    assert response.status_code == 200
+    assert mock_tables.call_args.args[1] is None       # no vision model was passed
+    assert len(mock_verify.call_args.kwargs["pdf_tables"]) == 1
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_tables_from_pdf")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_internal_mode_fails_clearly_when_nothing_is_readable_without_vision(
+    mock_vision, mock_narrative, mock_tables, mock_verify, mock_typos
+):
+    # A scanned report has no text layer, so without a vision model there is no reference at
+    # all — that is the one case where the missing key is worth reporting.
+    mock_vision.side_effect = RuntimeError("no key configured")
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_tables.return_value = []
 
     response = client.post("/api/verify-paired?mode=internal", files=_PDF_ONLY)
 
     assert response.status_code == 400
     assert "GOOGLE_API_KEY" in response.json()["detail"]
+    mock_verify.assert_not_called()
 
 
 @patch("main.check_typos")

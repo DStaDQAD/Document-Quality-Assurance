@@ -1401,11 +1401,14 @@ async def verify_paired(
         ))
         excel_parsers.append(parser_used)
     if pdf_tables:
-        emit(
-            "tables", "done",
-            detail=f"{len(pdf_tables)} tabel internal · parser: "
-                   f"{', '.join(excel_parsers[-len(pdf_tables):])}",
-        )
+        detail = (f"{len(pdf_tables)} tabel internal · parser: "
+                  f"{', '.join(excel_parsers[-len(pdf_tables):])}")
+        if vision_llm is None:
+            # Without a vision model the transcriber only reads pages that carry a text layer,
+            # so coverage can be partial and a claim whose table sits on an unread page comes
+            # back Inconclusive. Say so here rather than let the user guess at the verdicts.
+            detail += " · tanpa model vision, hanya halaman dengan lapisan teks yang dibaca"
+        emit("tables", "done", detail=detail)
 
     # Per-source label groups with table title context (used by the LLM to understand
     # what generic rows like 'Total' represent in each table). Categorical sources also
