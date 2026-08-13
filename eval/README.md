@@ -86,8 +86,10 @@ reports three separate axes:
 
 Matching (`matching.py`) is tolerant but anchored: same operation, the claim's periods present
 among the result's periods (a subset — `yoy_growth` adds the prior-year point), and containment
-on the metric name. It is unit-tested deterministically (`tests/test_eval_e2e.py`); only the
-runner needs a provider.
+on the metric name. When a label pins `claimed_value`, a candidate stating that number wins over
+an earlier one that does not — needed when a document states the same claim twice with different
+figures. It is unit-tested deterministically (`tests/test_eval_e2e.py`); only the runner needs a
+provider.
 
 ### Run it (needs API keys + local files)
 
@@ -106,6 +108,7 @@ See `eval/cases/e2e/example_m2_april_2026.yaml` for a worked, verified example. 
 
 ```yaml
 - id: unique_id
+  mode: excel                          # excel (default) | internal | both
   pdf: "sample_data/report.pdf"       # local path (relative to repo root)
   excel: "sample_data/TABEL1_1.xls"   # a string, or a list for multiple sources
   sheets: "I.1"                        # a string, or one per Excel file
@@ -115,8 +118,32 @@ See `eval/cases/e2e/example_m2_april_2026.yaml` for a worked, verified example. 
       periods:
         - {metric_label: "M2", year: 2026, month: Apr}
       expected_verdict: Entailed
+      claimed_value: 9.2               # optional; only needed to tell repeated claims apart
       note: "optional reviewer note"
 ```
 
 Aim for a mix of Entailed, Refuted, and Inconclusive claims so the verdict metrics mean
 something — especially Refuted, the class that proves the tool catches wrong numbers.
+
+### Scoring internal mode
+
+`mode:` picks the reference pool, exactly as the endpoint's parameter does (see the main
+README). `mode: internal` omits `excel:` entirely — the report is scored against the tables
+printed inside it, which the runner transcribes with `extract_tables_from_pdf` before verifying:
+
+```yaml
+- id: report_internal
+  mode: internal
+  pdf: "sample_data/report.pdf"
+  claims: [...]
+```
+
+`eval/cases/e2e/internal_m2_april_2026.yaml` is the worked example: the same BI report twice,
+once untouched and once with a single figure doctored in its summary bullet, so the pair scores
+both the Entailed and the Refuted class from the document alone. The doctored file keeps the
+correct figure in its body paragraph, which is why those two labels carry `claimed_value`.
+
+The JSON report records, per case, the mode and the sources that answered it —
+`"sources": ["Hal. 7 · Lampiran 1… [pdf-generic]", …]`. A `-unverified` suffix there means the
+table came off a scanned page, so its numbers were read by the model rather than out of the
+PDF's text layer; that is the first thing to check when an internal-mode case scores badly.

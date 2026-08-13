@@ -10,6 +10,12 @@ Matching is intentionally tolerant but anchored on the deterministic parts of a 
 same operation, the claim's periods present among the result's periods (a subset, since
 yoy adds the prior-year point the label doesn't list), and a containment match on the
 metric name. First unused result wins; each result is matched at most once.
+
+One exception to "first wins": a label may pin the number the PDF states (`claimed_value`),
+and then a candidate stating that number is preferred over an earlier one that does not.
+Documents repeat themselves — a summary bullet and a body paragraph make the same claim —
+and when the two disagree they are the same fact to every other rule here, so the label
+would otherwise be scored against whichever the extractor happened to emit first.
 """
 
 import re
@@ -45,6 +51,17 @@ def _periods_subset(claim: ExpectedClaim, result: FactVerificationResult) -> boo
     return want.issubset(have) if want else False
 
 
+def _states_claimed_value(claim: ExpectedClaim, result: FactVerificationResult) -> bool:
+    """True when the label pins a number and the result states that same number.
+
+    Compared as printed: both sides come from the same decimal text, so any real difference
+    is larger than the epsilon by orders of magnitude.
+    """
+    if claim.claimed_value is None or result.claimed_value is None:
+        return False
+    return abs(claim.claimed_value - result.claimed_value) < 1e-6
+
+
 def match_results(
     claims: List[ExpectedClaim], results: List[FactVerificationResult]
 ) -> MatchResult:
@@ -53,18 +70,17 @@ def match_results(
     used: set = set()
 
     for claim in claims:
-        chosen = None
-        for i, r in enumerate(results):
-            if i in used:
-                continue
-            if r.operation != claim.operation:
-                continue
-            if not _periods_subset(claim, r):
-                continue
-            if not _metric_matches(claim.metric, r.metric_label):
-                continue
-            chosen = i
-            break
+        candidates = [
+            i for i, r in enumerate(results)
+            if i not in used
+            and r.operation == claim.operation
+            and _periods_subset(claim, r)
+            and _metric_matches(claim.metric, r.metric_label)
+        ]
+        chosen = next(
+            (i for i in candidates if _states_claimed_value(claim, results[i])),
+            candidates[0] if candidates else None,
+        )
         if chosen is not None:
             used.add(chosen)
             out.matched.append((claim, results[chosen]))

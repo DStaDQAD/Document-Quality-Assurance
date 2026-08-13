@@ -1,0 +1,124 @@
+# Layer-2 cases for INTERNAL mode: the report is checked against the tables printed inside it,
+# with no workbook uploaded (`mode: internal`).
+#
+# The pair below is the point of this file. Both PDFs are the same BI M2 report; the "salah"
+# one was doctored, and the only numeric edit in it is in the opening summary bullet:
+#
+#     benar: "... tumbuh sebesar 9,2% (yoy), melanjutkan pertumbuhan pada Maret 2026
+#             sebesar 9,7% (yoy)"
+#     salah: "...                                                    sebesar 8,7% (yoy)"
+#
+# The report's own Tabel 1 and Tabel 2 print "Uang Beredar (M2) ... M ar'26 9,7 | Apr'26* 9,2",
+# so 8,7 must come back Refuted from the document alone. Everything else the doctored file
+# changes is spelling ("Likuidiaftas", "bershih", "fahktor"), which is the typo checker's job,
+# not this harness's.
+#
+# NOTE on the repeated claim: the body paragraph of the doctored PDF still carries the correct
+# 9,7%, so that document states M2/Mar-2026/yoy twice with different numbers. The two labels
+# are told apart by `claimed_value` — without it they would be scored in extraction order.
+#
+# Expected verdicts were read off the tables inside the PDF (page 1 Tabel 1, page 2 Tabel 2,
+# page 7 Lampiran 1, page 8 Lampiran 2):
+#   M2   Apr'26  10.253,7 triliun   9,2% yoy      M2  Mar'26  10.355,7 triliun   9,7% yoy
+#   M1   Apr'26   5.936,1 triliun  13,6% yoy      Kredit Apr'26  8.606,6 triliun  9,4% yoy
+
+- id: m2_april_2026_internal
+  description: "BI M2 April 2026 (asli) dinilai terhadap tabel di dalam PDF-nya sendiri"
+  mode: internal
+  pdf: "sample_data/test case_Analisis Uang Beredar Posisi April 2026.pdf"
+  claims:
+    - metric: "M2"
+      operation: value
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 10253.7
+      note: "Rp10.253,7 triliun — Tabel 1 dan Lampiran 1 mencetak angka yang sama"
+
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 9.2
+      note: "9,2% (yoy) — kolom Apr'26 pada Tabel 1/2"
+
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Mar}
+      expected_verdict: Entailed
+      claimed_value: 9.7
+      note: "9,7% (yoy) — kolom Mar'26"
+
+    - metric: "M1"
+      operation: value
+      periods:
+        - {metric_label: "M1", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 5936.1
+      note: "Rp5.936,1 triliun"
+
+    - metric: "Kredit"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "Kredit", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 9.4
+      note: "9,4% (yoy) — Tabel 2"
+
+- id: m2_april_2026_internal_salah
+  description: "Versi yang disalahkan: satu angka diubah, harus tertangkap dari tabel di dalam PDF"
+  mode: internal
+  pdf: "sample_data/test case salah_Analisis Uang Beredar Posisi April 2026.pdf"
+  claims:
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Mar}
+      expected_verdict: Refuted
+      claimed_value: 8.7
+      note: "SATU-SATUNYA angka yang dipalsukan: bullet ringkasan menulis 8,7%; tabelnya 9,7%"
+
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Mar}
+      expected_verdict: Entailed
+      claimed_value: 9.7
+      note: "Paragraf isi masih memuat angka yang benar — dokumen ini bertentangan dengan dirinya sendiri"
+
+    - metric: "M2"
+      operation: value
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 10253.7
+      note: "Tidak diubah — penanda bahwa yang dipalsukan tidak menyeret klaim lain ikut Refuted"
+
+# Mode "both": sumber internal DAN workbook sekaligus, supaya jalur perbandingan antar-sumber
+# (source_conflict "cross") ikut terlatih. Angka SEKI 5.9/TABEL1_1 seharusnya sinkron dengan
+# tabel di dalam laporan, jadi tidak ada konflik yang diharapkan — konflik di sini berarti
+# transkripsi tabel PDF meleset, dan itulah yang ingin ketahuan.
+- id: m2_april_2026_both
+  description: "PDF asli dinilai terhadap tabel internal DAN TABEL1_1.xls sekaligus"
+  mode: both
+  pdf: "sample_data/test case_Analisis Uang Beredar Posisi April 2026.pdf"
+  excel: "sample_data/TABEL1_1.xls"
+  sheets: "I.1"
+  claims:
+    - metric: "M2"
+      operation: value
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 10253.7
+      note: "Excel memberi 10.253,6519 triliun; tabel internal mencetak 10.253,7 — keduanya sesuai"
+
+    - metric: "M2"
+      operation: yoy_growth
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+      claimed_value: 9.2
+      note: "Excel 9,2221%; tabel internal 9,2"

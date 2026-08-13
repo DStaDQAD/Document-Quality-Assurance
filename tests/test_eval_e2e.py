@@ -1,6 +1,9 @@
 """Deterministic tests for the Layer-2 eval's matching + loader (no LLM, no API keys)."""
 
+from dataclasses import replace
 from pathlib import Path
+
+import pytest
 
 from eval.dataset import PeriodSpec
 from eval.e2e_dataset import ExpectedClaim, load_e2e_cases
@@ -87,11 +90,18 @@ def test_render_e2e_console_reports_recall_and_verdicts():
     mr = match_results(claims, results)
     metrics = compute_metrics([(c.expected_verdict, r.verdict) for c, r in mr.matched])
 
-    text = render_e2e_console(mr.matched, mr.missing, mr.spurious, metrics)
+    # The runner tags every row with its case id before rendering (see _run_all).
+    text = render_e2e_console(
+        [("m2_internal", c, r) for c, r in mr.matched],
+        [("m2_internal", c) for c in mr.missing],
+        [("m2_internal", r) for r in mr.spurious],
+        metrics,
+    )
 
     assert "END-TO-END EVAL" in text
     assert "Extraction recall" in text
     assert "WRONG verdicts" in text  # Entailed expected but Refuted predicted
+    assert "m2_internal" in text, "a wrong verdict must name the document it came from"
 
 
 def test_example_e2e_case_loads_and_is_well_formed():
@@ -105,3 +115,86 @@ def test_example_e2e_case_loads_and_is_well_formed():
     assert all(c.expected_verdict in {"Entailed", "Refuted", "Inconclusive"} for c in example.claims)
     assert example.sheet_for(0) == "I.1"
     assert example.sheet_for(5) == "I.1"  # reused when fewer sheets than files
+    assert example.mode == "excel", "a case that says nothing about mode is an Excel case"
+
+
+# ---------------------------------------------------------------------------
+# mode: which reference pool a case is scored against
+# ---------------------------------------------------------------------------
+
+def _case_yaml(tmp_path, body):
+    path = tmp_path / "case.yaml"
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+_INTERNAL_CASE = """
+- id: internal_case
+  mode: internal
+  pdf: "sample_data/report.pdf"
+  claims:
+    - metric: "M2"
+      operation: value
+      periods:
+        - {metric_label: "M2", year: 2026, month: Apr}
+      expected_verdict: Entailed
+"""
+
+
+def test_internal_case_needs_no_excel_source(tmp_path):
+    case = load_e2e_cases([_case_yaml(tmp_path, _INTERNAL_CASE)])[0]
+    assert case.mode == "internal"
+    assert case.excel == []
+
+
+def test_unknown_mode_is_rejected_at_load_time(tmp_path):
+    body = _INTERNAL_CASE.replace("mode: internal", "mode: telepathy")
+    with pytest.raises(ValueError, match="telepathy"):
+        load_e2e_cases([_case_yaml(tmp_path, body)])
+
+
+def test_a_mode_that_needs_a_workbook_is_rejected_without_one(tmp_path):
+    body = _INTERNAL_CASE.replace("mode: internal", "mode: both")
+    with pytest.raises(ValueError, match="internal_case"):
+        load_e2e_cases([_case_yaml(tmp_path, body)])
+
+
+def test_internal_mode_cases_ship_with_a_refuted_label():
+    # The doctored M2 report is the only case that proves the tool catches a wrong number
+    # from the document alone; a file that lost it would still pass every other assertion.
+    cases = load_e2e_cases(_discover_case_files(_DEFAULT_CASES_DIR))
+    internal = [c for c in cases if c.mode == "internal"]
+    assert internal, "no internal-mode case is labelled"
+    verdicts = {claim.expected_verdict for case in internal for claim in case.claims}
+    assert "Refuted" in verdicts
+
+
+# ---------------------------------------------------------------------------
+# claimed_value tie-break — the same claim stated twice with different numbers
+# ---------------------------------------------------------------------------
+
+def test_claimed_value_picks_the_sentence_a_label_is_about():
+    # A doctored summary bullet (8,7) and an untouched body paragraph (9,7) extract to two
+    # facts that agree on metric, operation and period. Order must not decide the scoring.
+    claim = _claim("yoy_growth", "M2", [(2026, "Mar")], verdict="Refuted")
+    claim = replace(claim, claimed_value=8.7)
+    correct = _result("yoy_growth", "M2", [(2026, "Mar")], verdict="Entailed")
+    correct.claimed_value = 9.7
+    doctored = _result("yoy_growth", "M2", [(2026, "Mar")], verdict="Refuted")
+    doctored.claimed_value = 8.7
+
+    mr = match_results([claim], [correct, doctored])
+
+    assert mr.matched[0][1] is doctored
+    assert mr.matched[0][1].verdict == "Refuted"
+
+
+def test_a_label_without_claimed_value_still_takes_the_first_fit():
+    claim = _claim("value", "M2", [(2026, "Apr")])
+    first = _result("value", "M2", [(2026, "Apr")])
+    first.claimed_value = 10253.7
+    second = _result("value", "M2", [(2026, "Apr")])
+
+    mr = match_results([claim], [first, second])
+
+    assert mr.matched[0][1] is first

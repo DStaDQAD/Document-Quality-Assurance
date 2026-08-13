@@ -123,14 +123,18 @@ def _periods_str(claim) -> str:
 def render_e2e_console(matched, missing, spurious, verdict_metrics) -> str:
     """Render the Layer-2 report: extraction recall + spurious facts + verdict metrics.
 
-    matched:  list of (ExpectedClaim, FactVerificationResult) pairs
-    missing:  ExpectedClaims the pipeline did not extract
-    spurious: FactVerificationResults that matched no expected claim
-    verdict_metrics: EvalMetrics computed over the matched pairs' (expected, predicted) verdicts
+    Every row carries the id of the case it came from, because a run covers several documents
+    and the same metric name ("M2") is labelled in more than one of them — without the id a
+    wrong verdict cannot be traced back to a document to open.
+
+    matched:  list of (case_id, ExpectedClaim, FactVerificationResult)
+    missing:  list of (case_id, ExpectedClaim) — claims the pipeline did not extract
+    spurious: list of (case_id, FactVerificationResult) — facts matching no expected claim
+    verdict_metrics: EvalMetrics computed over the matched rows' (expected, predicted) verdicts
     """
     total_expected = len(matched) + len(missing)
     recall = len(matched) / total_expected if total_expected else 0.0
-    verdict_correct = sum(1 for c, r in matched if c.expected_verdict == r.verdict)
+    verdict_correct = sum(1 for _, c, r in matched if c.expected_verdict == r.verdict)
 
     lines: List[str] = []
     lines.append("=" * 62)
@@ -151,16 +155,17 @@ def render_e2e_console(matched, missing, spurious, verdict_metrics) -> str:
 
     if missing:
         lines.append(f"MISSED claims ({len(missing)}) — expected but not extracted:")
-        for c in missing:
-            lines.append(f"  - [{c.operation}] {c.metric} @ {_periods_str(c)} (want {c.expected_verdict})")
+        for case_id, c in missing:
+            lines.append(f"  - {case_id} [{c.operation}] {c.metric} @ {_periods_str(c)} "
+                         f"(want {c.expected_verdict})")
         lines.append("")
 
-    wrong = [(c, r) for c, r in matched if c.expected_verdict != r.verdict]
+    wrong = [(case_id, c, r) for case_id, c, r in matched if c.expected_verdict != r.verdict]
     if wrong:
         lines.append(f"WRONG verdicts ({len(wrong)}):")
-        for c, r in wrong:
+        for case_id, c, r in wrong:
             lines.append(
-                f"  - [{c.operation}] {c.metric} @ {_periods_str(c)}: "
+                f"  - {case_id} [{c.operation}] {c.metric} @ {_periods_str(c)}: "
                 f"expected {c.expected_verdict}, got {r.verdict}"
             )
             lines.append(f"      {r.reasoning}")
@@ -168,9 +173,10 @@ def render_e2e_console(matched, missing, spurious, verdict_metrics) -> str:
 
     if spurious:
         lines.append(f"SPURIOUS facts ({len(spurious)}):")
-        for r in spurious:
+        for case_id, r in spurious:
             pg = f" p{r.page_number}" if r.page_number else ""
-            lines.append(f"  - [{r.operation}] {r.metric_label} → {r.verdict}{pg}: {r.context_quote[:80]}")
+            lines.append(f"  - {case_id} [{r.operation}] {r.metric_label} → {r.verdict}{pg}: "
+                         f"{r.context_quote[:80]}")
         lines.append("")
 
     return "\n".join(lines)
