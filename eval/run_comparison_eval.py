@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Tuple
 
-from eval.dataset import ComparisonCase, build_fact, build_source, load_cases
+from eval.dataset import ComparisonCase, build_fact, build_sources, load_cases
 from eval.metrics import compute_metrics
 from eval.report import CaseResult, render_console, write_json
 from paired_verifier import MATCH_TOLERANCE, _evaluate_fact
@@ -37,9 +37,9 @@ def _value_matches(computed: Optional[float], expected: Optional[float]) -> Opti
 
 
 def evaluate_case(case: ComparisonCase) -> CaseResult:
-    source = build_source(case)
+    sources = build_sources(case)
     fact = build_fact(case)
-    result = _evaluate_fact(fact, [source])
+    result = _evaluate_fact(fact, sources)
 
     verdict_ok = result.verdict == case.expected.verdict
     value_ok = _value_matches(result.computed_value, case.expected.computed_value)
@@ -52,6 +52,9 @@ def evaluate_case(case: ComparisonCase) -> CaseResult:
         value_ok=value_ok,
         computed_value=result.computed_value,
         reasoning=result.reasoning,
+        expected_conflict=case.expected.source_conflict,
+        predicted_conflict=result.source_conflict,
+        conflict_ok=result.source_conflict == case.expected.source_conflict,
     )
 
 

@@ -1,0 +1,163 @@
+# Layer-1 comparison cases for the NON-TIME-SERIES (categorical) axis: tables whose
+# columns are attributes ('Harga', 'Stok') rather than periods, as produced by the
+# Tier-2 generic parser. Row/column labels and values mirror the fixtures in
+# tests/test_table_parser_generic.py so the eval scores the same shape the parser emits.
+#
+# What these lock in that the temporal cases cannot:
+#   - the column-declared unit ('Harga (Rp)' -> 'Rp') beating the table-wide unit,
+#   - an attribute column with no unit at all ('Stok'),
+#   - fuzzy matching along the COLUMN axis, not just the row axis,
+#   - the two ways a categorical claim must come back Inconclusive rather than guessed:
+#     a time-only operation over an attribute, and a temporal claim against this table.
+
+- id: cat_value_harga_entailed
+  description: "Item price stated in Rp matches the 'Harga (Rp)' column (unit read off the column, not the table)"
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    filename: "penjualan_bertingkat.xlsx"
+    sheet: "Sheet1"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+      - {label: "Laptop ASUS", col_label: "Stok", value: 12}
+      - {label: "Keyboard Mechanical", col_label: "Harga (Rp)", value: 850000}
+      - {label: "Keyboard Mechanical", col_label: "Stok", value: 20}
+      - {label: "Mouse Logitech", col_label: "Harga (Rp)", value: 250000}
+      - {label: "Mouse Logitech", col_label: "Stok", value: 45}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 7500000
+    context_quote: "Harga Laptop ASUS tercatat Rp7.500.000"
+    periods:
+      - {metric_label: "Laptop ASUS", col_label: "Harga (Rp)"}
+  expected:
+    verdict: Entailed
+    computed_value: 7500000
+
+- id: cat_value_harga_refuted
+  description: "Claimed price is materially wrong (7.250.000 vs 7.500.000)"
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+      - {label: "Mouse Logitech", col_label: "Harga (Rp)", value: 250000}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 7250000
+    context_quote: "Harga Laptop ASUS tercatat Rp7.250.000"
+    periods:
+      - {metric_label: "Laptop ASUS", col_label: "Harga (Rp)"}
+  expected:
+    verdict: Refuted
+    computed_value: 7500000
+
+- id: cat_value_col_label_fuzzy_entailed
+  description: >
+    Claim names the attribute bare ('Harga') while the sheet's column carries its unit
+    ('Harga (Rp)') — the column axis must fuzzy-match the same way the row axis does.
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Mouse Logitech", col_label: "Harga (Rp)", value: 250000}
+      - {label: "Mouse Logitech", col_label: "Stok", value: 45}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 250000
+    context_quote: "Mouse Logitech dijual seharga Rp250.000"
+    periods:
+      - {metric_label: "Mouse Logitech", col_label: "Harga"}
+  expected:
+    verdict: Entailed
+    computed_value: 250000
+
+- id: cat_value_juta_rupiah_entailed
+  description: "Claim stated in 'juta Rp' against a column declared in plain 'Rp' (scale fallback, ÷1e6)"
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+  fact:
+    operation: value
+    unit: "juta Rp"
+    claimed_value: 7.5
+    context_quote: "Laptop ASUS dibanderol Rp7,5 juta"
+    periods:
+      - {metric_label: "Laptop ASUS", col_label: "Harga (Rp)"}
+  expected:
+    verdict: Entailed
+    computed_value: 7.5
+
+- id: cat_value_unitless_column_entailed
+  description: >
+    Stock count against a column that declares no unit at all ('Stok'): there is no scale
+    to convert to, so the claim's own number must be compared raw instead of failing.
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Keyboard Mechanical", col_label: "Harga (Rp)", value: 850000}
+      - {label: "Keyboard Mechanical", col_label: "Stok", value: 20}
+  fact:
+    operation: value
+    unit: "unit"
+    claimed_value: 20
+    context_quote: "Stok Keyboard Mechanical tersisa 20 unit"
+    periods:
+      - {metric_label: "Keyboard Mechanical", col_label: "Stok"}
+  expected:
+    verdict: Entailed
+    computed_value: 20
+
+- id: cat_yoy_growth_over_attribute_inconclusive
+  description: >
+    A year-on-year growth claim pinned to an ATTRIBUTE column has no prior-year point to
+    grow from — must be refused, not computed off whatever the column happens to hold.
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+  fact:
+    operation: yoy_growth
+    unit: "%"
+    claimed_value: 12.0
+    context_quote: "Harga Laptop ASUS tumbuh 12,0% (yoy)"
+    periods:
+      - {metric_label: "Laptop ASUS", col_label: "Harga (Rp)"}
+  expected:
+    verdict: Inconclusive
+
+- id: cat_row_not_found_inconclusive
+  description: "Claim names an item absent from the sheet (and sharing no wording with any row) → Inconclusive"
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+      - {label: "Mouse Logitech", col_label: "Harga (Rp)", value: 250000}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 3200000
+    context_quote: "Monitor Dell dijual seharga Rp3.200.000"
+    periods:
+      - {metric_label: "Monitor Dell", col_label: "Harga (Rp)"}
+  expected:
+    verdict: Inconclusive
+
+- id: cat_temporal_claim_against_categorical_table_inconclusive
+  description: >
+    A dated claim ('pada April 2026') against a table that has no time axis at all: the
+    source must be skipped, not answered from the nearest attribute column.
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 7500000
+    context_quote: "Pada April 2026 harga Laptop ASUS tercatat Rp7.500.000"
+    periods:
+      - {metric_label: "Laptop ASUS", year: 2026, month: Apr}
+  expected:
+    verdict: Inconclusive

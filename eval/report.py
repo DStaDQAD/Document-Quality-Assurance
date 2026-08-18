@@ -18,10 +18,15 @@ class CaseResult:
     value_ok: Optional[bool]  # None when the case did not assert a computed_value
     computed_value: Optional[float]
     reasoning: str
+    # Which conflict label the case expected vs what the engine reported ("internal" |
+    # "cross" | None). Only a case with several sources can ever differ here.
+    expected_conflict: Optional[str] = None
+    predicted_conflict: Optional[str] = None
+    conflict_ok: bool = True
 
     @property
     def passed(self) -> bool:
-        return self.verdict_ok and self.value_ok is not False
+        return self.verdict_ok and self.value_ok is not False and self.conflict_ok
 
 
 def _metrics_block(metrics: EvalMetrics) -> List[str]:
@@ -65,6 +70,11 @@ def render_console(metrics: EvalMetrics, results: List[CaseResult]) -> str:
             got = r.predicted_verdict
             if r.value_ok is False:
                 got += f" (computed={r.computed_value})"
+            if not r.conflict_ok:
+                got += (
+                    f" (source_conflict={r.predicted_conflict!r}, "
+                    f"want {r.expected_conflict!r})"
+                )
             lines.append(f"  [FAIL] {r.id} [{r.operation}]: expected {r.expected_verdict}, got {got}")
             lines.append(f"         {r.reasoning}")
     else:
@@ -103,6 +113,9 @@ def write_json(path: Path, metrics: EvalMetrics, results: List[CaseResult]) -> N
                 "verdict_ok": r.verdict_ok,
                 "value_ok": r.value_ok,
                 "computed_value": r.computed_value,
+                "expected_conflict": r.expected_conflict,
+                "predicted_conflict": r.predicted_conflict,
+                "conflict_ok": r.conflict_ok,
                 "passed": r.passed,
             }
             for r in results
