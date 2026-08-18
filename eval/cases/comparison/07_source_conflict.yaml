@@ -1,0 +1,158 @@
+# Layer-1 comparison cases with MORE THAN ONE reference source for the same claim.
+# A report states the same series twice (a snippet table on the narrative page and the
+# full series in the Lampiran), and in `both` mode an uploaded workbook is checked
+# alongside them — so the engine must say when its references disagree.
+#
+# A conflict is deliberately not a fourth verdict: the headline verdict still comes from
+# the best-matching source, and `source_conflict` reports separately that the sources do
+# not agree. These cases pin down both halves, and — just as important — the three guards
+# that must NOT fire: identical readings, units that measure different quantities, and a
+# source whose label match is looser than the winner's.
+#
+# Table values are REAL Bank Indonesia M2 figures (TABEL1_1.xls, sheet I.1, Miliar Rp).
+
+- id: conflict_cross_excel_vs_pdf
+  description: >
+    Uploaded workbook and a table transcribed from the PDF give different M2 levels for the
+    same month → verdict still comes from the workbook, conflict reported as 'cross'.
+  tables:
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "TABEL1_1.xls"
+      sheet: "I.1"
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "M2-April-2026.pdf"
+      sheet: "Lampiran 1"
+      origin: pdf
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10250000.0}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519
+    source_conflict: cross
+
+- id: conflict_internal_between_two_pdf_tables
+  description: >
+    The report contradicts itself: its narrative snippet table and its own Lampiran carry
+    different values for the same month → conflict is 'internal', not 'cross'.
+  tables:
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "M2-April-2026.pdf"
+      sheet: "Tabel 1"
+      origin: pdf
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "M2-April-2026.pdf"
+      sheet: "Lampiran 1"
+      origin: pdf
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10240000.0}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519
+    source_conflict: internal
+
+- id: no_conflict_when_both_sources_read_the_same
+  description: "Two sources carrying the identical figure must not be reported as disagreeing"
+  tables:
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "TABEL1_1.xls"
+      sheet: "I.1"
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "M2-April-2026.pdf"
+      sheet: "Lampiran 1"
+      origin: pdf
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519
+
+- id: no_conflict_between_a_levels_table_and_a_growth_table
+  description: >
+    A BI report carries the same series, under the SAME row label, as a level (Miliar Rp)
+    and as %-yoy growth. The two numbers are nothing alike, but they measure different
+    quantities — flagging that as the sources disagreeing would fire on nearly every claim.
+  tables:
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "TABEL1_1.xls"
+      sheet: "I.1"
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+    - title: "Pertumbuhan Uang Beredar"
+      unit: "%, yoy"
+      filename: "TABEL1_19.xls"
+      sheet: "I.19"
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 8.5}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519
+
+- id: no_conflict_from_a_looser_label_match
+  description: >
+    The second source answers only through a broader row ('… Bank Umum'), a weaker claim to
+    be the same series. A looser match is a different series, not a second reading of this
+    one, so its number must neither contradict the winner nor be printed beside it.
+  tables:
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "TABEL1_1.xls"
+      sheet: "I.1"
+      data:
+        - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
+    - title: "Uang Beredar dan faktor-faktor yang mempengaruhinya"
+      unit: "Miliar Rp"
+      filename: "TABEL1_1.xls"
+      sheet: "I.2"
+      data:
+        - {label: "Uang Beredar Luas(M2) Bank Umum", year: 2026, month: Apr, value: 9800000.0}
+  fact:
+    operation: value
+    unit: "triliun Rp"
+    claimed_value: 10253.7
+    context_quote: "M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun"
+    periods:
+      - {metric_label: "Uang Beredar Luas(M2)", year: 2026, month: Apr}
+  expected:
+    verdict: Entailed
+    computed_value: 10253.6519

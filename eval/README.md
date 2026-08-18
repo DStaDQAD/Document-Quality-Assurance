@@ -72,6 +72,57 @@ Notes:
 - Keep labelled verdicts *aspirational* (what a correct verifier should do). A case that
   fails is the harness earning its keep — investigate the engine, don't just relabel it.
 
+### Non-time-series tables (attribute columns)
+
+A table whose columns are attributes rather than periods — an item list, a budget, anything
+the Tier-2 generic parser reads as `rows x attribute columns` — uses `col_label` in place of
+`year`/`month`, on both the cells and the fact's data points:
+
+```yaml
+  table:
+    title: "Daftar Harga Barang Elektronik"
+    data:
+      - {label: "Laptop ASUS", col_label: "Harga (Rp)", value: 7500000}
+      - {label: "Laptop ASUS", col_label: "Stok", value: 12}
+  fact:
+    operation: value
+    unit: "Rp"
+    claimed_value: 7500000
+    periods:
+      - {metric_label: "Laptop ASUS", col_label: "Harga (Rp)"}
+```
+
+- The unit comes from the matched COLUMN's trailing parenthetical (`Harga (Rp)` -> `Rp`),
+  falling back to the table's own `unit`. A column with no unit at all (`Stok`) compares raw.
+- One table cannot mix the two forms — the loader rejects it, because `_evaluate_fact`
+  resolves a data point only against a source of the matching axis kind, so half the cells
+  would be silently unreachable.
+- Time-only operations (`yoy_growth`, `is_*`) over a `col_label` point, and dated claims
+  against a table with no time axis, are both expected to come back `Inconclusive`.
+
+### Several reference sources (source_conflict)
+
+Replace `table:` with a `tables:` list to check one claim against more than one source — the
+same situation the live pipeline is in when a report's own tables and an uploaded workbook
+both answer a claim. Each entry takes the same keys plus `origin` (`excel` | `pdf`):
+
+```yaml
+  tables:
+    - {title: "...", unit: "Miliar Rp", filename: "TABEL1_1.xls", sheet: "I.1", data: [...]}
+    - {title: "...", unit: "Miliar Rp", filename: "M2-April-2026.pdf", sheet: "Lampiran 1",
+       origin: pdf, data: [...]}
+  expected:
+    verdict: Entailed        # still the best-matching source's verdict
+    source_conflict: cross   # internal | cross | omit when the sources should agree
+```
+
+- A conflict is not a fourth verdict: the headline verdict still comes from the source whose
+  row label matches the claim best, and `source_conflict` reports separately that the
+  references disagree. Two disagreeing `pdf` sources are `internal`, anything else `cross`.
+- Omitting `source_conflict` means *the sources agree*. A case that starts conflicting then
+  fails instead of passing on its verdict alone, so the guards that must NOT fire (identical
+  readings, levels-vs-%-yoy units, a looser label match) stay under the same gate.
+
 ## Layer 2 — end-to-end eval
 
 Document-level labels: for a real PDF + Excel, list the claims that should be extracted and
