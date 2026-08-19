@@ -23,15 +23,12 @@ POST /api/verify-document-pdf
                scanned/image-only PDFs are not supported - no OCR).
     Response: same shape as /api/verify-document.
 
-POST /api/upload-excel-source
-    Request : multipart/form-data, field "file" = a .xlsx workbook to add as a new data source.
-    Response: {"filename": "...", "n_sheets": 1, "n_facts": 16, "auto_aggregate": 1,
-               "auto_not_aggregate": 7, "llm_escalated": 0, "defaulted": 0}
-    Parses the workbook (style-aware header/aggregate detection - see excel_ingestion.py) and
-    writes it into the same database the other endpoints query, under a long/tidy `excel_facts`
-    table. Trusted-uploader endpoint, no access control - intended for the developer/a small team
-    adding their own source files, not for arbitrary public users (whoever can call this controls
-    what "ground truth" later fact-checks are compared against).
+POST /api/upload-excel-source  --  DISABLED, route commented out (see the note above its code)
+    Parsed a .xlsx workbook (style-aware header/aggregate detection - see excel_ingestion.py)
+    and wrote it into the same database the other endpoints query, under a long/tidy
+    `excel_facts` table. Turned off because it had no access control and whoever can call it
+    controls what "ground truth" later fact-checks are compared against. The everyday
+    PDF+Excel flow (/api/verify-paired) never touches this database.
 
 GET /api/tables
     Response: {"tables": ["excel_facts", "indikator_ekonomi", "neraca_dagang"]}
