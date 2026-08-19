@@ -1,0 +1,144 @@
+# Layer-1 comparison cases for the THRESHOLD operations (above_threshold / below_threshold):
+# one metric at one period compared against a bound, where claimed_value IS the bound.
+#
+# These stay out of _LEVEL_OPS on purpose — the comparison is dimensionless, so no unit
+# conversion runs and the table's unit never enters the verdict. What does decide it is a
+# STRICT inequality, and the boundary case below is the reason that matters: a diffusion
+# index sitting exactly on 50 is neither expansion nor contraction.
+#
+# Values are real Bank Indonesia PMI figures, read out of
+# sample_data/Tabel PMI-BI Tw II 2026.xlsx (sheet 'T1 - Komponen PMI') with the repo's own
+# Tier-2 generic parser, quarter tokens and all. These are also the seed dataset's first
+# quarterly cases — every earlier case is monthly.
+
+- id: above_threshold_pmi_in_expansion_entailed
+  description: "PMI-BI at 51,43 in Q2 2026 is above the 50 expansion line"
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "PMI - BI", year: 2026, month: Q1, value: 52.03}
+      - {label: "PMI - BI", year: 2026, month: Q2, value: 51.43}
+  fact:
+    operation: above_threshold
+    unit: "%, Indeks"
+    claimed_value: 50
+    context_quote: "PMI-BI pada triwulan II 2026 tercatat 51,43 dan tetap berada pada fase ekspansi (di atas 50)"
+    periods:
+      - {metric_label: "PMI - BI", year: 2026, month: Q2}
+  expected:
+    verdict: Entailed
+    computed_value: 51.43
+
+- id: above_threshold_component_below_the_bound_refuted
+  description: >
+    A component that actually sits below 50 (Kecepatan Penerimaan Barang Input, 47,46) claimed
+    to be in expansion — the bound is not met, so the claim is Refuted rather than unresolved.
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "Kecepatan Penerimaan Barang Input", year: 2026, month: Q2, value: 47.46}
+      - {label: "PMI - BI", year: 2026, month: Q2, value: 51.43}
+  fact:
+    operation: above_threshold
+    unit: "%, Indeks"
+    claimed_value: 50
+    context_quote: "Kecepatan Penerimaan Barang Input pada triwulan II 2026 berada di atas 50"
+    periods:
+      - {metric_label: "Kecepatan Penerimaan Barang Input", year: 2026, month: Q2}
+  expected:
+    verdict: Refuted
+    computed_value: 47.46
+
+- id: below_threshold_component_in_contraction_entailed
+  description: "The same 47,46 read the other way round: below the 50 line is contraction"
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "Kecepatan Penerimaan Barang Input", year: 2026, month: Q2, value: 47.46}
+  fact:
+    operation: below_threshold
+    unit: "%, Indeks"
+    claimed_value: 50
+    context_quote: "Kecepatan Penerimaan Barang Input masih berada dalam fase kontraksi (di bawah 50) pada triwulan II 2026"
+    periods:
+      - {metric_label: "Kecepatan Penerimaan Barang Input", year: 2026, month: Q2}
+  expected:
+    verdict: Entailed
+    computed_value: 47.46
+
+- id: above_threshold_exactly_on_the_bound_refuted
+  description: >
+    Volume Total Pesanan printed exactly 50,00 in Q3 2010 — a real reading sitting on the line.
+    The inequality is strict, so 'di atas 50' is not satisfied: an index at exactly 50 is
+    neither expansion nor contraction, and answering Entailed would read a stall as growth.
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "Volume Total Pesanan", year: 2010, month: Q3, value: 50.0}
+  fact:
+    operation: above_threshold
+    unit: "%, Indeks"
+    claimed_value: 50
+    context_quote: "Volume Total Pesanan pada triwulan III 2010 berada di atas ambang 50"
+    periods:
+      - {metric_label: "Volume Total Pesanan", year: 2010, month: Q3}
+  expected:
+    verdict: Refuted
+    computed_value: 50.0
+
+- id: threshold_without_a_bound_inconclusive
+  description: >
+    A threshold claim whose bound the extractor could not pin down (no claimed_value). The
+    value is in hand, but there is nothing to compare it against — refuse rather than invent
+    the conventional 50.
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "PMI - BI", year: 2026, month: Q2, value: 51.43}
+  fact:
+    operation: above_threshold
+    unit: "%, Indeks"
+    context_quote: "PMI-BI pada triwulan II 2026 berada di atas ambang batasnya"
+    periods:
+      - {metric_label: "PMI - BI", year: 2026, month: Q2}
+  expected:
+    verdict: Inconclusive
+
+- id: threshold_over_an_unnamed_subset_inconclusive
+  description: >
+    'Beberapa komponen' names no component in particular, so the extractor picked one row to
+    stand in for a statement about several. Reading that row settles a question nobody asked —
+    the claim must come back Inconclusive even though the row resolves cleanly.
+  table:
+    title: "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"
+    unit: "%, Indeks"
+    filename: "Tabel PMI-BI Tw II 2026.xlsx"
+    sheet: "T1 - Komponen PMI"
+    data:
+      - {label: "PMI - BI", year: 2026, month: Q2, value: 51.43}
+      - {label: "Volume Produksi", year: 2026, month: Q2, value: 53.81}
+      - {label: "Jumlah Tenaga Kerja", year: 2026, month: Q2, value: 48.65}
+  fact:
+    operation: above_threshold
+    unit: "%, Indeks"
+    claimed_value: 50
+    context_quote: "Beberapa komponen PMI berada di atas ambang 50 pada triwulan II 2026"
+    periods:
+      - {metric_label: "PMI - BI", year: 2026, month: Q2}
+  expected:
+    verdict: Inconclusive

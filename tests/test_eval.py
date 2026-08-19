@@ -1,12 +1,14 @@
 """Tests for the Layer-1 accuracy eval harness (eval/)."""
 
 from pathlib import Path
+from typing import get_args
 
 import pytest
 
 from eval.dataset import build_fact, build_sources, load_cases
 from eval.metrics import compute_metrics
 from eval.run_comparison_eval import _DEFAULT_CASES_DIR, _discover_case_files, evaluate_case, run
+from schemas import FactVerificationResult
 
 
 # ---------------------------------------------------------------------------
@@ -73,14 +75,14 @@ def test_seed_comparison_dataset_all_pass():
     assert metrics.accuracy == 1.0
 
 
-def test_every_operation_is_covered_by_the_seed_dataset():
+def test_every_operation_the_engine_can_return_is_covered_by_the_seed_dataset():
+    # Derived from the schema, not a hand-kept list: the previous version enumerated nine
+    # operations and passed while the engine could return eleven, so the two threshold ops
+    # went unmeasured without anything saying so.
+    engine_ops = set(get_args(FactVerificationResult.model_fields["operation"].annotation))
     cases = load_cases(_discover_case_files(_DEFAULT_CASES_DIR))
     ops = {c.fact.operation for c in cases}
-    expected_ops = {
-        "value", "yoy_growth", "average", "sum", "diff", "ratio",
-        "is_increasing", "is_decreasing", "is_stable",
-    }
-    assert expected_ops <= ops, f"missing coverage for: {expected_ops - ops}"
+    assert engine_ops <= ops, f"missing coverage for: {sorted(engine_ops - ops)}"
 
 
 def test_all_three_verdicts_are_represented():

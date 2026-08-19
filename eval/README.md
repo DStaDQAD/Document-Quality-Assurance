@@ -52,7 +52,9 @@ Drop a new entry into any `eval/cases/comparison/*.yaml` (each file is a YAML li
     data:
       - {label: "Uang Beredar Luas(M2)", year: 2026, month: Apr, value: 10253651.888}
   fact:
-    operation: value                  # value|yoy_growth|average|sum|diff|ratio|is_increasing|is_decreasing|is_stable
+    operation: value                  # value|yoy_growth|average|sum|diff|ratio
+                                      # |is_increasing|is_decreasing|is_stable
+                                      # |above_threshold|below_threshold
     unit: "triliun Rp"                # the unit the PDF claim is stated in (omit for trend ops)
     claimed_value: 10253.7            # omit for is_increasing/is_decreasing/is_stable
     context_quote: "M2 ... Rp10.253,7 triliun"
@@ -69,6 +71,11 @@ Notes:
 - `yoy_growth` fetches the prior-year same-month point automatically — include it in `data`
   but list only the current point under `fact.periods`.
 - Trend ops (`is_*`) carry no `claimed_value`/`unit`.
+- Threshold ops (`above_threshold`/`below_threshold`) put the BOUND in `claimed_value`
+  and compare dimensionlessly — no unit conversion runs, so the table `unit` does not
+  enter the verdict. The inequality is strict: a value sitting exactly on the bound is
+  `Refuted`. Both these and the trend ops are refused as `Inconclusive` when the quote
+  hedges over an unnamed subset ("beberapa komponen", "sebagian besar kelompok").
 - Keep labelled verdicts *aspirational* (what a correct verifier should do). A case that
   fails is the harness earning its keep — investigate the engine, don't just relabel it.
 
