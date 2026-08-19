@@ -21,7 +21,19 @@ sample_data/Data Series Survei Perbankan_ Triwulan II 2_026_.xlsx
 # The pair the internal-mode eval cases point at: the same report, one doctored.
 sample_data/test case_Analisis Uang Beredar Posisi April 2026.pdf
 sample_data/test case salah_Analisis Uang Beredar Posisi April 2026.pdf
+sample_data/Kinerja.pdf
+sample_data/SK-Juni-2026.pdf
+sample_data/M2-April-2026 (1).pdf
+sample_data/Hasil Survei Perbankan Bank Indonesia menunjukkan penyaluran kredit baru pada triwulan II 2026 meningkat dibandingkan triwulan sebelumnya.pdf
+# Hand-made multi-level test pair. Unlike penjualan_2024.xlsx / penjualan_cabang.xlsx, which
+# create_sample_excel.py regenerates and which stay tracked, these two exist only locally.
+sample_data/penjualan_bertingkat.xlsx
+sample_data/laporan_penjualan_bertingkat.pdf
+# Architecture diagrams stay out of the repo: the draw.io source, the editor swap file it
+# leaves behind, and the Mermaid write-up that mirrors the same two flows.
 architecture.drawio
+*.crswap
+architecture.md
 CLAUDE.md
 /eval_report.json
 
