@@ -205,3 +205,46 @@ The JSON report records, per case, the mode and the sources that answered it —
 `"sources": ["Hal. 7 · Lampiran 1… [pdf-generic]", …]`. A `-unverified` suffix there means the
 table came off a scanned page, so its numbers were read by the model rather than out of the
 PDF's text layer; that is the first thing to check when an internal-mode case scores badly.
+
+## Typo-checker eval (deterministic pass)
+
+The fact-checker is only half of what the pipeline shows a user; the other tab is the
+spelling/grammar report. This scores it — the deterministic half of it.
+
+```bash
+python -m eval.run_typo_eval                    # print the report
+python -m eval.run_typo_eval --fail-under 1.0   # exit non-zero if precision < 100% (CI gate)
+```
+
+`check_typos(text, llm=None)` runs the curated tidak-baku list, the reduplication rule and the
+prefix rules, and **drops** anything it would otherwise escalate. A word unknown to the id_ID
+dictionary — a plain misspelling like "Likuidiaftas" — is therefore never reported in this
+mode. So the harness measures:
+
+- **Precision**, fully: given real Bank Indonesia wording, does the checker leave correct text
+  alone? Report vocabulary is exactly what a naive spell checker mangles — English financial
+  terms in parentheses (`Loans`, `Debt Securities`), abbreviations (`DPK`, `SBT`, `yoy`),
+  `M1`/`M2`. This is the half that is gated, because a false accusation sends a reader to
+  verify something that was never wrong.
+- **Recall for the rule-driven categories** only: the curated non-standard spellings and
+  reduplication written with a space. Recall on free-form misspellings belongs to an
+  LLM-in-the-loop layer that does not exist yet — labelling one here records an honest miss
+  rather than a pass.
+
+### Add a case
+
+Drop an entry into any `eval/cases/typo/*.yaml`:
+
+```yaml
+- id: unique_snake_case_id
+  description: "what this case checks"
+  text: "Bank Indonesia terus memantau resiko likuiditas perbankan."
+  expect_flagged:
+    - {word: "resiko", category: tidak_baku, suggestion: "risiko"}   # category/suggestion optional
+  expect_clean: ["likuiditas", "perbankan"]   # words that must NOT be flagged
+```
+
+Every labelled word — flagged or clean — must actually occur in `text`; the loader refuses the
+case otherwise, so a typo in the LABEL never reads as a finding about the checker. Anything the
+checker flags that no `expect_flagged` entry asked for is a false positive, which is why a
+clean case carries `expect_flagged: []` rather than being left out of the dataset.

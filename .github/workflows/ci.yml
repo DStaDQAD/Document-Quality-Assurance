@@ -29,3 +29,10 @@ jobs:
       # on any per-case failure, so a matcher/engine regression can't reach main green.
       - name: Run accuracy eval (Layer 1)
         run: python -m eval.run_comparison_eval --fail-under 1.0
+
+      # Typo-checker eval: scores the DETERMINISTIC pass only (check_typos with llm=None), so
+      # it needs no API key either. Gated on precision — a false accusation on correct report
+      # vocabulary is the failure that costs a reader trust. Recall on free-form misspellings
+      # depends on the LLM escalation and is deliberately not gated here.
+      - name: Run typo-checker eval (deterministic pass)
+        run: python -m eval.run_typo_eval --fail-under 1.0
