@@ -1,0 +1,77 @@
+# Precision cases drawn from the report families 01_deterministic_pass.yaml never touched.
+# Every sentence here is VERBATIM from a Bank Indonesia release in sample_data/ (only PDF
+# line-break artifacts removed): the Survei Perbankan release, the Juni 2026 Survei Konsumen,
+# and the manufacturing PMI (Kinerja) release. All must come back clean.
+#
+# Why these sentences and not any others: each one carries wording the id_ID dictionary does
+# NOT know, which is precisely what a spell checker is tempted to report. Across these three
+# documents the unknown vocabulary falls into four kinds, and there is a case for each:
+#
+#   1. Index abbreviations the reports define once and then use everywhere -- SBT, ILS, IKK,
+#      IEK, PMI-BI, LU/Sub-LU.
+#   2. English terms embedded in Indonesian sentences (Lending Standard).
+#   3. Indonesian city names (Makassar, Banten, Medan).
+#   4. Words that are BAKU but absent from the dictionary -- "tecermin" and "diprakirakan".
+#      These are the dangerous ones. Both are the standard forms per KBBI, yet a dictionary
+#      lookup calls them unknown, so a well-meaning change could "correct" them INTO the
+#      non-standard spelling. Flagging them would not merely annoy a reader, it would push a
+#      correct report toward being wrong.
+#
+# All three documents currently come back with zero findings across their full text, so these
+# cases are not fixing a bug: they pin behaviour that is right today against the change that
+# would quietly break it.
+
+- id: clean_sp_saldo_bersih_tertimbang
+  description: "Survei Perbankan: SBT defined and reused, alongside the baku-but-unknown 'tecermin'"
+  text: "Kondisi ini tecermin dari nilai Saldo Bersih Tertimbang (SBT) kredit baru sebesar 93,08%, lebih tinggi dibandingkan SBT 38,74% pada triwulan sebelumnya."
+  expect_flagged: []
+  expect_clean: ["tecermin", "SBT", "Tertimbang"]
+
+- id: clean_sp_lending_standard_english_term
+  description: >
+    An English term inside an Indonesian sentence, plus 'berhati-hati' -- a correctly
+    hyphenated reduplication, which the rule that catches "Bank bank" must leave alone.
+  text: "Perbankan lebih berhati-hati dalam menyalurkan kredit baru di triwulan II 2026 dibandingkan triwulan I 2026, yang tecermin dari Indeks Lending Standard (ILS) positif sebesar 1,03."
+  expect_flagged: []
+  expect_clean: ["Lending", "Standard", "ILS", "berhati-hati"]
+
+- id: clean_sp_diprakirakan_forecast_wording
+  description: >
+    'diprakirakan' is the baku form (from 'prakira') and unknown to the dictionary. Every BI
+    release uses it for its forward-looking sentence, so a false flag here would recur in
+    every document the tool ever checks.
+  text: "Pada triwulan III 2026, penyaluran kredit baru diprakirakan tetap tumbuh dengan SBT sebesar 84,65%."
+  expect_flagged: []
+  expect_clean: ["diprakirakan", "SBT"]
+
+- id: clean_sk_indeks_keyakinan_konsumen
+  description: "Survei Konsumen: the IKK headline sentence, with the >100 optimism threshold"
+  text: "Hal ini tecermin dari Indeks Keyakinan Konsumen (IKK) Juni 2026 yang berada pada level optimis (indeks >100) sebesar 117,8."
+  expect_flagged: []
+  expect_clean: ["IKK", "Keyakinan", "optimis"]
+
+- id: clean_sk_city_names
+  description: "Proper nouns: Indonesian city names are unknown to the dictionary but correct"
+  text: "Secara spasial, IKK mengalami penurunan terbesar di Makassar, Banten, dan Medan, sementara peningkatan IKK terjadi di beberapa kota."
+  expect_flagged: []
+  expect_clean: ["Makassar", "Banten", "Medan", "spasial"]
+
+- id: clean_sk_iek_expectation_index
+  description: "A bare index abbreviation used without re-expanding it, as the release does"
+  text: "Hal ini tecermin dari IEK Juni 2026 sebesar 126,4, meskipun lebih rendah dibandingkan dengan indeks pada bulan sebelumnya sebesar 129,7."
+  expect_flagged: []
+  expect_clean: ["IEK", "tecermin"]
+
+- id: clean_kinerja_sublapangan_usaha
+  description: >
+    'Sublapangan' (unhyphenated prefix) and its abbreviation 'Sub-LU' (hyphen joining a prefix
+    to an abbreviation, not a reduplication) in one sentence.
+  text: "Berdasarkan Sublapangan Usaha (Sub-LU), sebagian besar Sub-LU juga berada pada fase ekspansi, dengan indeks tertinggi pada Industri Mesin dan Perlengkapan, diikuti oleh Industri Makanan dan Minuman."
+  expect_flagged: []
+  expect_clean: ["Sublapangan", "Sub-LU", "ekspansi"]
+
+- id: clean_kinerja_pmi_bi_expansion
+  description: "PMI-BI: an abbreviation carrying an internal hyphen, with the >50 expansion line"
+  text: "Kinerja Lapangan Usaha (LU) Industri Pengolahan pada triwulan II 2026 tetap terjaga dan berada pada fase ekspansi (indeks >50%), tecermin dari PMI-BI sebesar 51,43%."
+  expect_flagged: []
+  expect_clean: ["PMI-BI", "LU", "Pengolahan"]
