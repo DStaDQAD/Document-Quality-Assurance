@@ -16,8 +16,12 @@ Detection tiers, in order, per token:
      fully deterministic.
   3. Standalone "di"/"ke" followed by a word where the JOINED form is a valid dictionary
      word -> ambiguous (could be a passive-voice prefix or a preposition), escalated to LLM.
-  4. Capitalised/ALLCAPS unknown words are skipped entirely (likely proper nouns - flagging
-     every place/person/brand name in a long report would swamp the LLM call for no benefit).
+  4. Capitalised/ALLCAPS unknown words are skipped as likely proper nouns (flagging every
+     place/person/brand name in a long report would swamp the LLM call for no benefit) -
+     EXCEPT a Title-case word OPENING A SENTENCE, where capitalisation is required by
+     orthography and so says nothing about the word. Those fall through to tier 5, unless
+     the dictionary knows their lowercase form or the document itself uses the same word
+     capitalised mid-sentence (which proves it really is a proper noun).
   5. Any other word not found in the id_ID dictionary -> escalated to LLM.
 
 Escalation is deduplicated by unique word (case-insensitive): if the same unknown word
@@ -185,11 +189,42 @@ def _joins_to_real_word(tokens, i: int, clean_text: str) -> bool:
     return False
 
 
+# Sentence enders, plus the bullet these releases open their points with.
+_SENTENCE_END_CHARS = frozenset(".!?" + '•')
+# Openers that can sit between the terminator and the first word of the next sentence.
+_SENTENCE_OPENERS = frozenset("'" + '"' + "([" + '“' + '”')
+
+
+def _is_sentence_initial(clean_text: str, start: int) -> bool:
+    """True when the token at `start` opens a sentence.
+
+    Requires a real terminator (. ! ?) or a bullet before it, and deliberately does NOT count
+    a bare line break. In a PDF's text layer every table cell sits on its own line and BI
+    Lampiran row labels arrive truncated, so reading a newline as a sentence start would pull
+    fragments like "Kewaj", "Jasa-j" and "Pertani" into the escalation queue - measured on the
+    M2 release, about 23 extra candidates per document, none of them narrative text.
+
+    The price is that a paragraph opening on a fresh line with no preceding terminator keeps
+    the blind spot this rule exists to close. The releases this tool reads open their points
+    with bullets or full stops, so the material it meets in practice is covered.
+    """
+    j = start - 1
+    while j >= 0 and (clean_text[j].isspace() or clean_text[j] in _SENTENCE_OPENERS):
+        j -= 1
+    return j < 0 or clean_text[j] in _SENTENCE_END_CHARS
+
+
 def _collect_candidates_and_deterministic_issues(
     clean_text: str,
     page_ranges: List[Tuple[int, int, Optional[int]]],
 ) -> Tuple[List[TypoIssue], List[_Candidate]]:
     tokens = list(_WORD_RE.finditer(clean_text))
+    # Evidence for tier 4: a word capitalised where capitalisation is NOT required is a proper
+    # noun on the document's own showing, so its sentence-initial occurrences stay untouched.
+    mid_sentence_caps = {
+        t.group().lower() for t in tokens
+        if not t.group().islower() and not _is_sentence_initial(clean_text, t.start())
+    }
     issues: List[TypoIssue] = []
     candidates_by_key: Dict[str, _Candidate] = {}
     skip_next = False
@@ -264,9 +299,22 @@ def _collect_candidates_and_deterministic_issues(
             skip_next = True
             continue
 
-        # Tier 4: likely proper noun (capitalised/ALLCAPS) -> skip entirely
+        # Tier 4: capitalised word. Capitalisation usually marks a proper noun, but at the
+        # START of a sentence it is required by orthography and says nothing about the word -
+        # and skipping those meant a misspelling opening a sentence was never checked by any
+        # tier at all. Not a rare position: every summary point of a BI release opens with a
+        # bullet, and the one deliberate error in the doctored M2 test report sits on one.
         if not word.islower():
-            continue
+            if not _is_sentence_initial(clean_text, start):
+                continue
+            if word.isupper():
+                continue  # BUMN, PMI, M2 - an abbreviation, not a misspelling
+            if _SP.lookup(word) or _SP.lookup(word.lower()):
+                continue  # ordinary word, correctly spelled, capitalised by position
+            if word.lower() in mid_sentence_caps:
+                continue  # used capitalised mid-sentence too, so it really is a proper noun
+            # Otherwise fall through to tier 5, which still applies its own filters: length,
+            # vowel-less pairs, and the pypdf split-word join check.
 
         # Tier 5: unknown to the dictionary -> always escalate, never guess from ratio alone.
         # Single-letter tokens are skipped outright - Indonesian has no standalone one-letter

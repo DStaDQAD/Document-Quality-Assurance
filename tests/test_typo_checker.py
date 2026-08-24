@@ -144,9 +144,11 @@ def test_ambiguous_candidates_dropped_when_llm_call_raises():
 # ---------------------------------------------------------------------------
 
 def test_repeated_unknown_word_is_escalated_only_once():
-    # Mid-sentence placement on every occurrence - a word right after a sentence-ending period
-    # is sentence-initial and gets skipped as a likely proper noun (see the module docstring's
-    # tier 4), so this deliberately keeps "asalasalan" away from that position.
+    # Three mid-sentence occurrences of one unknown word: escalation is deduplicated by
+    # lowercased word, so the LLM is asked once and its verdict covers all three. (This once
+    # had to avoid sentence-initial placement, which tier 4 skipped outright as a proper noun.
+    # That is no longer so, but keeping every occurrence in one position keeps this test about
+    # deduplication and nothing else.)
     clean_text, page_ranges = _strip_page_markers(
         "Kata itu asalasalan sekali. Katanya asalasalan lagi. Dan asalasalan lagi ketiga kalinya."
     )
@@ -225,3 +227,70 @@ def test_issue_without_a_suggestion_is_dropped_rather_than_shown_uncorrectable()
     resp = check_typos("Kata asalasalan ini aneh sekali.", llm=llm)
 
     assert resp.total_issues == 0
+
+
+# ---------------------------------------------------------------------------
+# Tier 4: capitalisation at the start of a sentence is orthography, not a proper noun
+# ---------------------------------------------------------------------------
+
+def _candidate_texts(text: str):
+    clean_text, page_ranges = _strip_page_markers(text)
+    _issues, candidates = _collect_candidates_and_deterministic_issues(clean_text, page_ranges)
+    return [c.display_text for c in candidates]
+
+
+def test_misspelling_opening_a_bulleted_point_is_escalated():
+    # The exact shape the blind spot was found in: every summary point of a BI release opens
+    # with a bullet, so a misspelling there was skipped as a "proper noun" and never checked.
+    cands = _candidate_texts("• Likuidiaftas perekonomian atau uang beredar tumbuh positif.")
+
+    assert "Likuidiaftas" in cands
+
+
+def test_misspelling_starting_a_sentence_after_a_full_stop_is_escalated():
+    cands = _candidate_texts("Kondisi membaik. Pertumbuhhan kredit tetap kuat pada April 2026.")
+
+    assert "Pertumbuhhan" in cands
+
+
+def test_proper_noun_the_document_also_uses_mid_sentence_is_not_escalated():
+    # The document's own evidence: a word that appears capitalised where capitalisation is NOT
+    # required is a proper noun, so its sentence-initial occurrence must stay untouched.
+    cands = _candidate_texts(
+        "Makassar mencatat penurunan indeks. Penurunan juga terjadi di Makassar pada Juni 2026."
+    )
+
+    assert not [c for c in cands if c.lower() == "makassar"]
+
+
+def test_correctly_spelled_word_opening_a_sentence_is_not_escalated():
+    # 'Perekonomian' is an ordinary word capitalised by position - escalating it would spend an
+    # LLM slot to be told what the dictionary already knows.
+    assert _candidate_texts("Perekonomian tumbuh dengan baik pada triwulan ini.") == []
+
+
+def test_table_fragment_on_its_own_line_is_not_escalated():
+    # A PDF's text layer puts every table cell on its own line, and BI Lampiran labels arrive
+    # truncated. Treating a bare line break as a sentence start would pull all of them in.
+    cands = _candidate_texts("Rincian neraca bank umum\nKewaj\n10.415,9\nAkti\n9.870,2")
+
+    assert "Kewaj" not in cands
+    assert "Akti" not in cands
+
+
+def test_all_caps_abbreviation_opening_a_sentence_is_not_escalated():
+    assert "BUMN" not in _candidate_texts("BUMN mencatat laba yang lebih tinggi pada April 2026.")
+
+
+def test_misspelling_opening_a_sentence_is_reported_when_the_llm_confirms_it():
+    # End to end: the fix has to reach the user's report, not merely the escalation queue.
+    llm = _llm_returning([
+        IndexedTypoVerdict(candidate_index=0, is_issue=True, category="ejaan", suggestion="Likuiditas", explanation="typo"),
+    ])
+
+    resp = check_typos("• Likuidiaftas perekonomian tumbuh positif pada April 2026.", llm=llm)
+
+    assert resp.total_issues == 1
+    assert resp.issues[0].word == "Likuidiaftas"
+    assert resp.issues[0].category == "ejaan"
+    assert resp.issues[0].suggestion == "Likuiditas"
