@@ -296,7 +296,6 @@ select { cursor: pointer; }
   border-color: transparent; color: white; font-weight: 700; z-index: 1;
   box-shadow: 0 2px 8px rgba(11,31,58,0.22);
 }
-.adv-hint { font-size: 11px; line-height: 1.5; color: var(--text-500); margin: 0; }
 .adv-check {
   display: flex; align-items: center; gap: 7px;
   font-size: 12px; color: var(--text-500); cursor: pointer;
@@ -1029,7 +1028,6 @@ body.auth-locked .app {
                       <button type="button" class="seg-btn" data-mode="internal" role="radio" aria-checked="false">Tabel dalam PDF</button>
                       <button type="button" class="seg-btn" data-mode="both" role="radio" aria-checked="false">Keduanya</button>
                     </div>
-                    <p class="adv-hint" id="mode-hint"></p>
                   </div>
                   <label class="adv-check">
                     <input type="checkbox" id="typo-toggle" checked>
@@ -1391,20 +1389,9 @@ body.auth-locked .app {
   let compareMode = "excel";     // "excel" | "internal" | "both"
   let runTypoCheck = true;
 
-  const MODE_HINT = {
-    excel: "Klaim dibandingkan dengan tabel Excel yang kamu unggah.",
-    internal: "Klaim dibandingkan dengan tabel yang tercetak di dalam PDF itu sendiri — " +
-              "berguna untuk memeriksa apakah narasi laporan konsisten dengan tabel & lampirannya. " +
-              "File Excel tidak diperlukan. Tabel dibaca AI dari setiap halaman, jadi prosesnya lebih lama.",
-    both: "Klaim dibandingkan dengan tabel Excel DAN tabel di dalam PDF. Klaim yang nilainya " +
-          "berbeda antara keduanya ditandai sebagai konflik — cara tercepat menemukan Excel dan " +
-          "laporan yang tidak sinkron. Paling lambat dari ketiga mode.",
-  };
-
   (function initAdvancedSettings() {
     const toggle = document.getElementById("adv-toggle");
     const panel = document.getElementById("adv-panel");
-    const hint = document.getElementById("mode-hint");
     const excelField = document.getElementById("excel-upload-field");
     const excelLabel = document.getElementById("excel-upload-label");
 
@@ -1414,7 +1401,6 @@ body.auth-locked .app {
     });
 
     function applyMode() {
-      hint.textContent = MODE_HINT[compareMode];
       // The Excel column is dimmed rather than hidden: the user's file picks survive a
       // round-trip through internal mode.
       const optional = compareMode === "internal";
@@ -1583,16 +1569,14 @@ body.auth-locked .app {
     const internalCount = srcParsers.filter((p) => (p || "").startsWith("pdf-")).length;
     const unverifiedCount = srcParsers.filter((p) => (p || "").endsWith("-unverified")).length;
 
-    // No internal table was read (a scanned PDF in "both" mode, say) — then nothing about the
-    // PDF's own tables is worth saying, and the Excel sources answered everything.
-    const caveat = (mode === "excel" || internalCount === 0) ? "" : `<div class="mode-caveat">
+    // Only worth a strip when there is something to caution about: a table read off a page
+    // with no text layer carries numbers the model read from an image rather than out of the
+    // file. Everything else is the normal case and needs no telling.
+    const caveat = (mode === "excel" || unverifiedCount === 0) ? "" : `<div class="mode-caveat">
       <span class="material-symbols-outlined">info</span>
-      ${unverifiedCount > 0
-        ? `<span><strong>${unverifiedCount} dari ${internalCount} tabel</strong> di dalam PDF ada
-           di halaman tanpa lapisan teks, jadi angkanya dibaca AI dari gambar halaman. Klaim yang
-           bersumber dari tabel itu ditandai — periksa langsung ke tabel aslinya.</span>`
-        : `<span>Pembanding diambil dari <strong>${internalCount} tabel</strong> di dalam PDF.
-           Angkanya dibaca dari lapisan teks dokumen, bukan dari pembacaan gambar oleh AI.</span>`}
+      <span><strong>${unverifiedCount} dari ${internalCount} tabel</strong> di dalam PDF ada
+      di halaman tanpa lapisan teks, jadi angkanya dibaca AI dari gambar halaman. Klaim yang
+      bersumber dari tabel itu ditandai — periksa langsung ke tabel aslinya.</span>
     </div>`;
     const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
       <span class="material-symbols-outlined">rule</span>
