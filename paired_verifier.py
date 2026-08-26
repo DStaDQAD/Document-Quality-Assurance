@@ -23,6 +23,7 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
@@ -31,6 +32,7 @@ from cell_pointer import (
     PointQuery,
     build_point_queries,
     metric_could_match,
+    pointer_column_matches,
     pointer_is_plausible,
     read_grid_cell,
     resolve_pointers,
@@ -161,6 +163,9 @@ class _ExcelSource:
 class _Candidate:
     """One source that resolved every data point a claim references."""
     score: float                          # mean label-match quality — see _resolution_score
+    # Mean share of the claim's scope words this source accounts for (row label + table title).
+    # Ranked ABOVE `score` — see _coverage_score.
+    coverage: float
     src: _ExcelSource
     resolved: List[Tuple[str, float]]
     factor: float                         # divide raw values by this to reach the claim's unit
@@ -322,6 +327,22 @@ def _resolution_score(
     return sum(scores) / len(scores) if scores else 0.0
 
 
+def _coverage_score(
+    periods: List[PeriodPoint], resolved: List[Tuple[str, float]], src: "_ExcelSource"
+) -> float:
+    """Mean TableData.query_coverage across a fact's data points.
+
+    Ranks ABOVE _resolution_score: a source that leaves one of the claim's scope words
+    unaccounted for ('UMKM', 'DPK') is answering a different question, however well the row
+    name it found happens to read. See TableData.query_coverage for the cases.
+    """
+    scores = [
+        src.table.query_coverage(p.metric_label, label)
+        for p, (label, _) in zip(periods, resolved)
+    ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
 def _build_periods(
     fact_periods: List[PeriodPoint], resolved: List[Tuple[str, float]], values: List[float]
 ) -> List[PeriodResult]:
@@ -382,9 +403,36 @@ def _stable_band(a: float, b: float) -> float:
     return max(MATCH_TOLERANCE, _STABLE_RELATIVE_BAND * (abs(a) + abs(b)) / 2)
 
 
-def _numeric_verdict(claimed: float, computed: float) -> Tuple[float, str]:
+def _numeric_verdict(
+    claimed: float, computed: float, tolerance: float = MATCH_TOLERANCE
+) -> Tuple[float, str]:
     delta = round(abs(claimed - computed), 4)
-    return delta, ("Entailed" if delta <= MATCH_TOLERANCE else "Refuted")
+    return delta, ("Entailed" if delta <= tolerance else "Refuted")
+
+
+def _printing_step(value: float) -> float:
+    """The last decimal place `value` was printed to, e.g. 0.1 for 7,6 and 1.0 for 12."""
+    exponent = Decimal(str(round(value, 6))).as_tuple().exponent
+    return float(Decimal(1).scaleb(exponent)) if exponent < 0 else 1.0
+
+
+def _growth_tolerance(current: float, prior: float) -> float:
+    """Tolerance for a yoy computed from two PRINTED levels, widened by their rounding.
+
+    A table states 7,6 and 7,5; the true values lie anywhere within half a printed step of
+    those, so the growth they imply is not 1,33% but 1,33% give or take 1,3pp — and the
+    report's own 1,5% sits comfortably inside that. Comparing against the bare 0,05 tolerance
+    reported Tidak Sesuai on a figure the document had every right to print.
+
+    The band shrinks to nothing as the base grows (on 2.153,6 it is 0,005pp), so this changes
+    nothing for the ordinary case and only stops the checker from claiming precision the
+    source never had. A directly-printed growth cell is unaffected — there is no division.
+    """
+    if not prior:
+        return MATCH_TOLERANCE
+    half = _printing_step(prior) / 2
+    band = 100 * (half / abs(prior)) * (1 + abs(current / prior))
+    return max(MATCH_TOLERANCE, round(band, 4))
 
 
 def _make_result(
@@ -473,9 +521,26 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             "Inconclusive",
             reasoning=f"Prior-year value for '{matched_label}' at {p.month} {prior_year} is zero; yoy undefined.",
         )
+    # A "prior-year level" that IS the claimed growth is the growth cell, read as a level. BI
+    # snippet tables print both under one caption, and whenever a lookup or a cell pointer
+    # crossed that boundary the result was the same absurd shape: 2.232,2 over 14,3 reported as
+    # 15.509% against a claim of 14,3%. Cheap backstop for the cases the structural guards
+    # (_split_unit_blocks, pointer_column_matches) do not catch — a genuine level that happens
+    # to equal its own growth rate to four decimals does not occur in these series.
+    if fact.claimed_value is not None and round(prior_raw, 4) == round(fact.claimed_value, 4):
+        return _make_result(
+            fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None, "persen_yoy", None,
+            "Inconclusive",
+            reasoning=(
+                f"Nilai '{matched_label}' pada {p.month} {prior_year} di [{matched_source}] "
+                f"({prior_raw}) sama persis dengan angka pertumbuhan yang diklaim — hampir pasti "
+                f"sel '%, yoy', bukan level tahun lalu. Pembanding tahun lalu tidak tersedia."
+            ),
+        )
 
     computed = round((curr_raw - prior_raw) / abs(prior_raw) * 100, 4)
-    delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+    tolerance = _growth_tolerance(curr_raw, prior_raw)
+    delta, verdict = _numeric_verdict(fact.claimed_value, computed, tolerance)
     periods = [current_period, PeriodResult(metric_label=prior_label, year=prior_year, month=p.month, excel_value=round(prior_raw, 4))]
     return _make_result(
         fact, periods, matched_source, fact.claimed_value, "persen_yoy", computed, "persen_yoy", delta, verdict,
@@ -483,7 +548,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             f"PDF: {fact.claimed_value}% yoy | "
             f"Excel [{matched_source}] ({matched_label}): {computed}% yoy "
             f"({curr_raw:.2f} vs {prior_raw:.2f} {src.table.unit}) | "
-            f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}%"
+            f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {tolerance}%"
         ),
     )
 
@@ -872,16 +937,26 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         # real breakdown row, so whichever sheet the user happened to upload first would
         # win. Keep scanning and keep the closest label match; ties keep the earlier
         # source, so single-source behaviour is unchanged.
+        coverage = _coverage_score(fact.periods, resolved, src)
+        if coverage <= 0.0:
+            # Nothing this source names has anything to do with what the claim asked about —
+            # see TableData.query_coverage. Answering anyway is the confident-wrong-number case.
+            if best_reason is None:
+                best_reason = (
+                    f"Sumber [{src.label}] tidak membahas '{fact.display_label}'."
+                )
+            continue
         candidates.append(_Candidate(
             score=_resolution_score(fact.periods, resolved),
+            coverage=coverage,
             src=src, resolved=resolved, factor=factor, unit_comparable=unit_comparable,
         ))
 
     if not candidates:
         return _inconclusive_result(fact, best_missing, best_reason)
 
-    # Stable sort on the negated score: ties keep source order, as before.
-    candidates.sort(key=lambda c: -c.score)
+    # Coverage first, then label quality. Stable sort, so ties keep source order as before.
+    candidates.sort(key=lambda c: (-c.coverage, -c.score))
     # Every candidate is computed once — plain arithmetic over values already looked up. The
     # results are reused for the source comparison, so this costs no more than before.
     evaluated = [(c, _compute_operation(fact, c.resolved, c.factor, c.src)) for c in candidates]
@@ -898,7 +973,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # those would trade an honest "not enough data" for a confident wrong number.
     head_index = 0
     for index, (cand, result) in enumerate(evaluated):
-        if cand.score < evaluated[0][0].score - 1e-9:
+        if _match_quality(cand) < _match_quality(evaluated[0][0]) - 1e-9:
             break
         if result.verdict != "Inconclusive":
             head_index = index
@@ -924,6 +999,16 @@ def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
     if not left or not right:
         return False
     return _unit_factor(left, right) is not None
+
+
+def _match_quality(cand: "_Candidate") -> float:
+    """One number for 'how well does this source answer the claim', for the equal-quality tests.
+
+    Coverage dominates label quality: a source that drops one of the claim's scope words is
+    answering a different question, so it must not be promoted for reaching a verdict, nor
+    reported as a second reading that contradicts the winner.
+    """
+    return cand.coverage + cand.score / 1000.0
 
 
 def _source_value(cand: "_Candidate", result: FactVerificationResult) -> SourceValue:
@@ -955,10 +1040,10 @@ def _attach_source_comparison(
     number that was never in question. This is the same score test the conflict loop needs, so
     hiding these costs no signal: a source too loose to contradict the winner had nothing to add.
     """
-    head_score = evaluated[head_index][0].score
+    head_score = _match_quality(evaluated[head_index][0])
     per_source = [evaluated[head_index]] + [
         pair for index, pair in enumerate(evaluated)
-        if index != head_index and pair[0].score >= head_score - 1e-9
+        if index != head_index and _match_quality(pair[0]) >= head_score - 1e-9
     ]
     result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
@@ -1253,6 +1338,15 @@ async def _pointer_pass(
                 # absent from the sheet) is rejected instead of yielding a wrong verdict.
                 if value is None or not pointer_is_plausible(
                     src.grid, coord[0], q.data_key[0], src.table.title
+                ):
+                    cells = None
+                    break
+                # The same guard for the other axis: a temporal query names a period, and the
+                # column it lands in has to be headed by that period. Without this the pointer
+                # answered "April 2025" with a "% yoy April 2026" cell — see
+                # cell_pointer.pointer_column_matches for what that cost.
+                if len(q.data_key) == 3 and not pointer_column_matches(
+                    src.grid, coord[0], coord[1], q.data_key[1], q.data_key[2]
                 ):
                     cells = None
                     break

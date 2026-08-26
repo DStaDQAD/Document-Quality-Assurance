@@ -48,6 +48,86 @@ def _canon(text: str) -> str:
     return re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", text.lower().strip()))
 
 
+def _label_words(text: str) -> set:
+    """`_sig_words` plus every word the text's glyph splits would have formed if rejoined.
+
+    A label the PDF broke mid-word ('Kredit M ultiguna', 'Kredit Konsum si') yields word sets
+    that share nothing with the claim's wording — 'ultiguna' is not 'multiguna' — so every guard
+    built on word overlap silently stops recognising the row. Adding the 2- and 3-word
+    concatenations restores the real words ('m'+'ultiguna', 'konsum'+'si') without the bleed a
+    plain substring test brings: 'usaha' would match inside 'Perusahaan', but no run of whole
+    words ever concatenates to it.
+    """
+    raw = [w.lower() for w in re.findall(r"\w+", text)]
+    words = {w for w in raw if len(w) > 2}
+    for span in (2, 3):
+        for i in range(len(raw) - span + 1):
+            joined = "".join(raw[i:i + span])
+            if len(joined) > 2:
+                words.add(joined)
+    return words
+
+
+def _label_is_covered_by(label: str, q_words: set, ignorable: frozenset) -> bool:
+    """True when every meaningful word of `label` is accounted for by the claim's words.
+
+    Walks the label left to right, consuming one word when the claim names it and two or three
+    when only their concatenation does — which is how a glyph-split label is read back
+    ('m'+'odal' -> modal, 'um'+'km' -> umkm) without a substring test's bleed. Tokens the claim
+    never names make the label a DIFFERENT series, and that is the whole point of the check:
+    "Uang Beredar Digital" must not bind to 'Uang Beredar Luas(M2)' just because it shares the
+    first two words. Stop words and stray one/two-character tokens (footnote markers, '1)') are
+    ignored — they distinguish nothing either way.
+    """
+    raw = [w.lower() for w in re.findall(r"\w+", label)]
+    i = 0
+    while i < len(raw):
+        if raw[i] in q_words or raw[i] in ignorable:
+            i += 1
+            continue
+        merged = False
+        for span in (2, 3):
+            if i + span <= len(raw) and "".join(raw[i:i + span]) in q_words:
+                i += span
+                merged = True
+                break
+        if merged:
+            continue
+        if len(raw[i]) < 3:
+            i += 1        # footnote marker or the orphan half of a split we could not rejoin
+            continue
+        return False
+    return True
+
+
+def _tight(text: str) -> str:
+    """Letters and digits only, lowercased — a form immune to where the spaces fell.
+
+    BI's PDFs embed zero-width spaces inside words, so the text layer spells row labels
+    'Kredit M ultiguna', 'Kredit Konsum si (KK)' and 'Sim panan Berjangka'. The spaces are real
+    characters in the content stream, indistinguishable from word spaces without the glyph
+    boxes, so the labels cannot be repaired — only compared in a form that ignores the split.
+    Same normalisation `pdf_table_extraction._norm_label` already applies for the same reason.
+    """
+    return re.sub(r'[^a-z0-9]', '', text.lower())
+
+
+def _tight_score(query: str, matched_label: str) -> float:
+    """Containment score of two labels compared without spacing or punctuation.
+
+    1.0 for the same label spelled differently, otherwise the share of the longer string the
+    shorter one accounts for, and 0.0 when neither contains the other.
+    """
+    q, l = _tight(query), _tight(matched_label)
+    if not q or not l:
+        return 0.0
+    if q == l:
+        return 1.0
+    if q in l or l in q:
+        return min(len(q), len(l)) / max(len(q), len(l))
+    return 0.0
+
+
 def label_match_score(query: str, matched_label: str) -> float:
     """How well a resolved row label actually answers the metric name a claim asked for: the
     Dice overlap of their significant words, 1.0 for a perfect match and 0.0 for none.
@@ -65,8 +145,14 @@ def label_match_score(query: str, matched_label: str) -> float:
     """
     q, l = _sig_words(query), _sig_words(matched_label)
     if not q or not l:
-        return 0.0
-    return 2 * len(q & l) / (len(q) + len(l))
+        return _tight_score(query, matched_label)
+    # Word overlap alone punishes a label the PDF split mid-word: 'Kredit M ultiguna' shares only
+    # 'kredit' with the claim's "kredit multiguna" and scores 0,5, while a generic 'Kredit' row in
+    # a DIFFERENT table scores 0,67 and wins the source ranking — the claim is then answered with
+    # total credit growth (9,4%) instead of multiguna's (8,5%). Measured on the M2 report, that
+    # one effect produced six false Refuteds. Comparing the labels as unspaced strings recognises
+    # them as the same name, so the better score of the two is the honest one.
+    return max(2 * len(q & l) / (len(q) + len(l)), _tight_score(query, matched_label))
 
 
 @dataclass
@@ -94,9 +180,17 @@ class TableData:
     # Includes report-speak verbs ("penghimpunan DPK", "penyaluran kredit") that describe an
     # action on the subject rather than naming a different subject.
     _TITLE_STOP_WORDS: ClassVar[frozenset] = frozenset({
-        "dan", "di", "ke", "dari", "untuk", "yang", "pada", "atau", "dalam",
+        "dan", "di", "ke", "dari", "untuk", "yang", "pada", "kepada", "atau", "dalam",
         "dengan", "oleh", "atas", "total", "jumlah", "posisi", "indonesia", "bank",
         "penghimpunan", "penyaluran", "pertumbuhan", "perkembangan", "tercatat",
+        # BI's classifier vocabulary: words that name the DIMENSION a table breaks its subject
+        # down by, never the series itself. "kredit skala usaha mikro" is a claim about mikro,
+        # and "Berdasarkan Jenis Penggunaan" says how Tabel 6 is organised. Counting them as
+        # significant made every such claim fail the label guards — 'M ikro' accounts for one
+        # of {kredit, skala, usaha, mikro} and needs half — so the row that IS the answer was
+        # never reachable. 'kelompok' is deliberately absent: a survey report's "kelompok
+        # pengeluaran Rp4,1-5 juta" really does name a distinct series.
+        "skala", "usaha", "jenis", "penggunaan", "golongan", "berdasarkan",
         "the", "of", "a", "an", "and", "in", "for",
     })
 
@@ -136,6 +230,42 @@ class TableData:
             w in title_words or (self._SUBJECT_SYNONYMS.get(w, frozenset()) & title_words)
             for w in q_words
         )
+
+    def query_coverage(self, query: str, matched_label: str) -> float:
+        """Share of a claim's significant words this table accounts for, title AND row together.
+
+        Row labels alone cannot rank sources once a report's own tables are all in the pool:
+        'Korporasi' is a row of BOTH "Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan
+        Golongan Nasabah" and "Tabel 5. Perkembangan Kredit Berdasarkan Golongan Debitur", and
+        it matches "DPK korporasi" equally well in each, so the claim was answered with credit
+        growth (14,5%) instead of DPK growth (16,3%). The TITLE is what separates them, and the
+        same reading fixes "kredit investasi UMKM" resolving to Lampiran 4's economy-wide
+        Kredit Investasi row instead of Tabel 8's UMKM breakdown.
+
+        Scope words are load-bearing here, so this ranks ABOVE label quality in
+        paired_verifier._evaluate_fact: a source that ignores 'UMKM' answers a different
+        question, however well its row name reads.
+        """
+        q_words = {
+            w for w in _sig_words(query.lower().replace("dana pihak ketiga", "dpk"))
+            if w not in self._TITLE_STOP_WORDS and not w.isdigit()
+        }
+        if not q_words:
+            return 1.0
+        known = _label_words(matched_label) | _label_words(self.title)
+        covered = {
+            w for w in q_words
+            if w in known or (self._SUBJECT_SYNONYMS.get(w, frozenset()) & known)
+        }
+        # A term _SUBJECT_SYNONYMS knows about names what the report is TALKING ABOUT, not a
+        # detail of it. A source that mentions it nowhere is answering a different question, so
+        # it scores zero rather than partial credit and _evaluate_fact drops it: "DPK korporasi"
+        # was being answered by Tabel 5's 'Korporasi' row — a CREDIT table — because the row
+        # name alone matched perfectly. The DPK table's own Korporasi rows are dropped as
+        # ambiguous (three rows share the name), so the honest answer there is "not enough data".
+        if any(w in self._SUBJECT_SYNONYMS for w in q_words - covered):
+            return 0.0
+        return len(covered) / len(q_words)
 
     def available_periods(self, query: str) -> List[Tuple[int, str]]:
         """Return all (year, month) pairs that have data for the label closest matching query.
@@ -185,22 +315,67 @@ class TableData:
         between narrative wording and sheet wording do not defeat containment.
         """
         q_canon = _canon(query)
+        q_tight = _tight(query)
         q_words = _sig_words(query)
         tier_exact, tier_q_in_l, tier_l_in_q, tier_leaf = [], [], [], []
+        tier_tight_q_in_l, tier_tight_words = [], []
         for label in labels:
             l_canon = _canon(label)
+            l_tight = _tight(label)
             if l_canon == q_canon:
                 tier_exact.append((label, 0))
             if q_canon and q_canon in l_canon:
                 tier_q_in_l.append((label, len(label)))
             if l_canon and l_canon in q_canon and self._query_is_about_the_label(query, label):
-                tier_l_in_q.append((label, -len(label)))
+                # Ranked by how much of what the TITLE does not already say the row accounts
+                # for, then by specificity. "kredit properti KPR dan KPA" contains both the
+                # 'Kredit Properti' row and the 'KPR dan KPA' row of Tabel 7, and plain
+                # longest-wins picked the first — answering a 4,8% claim with the 17,5% total.
+                # The title already says "Kredit Properti", so those words separate nothing;
+                # what is left of the claim ('kpr', 'kpa') is what the row has to earn.
+                residual = q_words - _label_words(self.title) - self._TITLE_STOP_WORDS
+                earned = residual & _label_words(label)
+                # A row that adds nothing the title did not already say is the table's own
+                # subject, not the breakdown the claim asked about. "kredit properti real
+                # estat" against Tabel 7 ('Kredit Properti' is both the title and a row) was
+                # answered with the 17,5% total instead of real estate's 13,9%. Dropping such
+                # a candidate lets the looser tiers below reach the row that does earn its
+                # place — and where none does, the claim honestly comes back unresolved.
+                if residual and not earned and _label_words(label) <= _label_words(self.title):
+                    continue
+                tier_l_in_q.append((label, (-len(earned), -len(label))))
             if QUAL_SEP in label:
                 leaf = _canon(label.rsplit(QUAL_SEP, 1)[1])
                 if leaf and leaf in q_canon:
                     overlap = len(_sig_words(label) & q_words)
                     tier_leaf.append((label, (-overlap, -len(leaf))))
-        return [tier_exact, tier_q_in_l, tier_leaf, tier_l_in_q]
+            # The last two tiers ignore where the spaces fell (see _tight / _label_words), so a
+            # label the PDF broke mid-word can still be recognised. They run LAST: a label that
+            # matches on its real words always wins over one that only matches once the stray
+            # spaces are taken out.
+            if q_tight and q_tight in l_tight:
+                tier_tight_q_in_l.append((label, len(label)))
+            elif QUAL_SEP not in label and self._query_is_about_the_label(query, label):
+                # Word coverage rather than containment, because the two spellings rarely nest:
+                # the claim says "Uang Primer (M0) adjusted" while Lampiran 6's row reads 'Uang
+                # Prim er Adjusted 1)' — neither contains the other, so a containment test
+                # settled for the plain 'Uang Prim er' row above it and checked M0 adjusted
+                # against unadjusted uang primer (Rp1.798,9 vs Rp2.232,2 triliun). Ranking by
+                # how much of the CLAIM a row accounts for picks the adjusted row instead.
+                # Qualified labels are excluded above: 'IKLK > Usia >60 th' shares every
+                # significant word with a claim about 'IKLK > Usia >41 tahun' — only the
+                # digits differ, and those are not significant words — so word coverage
+                # would bind the claim to the wrong age group. Tier 3 resolves qualified
+                # labels properly, by their leaf.
+                covered = _label_words(label) & q_words
+                if covered and _label_is_covered_by(label, q_words, self._TITLE_STOP_WORDS):
+                    tier_tight_words.append(
+                        (label, (-len(covered), -_tight_score(query, label), len(label)))
+                    )
+        return [
+            tier_exact, tier_q_in_l, tier_leaf, tier_l_in_q,
+            tier_tight_q_in_l, tier_tight_words,
+        ]
 
     def _match_tiers(self, query: str):
         return self._match_tiers_over(query, self.row_labels)
@@ -241,8 +416,8 @@ class TableData:
         }
         if not q_words:
             return True
-        covered = q_words & _sig_words(label)
-        leftover = q_words - covered - _sig_words(self.title)
+        covered = q_words & _label_words(label)
+        leftover = q_words - covered - _label_words(self.title)
         if not leftover:
             return True
         return len(covered) >= self._LABEL_IN_QUERY_MIN_COVERAGE * len(q_words)
@@ -268,7 +443,7 @@ class TableData:
         leaf_words = _sig_words(query.rsplit(QUAL_SEP, 1)[1])
         if not leaf_words:
             return True
-        return 2 * len(leaf_words & _sig_words(label)) >= len(leaf_words)
+        return 2 * len(leaf_words & _label_words(label)) >= len(leaf_words)
 
     def _resolve_label(self, query: str) -> Optional[str]:
         """Return the best matching row label for query, or None if nothing matches."""

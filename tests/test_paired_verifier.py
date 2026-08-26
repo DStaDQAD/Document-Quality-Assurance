@@ -1634,3 +1634,39 @@ def test_yoy_claim_against_a_levels_table_still_computes_growth():
     assert result.verdict == "Entailed"
     assert result.computed_value == pytest.approx(15.7, abs=0.05)
     assert len(result.periods) == 2
+
+
+# ---------------------------------------------------------------------------
+# YoY guards added with the snippet-table split
+# ---------------------------------------------------------------------------
+
+def test_growth_tolerance_widens_only_where_rounding_actually_bites():
+    from paired_verifier import MATCH_TOLERANCE, _growth_tolerance
+
+    # 7,6 against 7,5: each is printed to a tenth, so the growth they imply carries more than
+    # a point of slack and the report's own 1,5% is inside it.
+    assert _growth_tolerance(7.6, 7.5) > 1.0
+    # On a base three orders of magnitude larger the rounding is irrelevant and the ordinary
+    # tolerance stands — this must not become a blanket loosening.
+    assert _growth_tolerance(10253.7, 9387.9) == MATCH_TOLERANCE
+
+
+def test_yoy_refuses_a_prior_year_value_equal_to_the_claimed_growth():
+    from paired_verifier import _compute_yoy_growth, _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    table = TableData(title="Tabel 9", unit="triliun Rp", row_labels=["M0"])
+    table._data[("M0", 2026, "Apr")] = 2232.2
+    table._data[("M0", 2025, "Apr")] = 14.3          # actually the '%, yoy' cell, mis-read
+    src = _ExcelSource(table=table, filename="report.pdf", sheet="Tabel 9")
+    fact = ExtractedFact(
+        operation="yoy_growth", periods=[PeriodPoint(metric_label="M0", year=2026, month="Apr")],
+        claimed_value=14.3, unit="persen_yoy",
+        context_quote="Uang Primer (M0) adjusted ... tumbuh 14,3% (yoy)",
+    )
+    result = _compute_yoy_growth(fact, [("M0", 2232.2)], src)
+
+    # 2.232,2 / 14,3 would have been reported as 15.509% yoy against a claim of 14,3%.
+    assert result.verdict == "Inconclusive"
+    assert "yoy" in result.reasoning.lower()

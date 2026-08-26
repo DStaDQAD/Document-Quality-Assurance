@@ -208,3 +208,71 @@ def test_a_verbose_query_still_binds_when_the_label_carries_most_of_it():
     table = _growth_table()
 
     assert table._resolve_label("posisi Simpanan Berjangka") == "Simpanan Berjangka"
+
+
+# ---------------------------------------------------------------------------
+# Labels the PDF split mid-word (BI text layers embed zero-width spaces)
+# ---------------------------------------------------------------------------
+
+def _make_growth_snippet():
+    """Tabel 6's growth half, spelled the way the text layer hands it over."""
+    table = TableData(
+        title="Tabel 6. Perkembangan Kredit Berdasarkan Jenis Penggunaan (%, yoy)",
+        unit="%, yoy",
+        row_labels=["Kredit M odal Kerja (KM K)", "Kredit Investasi (KI)",
+                    "Kredit Konsum si (KK)", "Kredit M ultiguna"],
+    )
+    for label, value in [("Kredit M odal Kerja (KM K)", 5.8), ("Kredit Investasi (KI)", 18.4),
+                         ("Kredit Konsum si (KK)", 6.0), ("Kredit M ultiguna", 8.5)]:
+        table._data[(label, 2026, "Apr")] = value
+    return table
+
+
+def test_lookup_fuzzy_matches_a_label_the_pdf_split_mid_word():
+    table = _make_growth_snippet()
+    # The claim spells the metric normally; the row does not. Before spacing-tolerant matching
+    # this fell through to a generic 'Kredit' row in a DIFFERENT table (9,4% total credit).
+    assert table.lookup_fuzzy("kredit multiguna", 2026, "Apr") == ("Kredit M ultiguna", 8.5)
+    assert table.lookup_fuzzy("Kredit Konsumsi (KK)", 2026, "Apr") == ("Kredit Konsum si (KK)", 6.0)
+
+
+def test_label_match_score_is_not_punished_by_the_split():
+    from table_model import label_match_score
+
+    # The split row must not score BELOW an unrelated-but-clean generic row, or source ranking
+    # hands the claim to the wrong table.
+    assert label_match_score("kredit multiguna", "Kredit M ultiguna") > \
+           label_match_score("kredit multiguna", "Kredit")
+
+
+def test_a_split_label_still_does_not_bind_a_distinct_metric():
+    # Spacing tolerance must not become a licence to match anything: 'Uang Beredar Digital'
+    # shares two words with 'Uang Beredar Luas(M 2)' and is a different series.
+    table = TableData(title="Uang Beredar dan faktor-faktornya", unit="Miliar Rp",
+                      row_labels=["Uang Beredar Luas(M 2)"])
+    table._data[("Uang Beredar Luas(M 2)", 2026, "Jan")] = 10116181.856
+    assert table.lookup_fuzzy("Uang Beredar Digital", 2026, "Jan") == (None, None)
+
+
+def test_a_row_that_only_repeats_the_title_loses_to_the_breakdown_it_asked_for():
+    table = TableData(
+        title="Tabel 7. Kredit Properti (triliun Rp) (%, yoy)", unit="%, yoy",
+        row_labels=["Kredit Properti", "KPR dan KPA", "Konstruksi"],
+    )
+    for label, value in [("Kredit Properti", 17.5), ("KPR dan KPA", 4.8), ("Konstruksi", 46.0)]:
+        table._data[(label, 2026, "Apr")] = value
+    # Both rows are contained in the claim; the title already says "Kredit Properti", so only
+    # 'KPR dan KPA' accounts for anything the claim adds.
+    assert table.lookup_fuzzy("kredit properti KPR dan KPA", 2026, "Apr") == ("KPR dan KPA", 4.8)
+    # A claim that really is about the table-wide series still reaches it.
+    assert table.lookup_fuzzy("Penyaluran kredit properti", 2026, "Apr") == ("Kredit Properti", 17.5)
+
+
+def test_query_coverage_zeroes_a_source_that_never_names_the_subject():
+    credit = TableData(title="Tabel 5. Perkembangan Kredit Berdasarkan Golongan Debitur",
+                       unit="%, yoy", row_labels=["Korporasi"])
+    dpk = TableData(title="Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah",
+                    unit="%, yoy", row_labels=["Korporasi"])
+    # 'Korporasi' matches equally well in both; only the title says which one is about DPK.
+    assert credit.query_coverage("DPK korporasi", "Korporasi") == 0.0
+    assert dpk.query_coverage("DPK korporasi", "Korporasi") == 1.0

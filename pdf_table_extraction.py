@@ -76,7 +76,7 @@ _TABLE_PAGES_PER_CALL = int(os.getenv("PDF_TABLE_PAGES_PER_CALL", "1"))
 
 # Bump when the prompt, the assembly logic or the verification pass changes: it is part of the
 # cache key, so stale transcriptions from a previous version can never be served.
-_PROMPT_VERSION = "2"
+_PROMPT_VERSION = "3"
 
 _MAX_CACHE_ENTRIES = 8
 
@@ -89,6 +89,11 @@ class PdfTable:
     unit: str                              # "Triliun Rp" | "%, yoy" | ""
     grid: List[List] = field(default_factory=list)   # assembled; numeric cells are int/float
     index_on_page: int = 0
+    # Which printed caption on the page this table came from. Usually 1:1 with index_on_page,
+    # but a snippet table that prints levels and growth side by side under ONE caption is split
+    # into two tables (see _split_unit_blocks), and both carry that caption's index — which is
+    # how extract_tables_natively still tells "every caption was read" from "one went missing".
+    caption_index: int = 0
     # True when this table's page had a text layer, so every value the grid still carries was
     # read out of the file by code rather than off the image by the model. False for a scanned
     # page — worth surfacing, since only then are the numbers the model's own.
@@ -151,6 +156,14 @@ ATURAN YANG TIDAK BOLEH DILANGGAR:
    halaman yang sama). Keluarkan satu entri terpisah per tabel, berurutan dari atas ke bawah.
 6. Salin judul tabel ("Tabel 2. …" / "Lampiran 1. …") dan anotasi unit ("(Triliun Rp)",
    "(%, yoy)") persis seperti tercetak.
+7. SATU JUDUL BISA MEMUAT DUA TABEL BERBEDA SATUAN. Tabel ringkas BI mencetak kolom nilai dan
+   kolom pertumbuhan berdampingan di bawah satu judul — mis. header "Mar | Apr* | Mar'26 |
+   Apr'26*" dengan anotasi "2026" di atas dua kolom pertama dan "% (yoy)" di atas dua kolom
+   terakhir. Keluarkan DUA entri tabel terpisah: satu berisi kolom nilai saja (unit
+   "triliun Rp"), satu berisi kolom pertumbuhan saja (unit "%, yoy"), keduanya memakai judul
+   yang sama dan label baris yang sama. JANGAN menggabungkan keduanya dalam satu tabel — dua
+   kolom untuk bulan yang sama tetapi satuan berbeda tidak bisa dibedakan setelahnya.
+   Bila ada blok ketiga dengan satuan lain ("% (mtm)"), keluarkan sebagai entri ketiga.
 
 YANG DIABAIKAN:
 - Paragraf narasi dan kalimat biasa.
@@ -404,6 +417,26 @@ def _is_usable(table: _PdfTableOut, page_number: int) -> bool:
             page_number, caption,
         )
         return False
+    # A period header must name EVERY data column. Where it does not, the columns silently
+    # shift: on page 6 of the M2 report Tabel 9 prints five data columns (two levels, two %
+    # yoy, one % mtm) but came back with four period tokens and a blank leading cell, so the
+    # label block swallowed the March column and "M0 April 2026" resolved to the mtm cell,
+    # -6,9 — reported as Tidak Sesuai against a perfectly correct Rp2.232,2 triliun.
+    #
+    # Only checked for headers that ARE period headers (>= 2 period tokens); a categorical
+    # table's column names are not periods and nothing here applies to them.
+    periods = [c for c in table.header_rows[-1] if _is_period_token(str(c).strip())]
+    if len(periods) >= 2:
+        body_width = Counter(len(r) for r in table.rows).most_common(1)[0][0]
+        # The header either includes a cell above the row-label column or starts at the first
+        # data column (_align_header_to_body repairs the latter), so both widths are legitimate.
+        if len(periods) not in (body_width - 1, body_width):
+            logger.info(
+                "Dropping transcribed table on page %d (%s): %d period column(s) named for %d "
+                "body column(s) — the header cannot be placed over the values.",
+                page_number, caption, len(periods), body_width,
+            )
+            return False
     return True
 
 
@@ -638,6 +671,60 @@ def _line_row(line: str) -> Optional[Tuple[str, List[float]]]:
     return label, values
 
 
+def _is_period_token(token: str) -> bool:
+    """True when a header token names a calendar period ('Mar', 'Apr*', "Mar'26", 'I')."""
+    return bool(_bare_period_token(token) or _parse_period(token))
+
+
+# Most tokens a glyph-split period can be spread across: "Apr'2" + "6*" needs 2, "M" + "ar" + "'26"
+# needs 3. Higher would start gluing genuinely separate header cells together.
+_MAX_SPLIT_JOIN = 3
+
+
+def _repair_split_tokens(tokens: List[str]) -> List[str]:
+    """Rejoin tokens a BI PDF split mid-word, but only where the join reads as a period.
+
+    These reports embed zero-width space characters inside words, so PDFium hands back the month
+    row as "M ar Apr M ei Jun … M ar Apr*" and a snippet header as "M ar Apr* M ar'26 Apr'26*".
+    The same artefact shows up as 'Kredit M odal Kerja' and 'Sim panan Berjangka' in row labels,
+    which is why it cannot be fixed geometrically: the spaces are real characters in the content
+    stream, not gaps this module inferred, and a real word space looks identical.
+
+    Measured cost of not repairing it: `_line_periods` scans for a RUN of period tokens, and 'M'
+    followed by 'ar' breaks the run. On sample_data/test case_Analisis Uang Beredar Posisi April
+    2026.pdf that reduced a 14-month Lampiran header to its longest clean stretch (Jun…Feb, 9
+    tokens), every 14-value data row was then dropped for disagreeing with the header, and 9 of
+    10 pages fell through to the vision pass — ~52s of LLM calls for a report whose numbers were
+    sitting in the text layer all along.
+
+    The rule is deliberately narrow: a join is accepted ONLY when the concatenation is itself a
+    period token. A token that already parses is never touched, so a clean header (page 9 of the
+    same report renders one) walks through unchanged.
+    """
+    repaired: List[str] = []
+    i = 0
+    while i < len(tokens):
+        if _is_period_token(tokens[i]):
+            repaired.append(tokens[i])
+            i += 1
+            continue
+        joined = None
+        for span in range(2, _MAX_SPLIT_JOIN + 1):
+            if i + span > len(tokens):
+                break
+            candidate = "".join(tokens[i:i + span])
+            if _is_period_token(candidate):
+                joined = (candidate, span)
+                break
+        if joined:
+            repaired.append(joined[0])
+            i += joined[1]
+        else:
+            repaired.append(tokens[i])
+            i += 1
+    return repaired
+
+
 def _line_periods(line: str) -> Optional[List[str]]:
     """The longest run of consecutive period tokens on a line, else None.
 
@@ -645,12 +732,15 @@ def _line_periods(line: str) -> Optional[List[str]]:
     clustering glyphs by y to reassemble a header also drags in whatever the narrative column
     prints at the same height, and a header row often carries its own label ('Uraian') too.
     A run of three is already more than prose produces by accident.
+
+    Tokens are repaired first (see _repair_split_tokens) — without that, a header the PDF split
+    mid-month never produces a run long enough to be recognised at all.
     """
-    tokens = line.split()
+    tokens = _repair_split_tokens(line.split())
     best: List[str] = []
     current: List[str] = []
     for token in tokens:
-        if _bare_period_token(token) or _parse_period(token):
+        if _is_period_token(token):
             current.append(token)
             if len(current) > len(best):
                 best = list(current)
@@ -771,6 +861,61 @@ def _drop_ambiguous_rows(labels: List[str]) -> set:
     return {i for i, label in enumerate(labels) if seen[_norm_label(label)] > 1}
 
 
+# Unit annotations printed over a block of columns, matched against the header zone with ALL
+# whitespace removed — the same zero-width spaces that break month names also spell '% (m tm )'.
+# _YOY names the block the split targets; _OTHER_PCT is any rival block ('% (mtm)', '% (ytd)')
+# whose presence means the annotations no longer identify the dated columns on their own.
+_YOY_BLOCK_RE = re.compile(r'%[,(]?yoy', re.IGNORECASE)
+_OTHER_PCT_BLOCK_RE = re.compile(r'%[,(]?(?:mtm|ytd|qtq|mom)', re.IGNORECASE)
+
+# Fewest columns a split block must keep. One column can never parse as a temporal block anyway
+# (_find_header_blocks needs >= 2 year cells), so splitting one off only loses data.
+_MIN_BLOCK_COLS = 2
+
+
+def _complete_wrapped_caption(caption: str, below: List[Tuple[float, str]]) -> str:
+    """Glue a caption's continuation line back on when it wrapped INSIDE its unit annotation.
+
+    'Tabel 2. Faktor yang Memengaruhi Uang Beredar (triliun' / 'Rp)' is one caption broken over
+    two lines, and the half that survives carries an unclosed bracket. `_unit_from_caption` then
+    finds no unit, and an empty unit is not a harmless gap: it sends paired_verifier down the
+    no-declared-unit path, which rescales a 'triliun Rp' claim against a table already written in
+    trillions and reports a false Refuted (the same failure that function's own docstring
+    records). Captions that wrap at a word boundary ('… Berdasarkan' / 'Valuta (triliun Rp)')
+    are already handled by the continuation-line scan and are left alone here.
+    """
+    if caption.count("(") <= caption.count(")"):
+        return caption
+    for _, text in below[:2]:
+        candidate = f"{caption} {text.strip()}"
+        if candidate.count("(") == candidate.count(")"):
+            return candidate
+    return caption
+
+
+def _split_unit_blocks(periods: List[str]) -> Optional[Tuple[List[int], List[int]]]:
+    """(level_cols, growth_cols) when a header stacks two unit blocks, else None.
+
+    A BI snippet table states the same rows twice under ONE caption: two level columns in
+    triliun Rp headed by bare months, then two growth columns in %, yoy headed by months that
+    carry the year explicitly — 'Mar | Apr* | Mar'26 | Apr'26*'. The two halves mean different
+    quantities, so they cannot share a table: `_drop_colliding_period_cols` sees one period
+    claimed twice and throws BOTH away, and a bare-token block leaves the dated columns with no
+    year at all, so they are dropped too. Either way the report's own printed growth figures —
+    the exact numbers most of its sentences quote — were unreadable.
+
+    The two blocks are told apart by how their months are written, which is BI's own convention:
+    a level column is bare ('Apr*'), a growth column names its year ("Apr'26*"). Both kinds must
+    be present, and each block must be wide enough to parse on its own.
+    """
+    level = [i for i, token in enumerate(periods) if _bare_period_token(token)]
+    growth = [i for i, token in enumerate(periods)
+              if not _bare_period_token(token) and _parse_period(token)]
+    if len(level) < _MIN_BLOCK_COLS or len(growth) < _MIN_BLOCK_COLS:
+        return None
+    return level, growth
+
+
 def _tables_on_page(
     reading: List[Tuple[float, str]],
     visual: List[Tuple[float, str]],
@@ -789,9 +934,12 @@ def _tables_on_page(
     """
     # Captions from the READING view: a report page is two columns wide, so clustering glyphs by
     # y merges the narrative column's prose into the caption's line and the anchor no longer bites.
-    captions = [(y, text.strip()) for y, text in reading
-                if _CAPTION_RE.match(text.strip())]
-    captions.sort(key=lambda item: -item[0])
+    in_view = sorted(reading, key=lambda item: -item[0])
+    captions = [
+        (y, _complete_wrapped_caption(text.strip(), in_view[i + 1:]))
+        for i, (y, text) in enumerate(in_view)
+        if _CAPTION_RE.match(text.strip())
+    ]
     if not captions:
         return [], 0
 
@@ -818,9 +966,11 @@ def _tables_on_page(
         # whatever the narrative column prints beside it.
         years: List[int] = []
         unit = _unit_from_caption(caption)
+        zone_text: List[str] = []
         for y, text in reading:
             if not (header_y <= y < caption_y):
                 continue
+            zone_text.append(text)
             for token in text.split():
                 if token.isdigit() and 1990 <= int(token) <= 2100:
                     years.append(int(token))
@@ -828,6 +978,7 @@ def _tables_on_page(
             # Penghimpunan Dana Pihak Ketiga Berdasarkan' / 'Valuta (triliun Rp)'.
             if not unit:
                 unit = _unit_from_caption(text.strip())
+        header_zone = " ".join(zone_text)
 
         # Data rows come from the READING view, the only one that separates a label from the
         # values it is printed over.
@@ -848,23 +999,63 @@ def _tables_on_page(
         if len(body) < 2:
             continue
 
-        grid: List[List] = [[caption]]
-        if unit:
-            grid.append([f"({unit})"])
-        distinct = sorted(set(years))
-        if distinct:
-            grid.append(_reconstruct_year_row(
-                [None] + distinct + [None] * max(0, len(periods) - len(distinct)),
-                [None] + list(periods),
+        def emit(block_caption: str, block_unit: str, cols: Optional[List[int]],
+                 year_row: Optional[List], period_row: List[str]) -> None:
+            """Assemble one unit block into a PdfTable and append it."""
+            grid: List[List] = [[block_caption]]
+            if block_unit:
+                grid.append([f"({block_unit})"])
+            if year_row is not None:
+                grid.append([None] + year_row)
+            grid.append([None] + list(period_row))
+            grid.extend(
+                [label] + ([values[c] for c in cols] if cols is not None else list(values))
+                for label, values in body
+            )
+            width = max(len(r) for r in grid)
+            tables.append(PdfTable(
+                page_number=page_number, caption=block_caption, unit=block_unit,
+                grid=[r + [None] * (width - len(r)) for r in grid],
+                index_on_page=len(tables), caption_index=order, verified=True,
             ))
-        grid.append([None] + list(periods))
-        grid.extend([label] + list(values) for label, values in body)
-        width = max(len(r) for r in grid)
-        tables.append(PdfTable(
-            page_number=page_number, caption=caption, unit=unit,
-            grid=[r + [None] * (width - len(r)) for r in grid],
-            index_on_page=len(tables), verified=True,
-        ))
+
+        # A snippet table prints levels and growth under one caption; each half is its own table
+        # (see _split_unit_blocks). Only split when the header's unit annotations actually say
+        # which half is which: a table carrying a third block ('% (mtm)' on Tabel 9) cannot be
+        # cut on the month spelling alone, and guessing would file mtm figures as yoy ones.
+        blocks = _split_unit_blocks(periods)
+        annotations = re.sub(r'\s+', '', header_zone)
+        annotates_yoy = bool(_YOY_BLOCK_RE.search(annotations))
+        if blocks and annotates_yoy and not _OTHER_PCT_BLOCK_RE.search(annotations):
+            level_cols, growth_cols = blocks
+            logger.info(
+                "Page %d, %s: splitting %d level column(s) and %d '%%, yoy' column(s) printed "
+                "under one caption into two tables.",
+                page_number, caption[:40], len(level_cols), len(growth_cols),
+            )
+            level_periods = [periods[c] for c in level_cols]
+            distinct = sorted(set(years))
+            level_years = _reconstruct_year_row(
+                distinct + [None] * max(0, len(level_periods) - len(distinct)),
+                list(level_periods),
+            ) if distinct else None
+            emit(caption, unit, level_cols, level_years, level_periods)
+
+            # The growth block's months carry their own year, so it needs no reconstruction —
+            # but the parser's two-row header path keys on BARE tokens under an int year row,
+            # so each "Apr'26*" is rewritten into that shape.
+            parsed = [_parse_period(periods[c]) for c in growth_cols]
+            emit(
+                f"{caption} (%, yoy)", "%, yoy", growth_cols,
+                [year for year, _ in parsed], [month for _, month in parsed],
+            )
+            continue
+
+        distinct = sorted(set(years))
+        year_row = _reconstruct_year_row(
+            distinct + [None] * max(0, len(periods) - len(distinct)), list(periods),
+        ) if distinct else None
+        emit(caption, unit, None, year_row, periods)
 
     return tables, len(captions)
 
@@ -882,13 +1073,16 @@ def extract_tables_natively(pdf_bytes: bytes) -> Tuple[List[PdfTable], set, int]
     pages = _page_lines(pdf_bytes)
     for page_number, (reading, visual) in pages.items():
         found, captions_seen = _tables_on_page(reading, visual, page_number)
-        if found and len(found) == captions_seen:
+        # Captions read, not tables built: one caption can legitimately yield two tables when a
+        # snippet prints levels and growth side by side (see _split_unit_blocks).
+        captions_read = len({t.caption_index for t in found})
+        if found and captions_read == captions_seen:
             tables.extend(found)
             answered.add(page_number)
         elif captions_seen:
             logger.info(
                 "Page %d: read %d of %d captioned table(s) natively — leaving the page to the "
-                "vision pass.", page_number, len(found), captions_seen,
+                "vision pass.", page_number, captions_read, captions_seen,
             )
     logger.info(
         "Native reader recovered %d table(s) from %d of %d page(s) with no LLM call.",
@@ -999,9 +1193,22 @@ async def extract_tables_from_pdf(
         _cache_put(key, tables)
         return tables
 
-    logger.info("Rendering pages at %d DPI for table transcription", dpi)
-    b64_pages = await asyncio.to_thread(render_pages_to_b64, pdf_bytes, dpi)
-    todo = [i for i in range(len(b64_pages)) if (i + 1) not in answered]
+    # Render ONLY the pages the native reader could not account for. On a digital report that
+    # is now usually one page out of ten, and rasterising the other nine at 150 DPI to send
+    # none of them was pure latency.
+    todo = [i for i in range(n_pages) if (i + 1) not in answered] if n_pages else None
+    if todo is not None and not todo:
+        return in_page_order(native)
+    logger.info(
+        "Rendering %s at %d DPI for table transcription",
+        f"{len(todo)} page(s)" if todo is not None else "every page", dpi,
+    )
+    b64_pages = await asyncio.to_thread(
+        render_pages_to_b64, pdf_bytes, dpi, set(todo) if todo is not None else None
+    )
+    if todo is None:
+        # The native reader could not even count the pages; fall back to whatever rendered.
+        todo = [i for i in range(len(b64_pages)) if (i + 1) not in answered]
     if not todo:
         return in_page_order(native)
 

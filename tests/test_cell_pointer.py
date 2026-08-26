@@ -360,3 +360,37 @@ def test_resolve_pointers_no_queries_short_circuits_without_llm_call():
     assert pointers == {}
     assert unit is None
     llm.with_structured_output.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Column guard: a pointer must land under the period that was asked for
+# ---------------------------------------------------------------------------
+
+def _snippet_grid():
+    """A snippet table: two level columns, then two '%, yoy' columns for the SAME months."""
+    return [
+        ["Tabel 9. Komponen Uang Primer adjusted", None, None, None, None],
+        [None, 2026, 2026, None, None],
+        [None, "Mar", "Apr*", "Mar'26", "Apr'26*"],
+        ["Uang Primer adjusted", 2396.5, 2232.2, 16.8, 14.3],
+    ]
+
+
+def test_pointer_column_guard_rejects_a_growth_cell_offered_as_a_prior_year_level():
+    from cell_pointer import pointer_column_matches
+
+    grid = _snippet_grid()
+    # The yoy denominator for April 2025 does not exist in this table at all. The model pointed
+    # at the "Apr'26*" growth cell; code read 14,3 and reported 2.232,2 / 14,3 = 15.509% yoy.
+    assert pointer_column_matches(grid, row=3, col=4, year=2025, month="Apr") is False
+    # The column that really is April 2026 still passes.
+    assert pointer_column_matches(grid, row=3, col=2, year=2026, month="Apr") is True
+
+
+def test_pointer_column_guard_accepts_a_column_with_no_legible_header():
+    from cell_pointer import pointer_column_matches
+
+    # The pointer pass exists for sheets no parser understands; demanding a readable header
+    # there would switch it off entirely.
+    grid = [["something"], [None, None], ["Metric", 1.0, 2.0]]
+    assert pointer_column_matches(grid, row=2, col=1, year=2025, month="Apr") is True

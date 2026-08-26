@@ -939,3 +939,91 @@ def test_a_header_short_by_more_than_the_label_column_is_not_shifted():
     header = next(r for r in grid if "Mar" in r)
 
     assert header[0] == "Mar", "no padding should have been applied"
+
+
+# ---------------------------------------------------------------------------
+# Glyph-split period headers (BI PDFs embed zero-width spaces inside words)
+# ---------------------------------------------------------------------------
+
+def test_repair_split_tokens_rejoins_only_what_reads_as_a_period():
+    from pdf_table_extraction import _repair_split_tokens
+
+    # 'M ar' / 'M ei' are one month each; the surrounding words must survive untouched.
+    assert _repair_split_tokens("M ar Apr M ei Jun".split()) == ["Mar", "Apr", "Mei", "Jun"]
+    # A year suffix split across three tokens still rejoins.
+    assert _repair_split_tokens("M ar'2 6 Apr'26*".split()) == ["Mar'26", "Apr'26*"]
+    # Nothing that fails to read as a period is ever glued together.
+    assert _repair_split_tokens("Kredit M odal Kerja".split()) == ["Kredit", "M", "odal", "Kerja"]
+
+
+def test_line_periods_reads_a_header_the_pdf_split_mid_month():
+    # The exact shape sample_data/test case_…April 2026.pdf hands back for its Lampiran pages.
+    # Before the repair the longest clean run was Jun..Feb (9 of 14), every 14-value row was
+    # dropped for disagreeing with it, and nine pages went to the vision model for nothing.
+    line = "M ar Apr M ei Jun Jul Agu Sep Okt Nov Des Jan Feb M ar Apr*"
+    assert _line_periods(line) == [
+        "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+        "Jan", "Feb", "Mar", "Apr*",
+    ]
+
+
+def test_line_periods_still_rejects_prose():
+    assert _line_periods("Perkembangan M2 pada April 2026 terutama dipengaruhi") is None
+
+
+# ---------------------------------------------------------------------------
+# Snippet tables: levels and growth printed side by side under one caption
+# ---------------------------------------------------------------------------
+
+def _snippet_page_lines():
+    reading = [
+        (764.5, "Tabel 6. Perkembangan Kredit Berdasarkan Jenis Penggunaan (triliun Rp)"),
+        (740.0, "2026 % (yoy)"),
+        (723.1, "Kredit M odal Kerja (KM K) 3.565,0 3.608,6 4,0 5,8"),
+        (714.8, "Kredit Investasi (KI) 2.585,4 2.624,4 20,1 18,4"),
+        (706.5, "Kredit Konsum si (KK) 2.366,0 2.373,7 5,8 6,0"),
+    ]
+    visual = [(731.8, "M ar Apr* M ar'26 Apr'26*")] + reading
+    return reading, visual
+
+
+def test_tables_on_page_splits_a_snippet_into_levels_and_growth():
+    tables, captions = _tables_on_page(*_snippet_page_lines(), 4)
+
+    assert captions == 1
+    assert [t.unit for t in tables] == ["triliun Rp", "%, yoy"]
+    # Both halves come from the SAME printed caption, which is how the caller still counts the
+    # page as fully read (see extract_tables_natively).
+    assert {t.caption_index for t in tables} == {0}
+
+    levels, growth = (parse_generic_grid(t.grid) for t in tables)
+    assert levels.lookup_fuzzy("Kredit Investasi (KI)", 2026, "Mar")[1] == 2585.4
+    # The growth cell is the report's own printed figure, not one computed from the levels.
+    assert growth.lookup_fuzzy("Kredit Investasi (KI)", 2026, "Mar")[1] == 20.1
+    assert growth.lookup_fuzzy("Kredit Investasi (KI)", 2026, "Apr")[1] == 18.4
+
+
+def test_snippet_is_left_whole_when_a_third_unit_block_shares_the_header():
+    # Tabel 9 prints levels, % (yoy) AND % (mtm) under one caption. Which dated column belongs
+    # to which block cannot be told from the month spelling, so nothing is split — guessing
+    # would file an mtm figure as a yoy one.
+    reading, visual = _snippet_page_lines()
+    reading = [(y, "2026 % (yoy) % (m tm )" if "% (yoy)" in t else t) for y, t in reading]
+    visual = [(731.8, "M ar Apr* M ar'26 Apr'26*")] + reading
+    tables, _ = _tables_on_page(reading, visual, 6)
+    assert len(tables) == 1
+
+
+def test_is_usable_rejects_a_header_that_cannot_cover_the_body():
+    # Four period tokens named for five data columns: the label block silently swallows one
+    # column and every value shifts. Observed on Tabel 9, where "M0 April 2026" then resolved
+    # to the % mtm cell (-6,9) instead of Rp2.232,2 triliun.
+    table = _PdfTableOut(
+        caption="Tabel 9. Komponen Uang Primer adjusted",
+        header_rows=[["", "Keterangan", "Mar", "Apr*", "Mar26", "Apr26*"]],
+        rows=[
+            ["Uang Primer adjusted", "2.396,5", "2.232,2", "-6,9", "16,8", "14,3"],
+            ["Uang Kartal", "1.346,7", "1.301,1", "-3,4", "8,6", "14,6"],
+        ],
+    )
+    assert _is_usable(table, page_number=6) is False

@@ -243,6 +243,27 @@ IMPORTANT RULES:
 1. claimed_value_raw: copy the digit string verbatim — do NOT convert or interpret it.
    'Rp10.355,1 triliun' → '10.355,1'   |   '9,7% (yoy)' → '9,7'   |   '-9,2% (yoy)' → '-9,2'
 2. 'yoy' means year-on-year → operation='yoy_growth', unit='persen_yoy'.
+2b. CONTRACTION IS A NEGATIVE GROWTH RATE, NOT A TREND. When the text says a metric
+   'terkontraksi' / 'mengalami kontraksi' / 'turun' / 'menurun' / 'terkoreksi' BY a stated
+   percentage, that is still operation='yoy_growth' when the number is a (yoy) figure — and
+   claimed_value_raw MUST carry the MINUS SIGN even though the text prints the number without
+   one, because the table states it as a negative:
+     'kredit kendaraan bermotor mengalami kontraksi sebesar 9,0% (yoy)'  → yoy_growth, '-9,0'
+     'kredit skala usaha menengah terkontraksi sebesar 0,4% (yoy)'       → yoy_growth, '-0,4'
+     'surat berharga ... tercatat kontraksi sebesar 54,6% (yoy)'         → yoy_growth, '-54,6'
+   Use is_decreasing ONLY when the sentence gives NO number at all. A sentence that states a
+   percentage is never a trend claim.
+2c. A COMPARISON BETWEEN TWO GROWTH RATES IS TWO yoy_growth FACTS, NOT A TREND. 'tabungan
+   tumbuh 8,9% (yoy), meningkat dibandingkan bulan sebelumnya sebesar 8,4% (yoy)' is one
+   yoy_growth for the current month ('8,9') and one for the previous month ('8,4') — the word
+   'meningkat' compares the two GROWTH RATES, so emitting is_increasing over the LEVELS asks a
+   different question and gets the opposite answer whenever a level dips while its growth rises.
+2d. THE NUMBER BELONGS TO THE REPORT'S OWN PERIOD unless the text ties it to the earlier one.
+   In 'tabungan dan simpanan berjangka meningkat dibandingkan pertumbuhan pada bulan
+   sebelumnya masing-masing sebesar 8,9% (yoy) dan 4,6% (yoy)', the figures 8,9 and 4,6 are
+   APRIL's — the month the report is about — and the previous month's values are not stated at
+   all. Only a phrase that puts the number directly after the earlier period ('pada Maret 2026
+   sebesar 8,4%', 'bulan sebelumnya sebesar 8,4%') dates it to that earlier month.
 3. For each metric that has both an absolute value AND a growth rate in the same sentence, create
    TWO separate entries: one operation='value', one operation='yoy_growth' — each with its own
    short anchor_quote covering just its own number (e.g. 'sebesar Rp10.355,1 triliun' vs
@@ -250,6 +271,17 @@ IMPORTANT RULES:
 4. For metric_label in each period: use the closest match from the REFERENCE METRIC LIST if one
    clearly fits; otherwise use the exact metric name as it appears in the narrative text. Never skip
    a claim just because it has no reference list match.
+4a. NEVER use a bare aggregate name ('Total', 'Jumlah', 'Total Jenis Simpanan') as
+   metric_label, even when the reference list offers one. Several tables each have a row
+   called 'Total' and they total different things, so 'Total' identifies nothing: a claim
+   about total credit ("Penyaluran kredit pada April 2026 tercatat sebesar Rp8.606,6
+   triliun") was checked against the DPK table's Total (Rp9.567,7 triliun). Write the series
+   the sentence names — 'Penyaluran kredit', 'Total DPK' — and let the code find the row.
+4b. KEEP THE SCOPE WORD the surrounding sentence puts on the metric. A report states the same
+   breakdown for several populations, so 'ekspansi kredit UMKM ... bersumber dari ekspansi pada
+   kredit investasi sebesar 10,1% (yoy)' is about UMKM investment credit — metric_label
+   'kredit investasi UMKM', never a bare 'kredit investasi', which names the economy-wide series
+   whose growth is 18,4%. Same for 'kredit modal kerja' inside a UMKM paragraph.
 5. average/sum/is_increasing/is_decreasing/is_stable: list EVERY month individually in periods —
    never summarize a range as just its start and end.
 6. col_label is ONLY for non-time-series tables. If a claim mentions a time period, always use

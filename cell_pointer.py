@@ -27,7 +27,13 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from table_parser_generic import _is_empty, _is_number
+from table_parser_generic import (
+    _bare_period_token,
+    _is_empty,
+    _is_number,
+    _is_year_cell,
+    _parse_period,
+)
 from table_parser_llm import _grid_snapshot
 
 logger = logging.getLogger("fact-checker")
@@ -502,6 +508,67 @@ def pointer_is_plausible(
         "Cell pointer rejected: row %d shares no term with metric %r", row, metric_label
     )
     return False
+
+
+# How far above a data cell to look for the header that dates its column. Deep enough for a
+# caption row, a unit row and a two-level period header, shallow enough that a pointer deep in
+# a long sheet cannot borrow the dates of a different table stacked above it.
+_HEADER_LOOKBACK = 8
+
+
+def pointer_column_dates(grid: List[List], row: int, col: int) -> Optional[Tuple[Optional[int], str]]:
+    """(year, month) the pointed COLUMN is headed by, or None when nothing above it says.
+
+    `year` is None when the column carries a bare month with no year cell above it.
+    """
+    month: Optional[str] = None
+    year: Optional[int] = None
+    for r in range(row - 1, max(-1, row - 1 - _HEADER_LOOKBACK), -1):
+        if not (0 <= r < len(grid)) or col >= len(grid[r]):
+            continue
+        cell = grid[r][col]
+        if cell is None or (isinstance(cell, str) and not cell.strip()):
+            continue
+        if month is None:
+            parsed = _parse_period(cell)
+            if parsed:
+                return parsed          # "Apr'26" dates itself; no year row needed
+            bare = _bare_period_token(cell)
+            if bare:
+                month = bare
+                continue
+        if month is not None and _is_year_cell(cell):
+            year = int(cell)
+            break
+    return (year, month) if month else None
+
+
+def pointer_column_matches(grid: List[List], row: int, col: int, year: int, month: str) -> bool:
+    """True when the pointed column's own header agrees with the period that was asked for.
+
+    `pointer_is_plausible` guards the ROW; nothing guarded the COLUMN, and that is where the
+    pointer actually went wrong. Asked for the yoy denominator of "M0 adjusted April 2025" on a
+    Tabel 9 that carries no 2025 column at all, the model pointed at the `Apr'26*` GROWTH cell.
+    Code dutifully read 14,3 and `_compute_yoy_growth` divided 2.232,2 by it — a confident
+    15.509% against a claim of 14,3%. The same shape produced 111.353% for M2 and 750.750% for
+    kredit UMKM: in every case the "prior-year level" was the report's own growth figure.
+
+    A column whose header says nothing (no month above it within _HEADER_LOOKBACK) is ACCEPTED:
+    the pointer pass exists for sheets whose structure defeats every parser, and demanding a
+    readable header there would switch it off entirely. The guard only fires when the header is
+    legible AND names a different period — which is exactly the misread it was built for.
+    """
+    dated = pointer_column_dates(grid, row, col)
+    if dated is None:
+        return True
+    col_year, col_month = dated
+    if col_month != month or (col_year is not None and col_year != year):
+        logger.info(
+            "Cell pointer rejected: column %d is headed %s %s, not the %s %s that was asked for",
+            col, col_month, col_year if col_year is not None else "(no year)", month, year,
+        )
+        return False
+    return True
 
 
 def metric_could_match(grid: List[List], metric_label: str, table_title: str = "") -> bool:

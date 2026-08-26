@@ -46,6 +46,11 @@ MIN_USEFUL_CHARS = 200
 # where more images per call blows the budget faster) and local/other providers stay 1/call.
 _VISION_PAGES_PER_CALL_ENV = int(os.getenv("VISION_PAGES_PER_CALL", "0"))
 
+# How many vision calls may be in flight at once against Gemini. The default suits the FREE
+# tier's 5 requests/minute; a paid tier has no such cap, and raising this is the difference
+# between one wave of calls and three on a scanned report. See plan_vision_concurrency.
+GEMINI_VISION_CONCURRENCY = int(os.getenv("GEMINI_VISION_CONCURRENCY", "4"))
+
 # Marks the start of each page's text in extract_text_from_pdf's/vision's output.
 # Shared across modules that need to strip markers or attribute a char offset to a page.
 PAGE_MARKER_RE = re.compile(r'\[== Halaman (\d+) ==\]')
@@ -378,8 +383,16 @@ def _strip_tabular_content(text: str) -> str:
     return '\n'.join(result)
 
 
-def _render_pages_to_b64(file_bytes: bytes, dpi: int) -> list[str]:
-    """Render every PDF page to a base64-encoded PNG string (CPU-bound, call in a thread)."""
+def _render_pages_to_b64(
+    file_bytes: bytes, dpi: int, pages: Optional[set] = None
+) -> list[str]:
+    """Render PDF pages to base64-encoded PNG strings (CPU-bound, call in a thread).
+
+    `pages` is a set of 0-based indices to render; every other page comes back as None so the
+    result stays indexable by page number. Since the native table reader started answering most
+    pages on its own, rendering the whole document meant rasterising ten pages at 150 DPI to
+    send one — the skipped ones cost ~0,4s each for nothing. None means render everything.
+    """
     try:
         import pypdfium2 as pdfium
         import PIL.Image  # noqa: F401 -- to_pil() imports it lazily; fail here with a clear message
@@ -392,6 +405,9 @@ def _render_pages_to_b64(file_bytes: bytes, dpi: int) -> list[str]:
     scale = dpi / 72
     result = []
     for i in range(len(doc)):
+        if pages is not None and i not in pages:
+            result.append(None)
+            continue
         page = doc[i]
         bitmap = page.render(scale=scale, rotation=0)
         pil_image = bitmap.to_pil()
@@ -454,13 +470,15 @@ def plan_vision_concurrency(
     """(semaphore, max_retries) for n_calls vision requests against this provider.
 
     Groq: ~7-10k tokens/page against a 30k TPM account-wide budget -> serialize (semaphore=1).
-    Gemini free tier: hard cap of 5 requests/minute for gemini-2.5-flash -> cap at 4 concurrent
-    to leave headroom. Other providers (e.g. local Ollama) are assumed unthrottled.
+    Gemini: the FREE tier caps gemini-2.5-flash at 5 requests/minute, so the default of 4 leaves
+    headroom there. A paid tier has no such cap and a scanned ten-page report then finishes in
+    one wave instead of three — set GEMINI_VISION_CONCURRENCY to raise it. Other providers
+    (e.g. local Ollama) are assumed unthrottled.
     """
     if is_groq:
         return asyncio.Semaphore(1), 6
     if is_gemini:
-        return asyncio.Semaphore(4), 6
+        return asyncio.Semaphore(max(1, GEMINI_VISION_CONCURRENCY)), 6
     return asyncio.Semaphore(n_calls + 1), 1
 
 
