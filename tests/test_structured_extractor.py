@@ -737,3 +737,51 @@ def test_extract_async_without_on_progress_still_works():
     facts = asyncio.run(extract_structured_facts_async(NARRATIVE, ROW_LABELS, llm))
 
     assert len(facts) == 1
+
+
+# ---------------------------------------------------------------------------
+# Number convention: detection, and parsing that mostly does not need it
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # A thousands separator is ALWAYS followed by exactly three digits, so anything else
+        # is a decimal point whatever convention the document is written in. This is what makes
+        # sample_data/M2-Juli-2026.pdf readable at all: it prints Tabel 1 in the English
+        # convention and Tabel 7 in the Indonesian one, four pages apart.
+        ("10.0", 10.0),          # was read as 100 — the whole "Referensi 100,0%" class of bug
+        ("5.6", 5.6),
+        ("852,0", 852.0),
+        ("10,432.0", 10432.0),   # both separators: the later one is the decimal
+        ("1.713,2", 1713.2),
+        ("1.234.567", 1234567.0),
+    ],
+)
+def test_number_convention_is_read_off_the_numeral_not_the_document(raw, expected):
+    from structured_extractor import parse_number
+    assert parse_number(raw, "id") == pytest.approx(expected)
+    assert parse_number(raw, "en") == pytest.approx(expected)
+
+
+def test_a_lone_three_digit_group_is_the_one_case_the_convention_decides():
+    from structured_extractor import parse_number
+    # '1.234' is 1234 in Indonesian and 1,234 in English, and nothing in the numeral says which.
+    assert parse_number("1.234", "id") == pytest.approx(1234.0)
+    assert parse_number("1.234", "en") == pytest.approx(1.234)
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("Uang Beredar Luas (M2) 10,432.0 10,371.1 dan 1,204.1 serta 5,937.5", "en"),
+        ("Uang Beredar Luas (M2) 10.432,0 10.371,1 dan 1.204,1 serta 5.937,5", "id"),
+        # Thin or absent evidence must leave the Indonesian default alone.
+        ("tumbuh sebesar 8,7% (yoy) menjadi 9,2%", "id"),
+        ("satu angka 1,234 saja", "id"),
+        ("", "id"),
+    ],
+)
+def test_detect_number_format(text, expected):
+    from structured_extractor import detect_number_format
+    assert detect_number_format(text) == expected

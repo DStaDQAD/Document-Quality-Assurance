@@ -1774,3 +1774,16 @@ def test_a_percent_claim_still_reaches_a_percent_sheet():
         fact, [_ExcelSource(table=sheet, filename="r.xlsx", sheet="PMI", origin="excel")]
     )
     assert result.verdict == "Entailed"
+
+
+def test_a_unit_word_split_by_a_stray_space_still_carries_its_scale():
+    from paired_verifier import _parse_scale_unit, _unit_factor
+
+    # Tabel 7 of sample_data/M2-Juli-2026.pdf is captioned '(t riliun Rp)'. Read word by word
+    # that has no scale term at all, so the unit degraded to plain rupiah and a triliun claim
+    # was compared against a number 1e12 too large.
+    assert _parse_scale_unit("t riliun Rp") == (1e12, "rp")
+    assert _unit_factor("triliun Rp", "t riliun Rp") == pytest.approx(1.0)
+    assert _unit_factor("triliun Rp", "m iliar Rp") == pytest.approx(1000.0)
+    # A percentage still has no scale to convert to.
+    assert _parse_scale_unit("%, yoy") is None

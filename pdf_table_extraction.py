@@ -58,7 +58,7 @@ from pdf_extraction import (
 )
 from statistics import median
 
-from structured_extractor import _parse_indonesian_number
+from structured_extractor import detect_number_format, parse_number
 from table_parser_generic import (
     _MONTH_ABBREVS,
     _QUARTER_CANON,
@@ -185,7 +185,7 @@ Jika halaman ini tidak memuat tabel data sama sekali, kembalikan daftar tabel ya
 _NUM_CELL_RE = re.compile(r'^-?\d[\d.,]*%?$|^\(-?\d[\d.,]*%?\)$')
 
 
-def _coerce_cell(text) -> object:
+def _coerce_cell(text, number_format: str = "id") -> object:
     """Printed cell text -> int | float | str | None.
 
     Coercion is mandatory, not cosmetic: every consumer of a grid gates on
@@ -203,10 +203,11 @@ def _coerce_cell(text) -> object:
         return None
     if not _NUM_CELL_RE.match(s):
         return s
-    value = _parse_indonesian_number(s)
+    value = parse_number(s, number_format)
     if value is None:
         return s
-    if float(value).is_integer() and ',' not in s:
+    decimal_mark = ',' if number_format == "id" else '.'
+    if float(value).is_integer() and decimal_mark not in s:
         return int(value)
     return value
 
@@ -350,7 +351,7 @@ def _align_header_to_body(header_rows: List[List], body_rows: List[List]) -> Lis
     return [[None] + r for r in header_rows]
 
 
-def _assemble_grid(table: _PdfTableOut) -> List[List]:
+def _assemble_grid(table: _PdfTableOut, number_format: str = "id") -> List[List]:
     """Lay a transcribed table out as a grid the existing Excel parsers already understand.
 
     Row 0 is the caption alone and row 1 the parenthesised unit alone, because
@@ -365,8 +366,8 @@ def _assemble_grid(table: _PdfTableOut) -> List[List]:
     if ambiguous:
         rows = [r for i, r in enumerate(rows) if i not in ambiguous]
 
-    header_rows = [[_coerce_cell(c) for c in r] for r in table.header_rows]
-    body_rows = [[_coerce_cell(c) for c in r] for r in rows]
+    header_rows = [[_coerce_cell(c, number_format) for c in r] for r in table.header_rows]
+    body_rows = [[_coerce_cell(c, number_format) for c in r] for r in rows]
     header_rows = _align_header_to_body(header_rows, body_rows)
     # A year row stacked over a period row: re-derive the years from the periods (see
     # _reconstruct_year_row). Body rows are never touched — carrying a value sideways there
@@ -388,7 +389,7 @@ def _assemble_grid(table: _PdfTableOut) -> List[List]:
     return [r + [None] * (width - len(r)) for r in grid]
 
 
-def _is_usable(table: _PdfTableOut, page_number: int) -> bool:
+def _is_usable(table: _PdfTableOut, page_number: int, number_format: str = "id") -> bool:
     """Reject a transcription that cannot be a faithful table before it becomes a source.
 
     Cheap structural guards, not semantic ones — they catch the shapes a garbled or truncated
@@ -401,7 +402,8 @@ def _is_usable(table: _PdfTableOut, page_number: int) -> bool:
             page_number, caption, len(table.header_rows), len(table.rows),
         )
         return False
-    if not any(_coerce_cell(c) is not None and not isinstance(_coerce_cell(c), str)
+    if not any(_coerce_cell(c, number_format) is not None
+               and not isinstance(_coerce_cell(c, number_format), str)
                for row in table.rows for c in row):
         logger.info(
             "Dropping transcribed table on page %d (%s): no numeric cell in the body",
@@ -536,7 +538,7 @@ def _align_rows(transcribed: List[str], printed: List[str]) -> Dict[int, int]:
     return pairs
 
 
-def _text_layer_rows(page_text: str) -> List[Tuple[str, List[float]]]:
+def _text_layer_rows(page_text: str, number_format: str = "id") -> List[Tuple[str, List[float]]]:
     """The (label, values) pairs a page's text layer states, in printed order.
 
     A row is a line ending in a run of >= _MIN_ROW_CELLS numeric cells; everything before that
@@ -553,14 +555,16 @@ def _text_layer_rows(page_text: str) -> List[Tuple[str, List[float]]]:
         if run < _MIN_ROW_CELLS or run == len(tokens):
             continue
         label = " ".join(tokens[:len(tokens) - run]).strip()
-        values = [_parse_indonesian_number(t) for t in tokens[-run:]]
+        values = [parse_number(t, number_format) for t in tokens[-run:]]
         if not label or any(v is None for v in values):
             continue
         rows.append((label, values))
     return rows
 
 
-def _verify_against_text_layer(tables: List["PdfTable"], pages_text: List[str]) -> None:
+def _verify_against_text_layer(
+    tables: List["PdfTable"], pages_text: List[str], number_format: str = "id"
+) -> None:
     """Replace transcribed numbers with the ones the PDF itself states. Mutates `tables`.
 
     Rows are aligned as SEQUENCES, not looked up by label — see _align_rows.
@@ -587,7 +591,7 @@ def _verify_against_text_layer(tables: List["PdfTable"], pages_text: List[str]) 
 
     for page_number, page_tables in by_page.items():
         page_text = pages_text[page_number - 1] if page_number <= len(pages_text) else ""
-        truth = _text_layer_rows(page_text)
+        truth = _text_layer_rows(page_text, number_format)
         if not truth:
             continue   # scanned page: nothing to check against, transcription stands as-is
 
@@ -654,7 +658,30 @@ _CAPTION_RE = re.compile(r'^(?:Tabel|Lampiran)\s*[IVX\d]+[.\s]', re.IGNORECASE)
 _HEADER_PERIOD_FRAC = 0.6
 
 
-def _line_row(line: str) -> Optional[Tuple[str, List[float]]]:
+def _document_number_format(pdf_bytes: bytes) -> str:
+    """Which number convention this PDF's tables are typeset in — see detect_number_format.
+
+    Read once per document from the WHOLE text layer, never per table. The evidence lives where
+    the values are big enough to need thousands separators (Lampiran 1's '10,432.0'), while the
+    tables that get misread worst are the growth ones, whose values are all under 100 and carry
+    no separator at all. Deciding per table would leave exactly those undecidable.
+
+    A PDF whose text layer cannot be read at all (a scan) yields no evidence and so falls back
+    to Indonesian, which is what the vision path then transcribes against.
+    """
+    try:
+        text = "\n".join(_extract_pages_raw(pdf_bytes))
+    except Exception:
+        logger.exception("Could not read the text layer to detect a number format")
+        return "id"
+    number_format = detect_number_format(text)
+    if number_format != "id":
+        logger.info("Numbers in this document are typeset in the English convention "
+                    "(1,234.5); parsing its tables accordingly.")
+    return number_format
+
+
+def _line_row(line: str, number_format: str = "id") -> Optional[Tuple[str, List[float]]]:
     """(label, values) when a line is a data row, else None — the same rule as _text_layer_rows."""
     tokens = line.split()
     run = 0
@@ -665,7 +692,7 @@ def _line_row(line: str) -> Optional[Tuple[str, List[float]]]:
     if run < _MIN_ROW_CELLS or run == len(tokens):
         return None
     label = " ".join(tokens[:len(tokens) - run]).strip()
-    values = [_parse_indonesian_number(t) for t in tokens[-run:]]
+    values = [parse_number(t, number_format) for t in tokens[-run:]]
     if not label or any(v is None for v in values):
         return None
     return label, values
@@ -735,17 +762,28 @@ def _line_periods(line: str) -> Optional[List[str]]:
 
     Tokens are repaired first (see _repair_split_tokens) — without that, a header the PDF split
     mid-month never produces a run long enough to be recognised at all.
+
+    A run may not mix months with quarters. A table's period header is one or the other, never
+    both, while the narrative column beside it supplies single letters that read as Roman
+    quarters: page 2 of sample_data/M2-Juli-2026.pdf clusters to "Jun Jul* Jun'26 Jul'26* i k t
+    d i b d..." and that trailing 'i' became Triwulan I, making a five-token header for rows of
+    four values — so every row was dropped for not fitting, and the page went to the vision pass.
     """
     tokens = _repair_split_tokens(line.split())
     best: List[str] = []
     current: List[str] = []
+    current_kind: Optional[str] = None
     for token in tokens:
-        if _is_period_token(token):
-            current.append(token)
-            if len(current) > len(best):
-                best = list(current)
-        else:
+        if not _is_period_token(token):
+            current, current_kind = [], None
+            continue
+        kind = "quarter" if _bare_period_token(token) in _QUARTER_CANON else "month"
+        if current and kind != current_kind:
             current = []
+        current.append(token)
+        current_kind = kind
+        if len(current) > len(best):
+            best = list(current)
     return best if len(best) >= 3 else None
 
 
@@ -920,6 +958,7 @@ def _tables_on_page(
     reading: List[Tuple[float, str]],
     visual: List[Tuple[float, str]],
     page_number: int,
+    number_format: str = "id",
 ) -> Tuple[List[PdfTable], int]:
     """(tables, captions_seen) for one page.
 
@@ -985,7 +1024,7 @@ def _tables_on_page(
         body = [
             row for y, text in sorted(reading, key=lambda item: -item[0])
             if floor < y < header_y
-            for row in [_line_row(text.strip())]
+            for row in [_line_row(text.strip(), number_format)]
             if row is not None and len(row[1]) == len(periods)
         ]
         ambiguous = _drop_ambiguous_rows([label for label, _ in body])
@@ -1060,7 +1099,9 @@ def _tables_on_page(
     return tables, len(captions)
 
 
-def extract_tables_natively(pdf_bytes: bytes) -> Tuple[List[PdfTable], set, int]:
+def extract_tables_natively(
+    pdf_bytes: bytes, number_format: Optional[str] = None
+) -> Tuple[List[PdfTable], set, int]:
     """(tables, pages_answered, page_count) read straight out of the PDF, with no LLM involved.
 
     A page counts as answered only when every caption on it became a table. A page with no text
@@ -1071,8 +1112,10 @@ def extract_tables_natively(pdf_bytes: bytes) -> Tuple[List[PdfTable], set, int]
     tables: List[PdfTable] = []
     answered: set = set()
     pages = _page_lines(pdf_bytes)
+    if number_format is None:
+        number_format = _document_number_format(pdf_bytes)
     for page_number, (reading, visual) in pages.items():
-        found, captions_seen = _tables_on_page(reading, visual, page_number)
+        found, captions_seen = _tables_on_page(reading, visual, page_number, number_format)
         # Captions read, not tables built: one caption can legitimately yield two tables when a
         # snippet prints levels and growth side by side (see _split_unit_blocks).
         captions_read = len({t.caption_index for t in found})
@@ -1098,9 +1141,11 @@ def extract_tables_natively(pdf_bytes: bytes) -> Tuple[List[PdfTable], set, int]
 _TABLE_CACHE: "OrderedDict[str, List[PdfTable]]" = OrderedDict()
 
 
-def _cache_key(pdf_bytes: bytes, dpi: int, model_name: str) -> str:
+def _cache_key(pdf_bytes: bytes, dpi: int, model_name: str, number_format: str = "id") -> str:
     h = hashlib.sha256(pdf_bytes)
-    h.update(f"|{dpi}|{_PROMPT_VERSION}|{model_name}|{_TABLE_PAGES_PER_CALL}".encode())
+    h.update(
+        f"|{dpi}|{_PROMPT_VERSION}|{model_name}|{_TABLE_PAGES_PER_CALL}|{number_format}".encode()
+    )
     return h.hexdigest()
 
 
@@ -1147,7 +1192,10 @@ async def extract_tables_from_pdf(
     on_progress(done, total) is called after each vision call settles, for stage reporting.
     """
     model_name = getattr(vision_llm, "model", None) or getattr(vision_llm, "model_name", "")
-    key = _cache_key(pdf_bytes, dpi, str(model_name))
+    # Decided once for the whole document and shared by both halves, so a page read natively
+    # and a page transcribed by the model agree on what a printed '10.0' means.
+    number_format = _document_number_format(pdf_bytes)
+    key = _cache_key(pdf_bytes, dpi, str(model_name), number_format)
     cached = _cache_get(key)
     if cached is not None:
         logger.info("PDF table transcription served from cache (%s…): %d table(s)",
@@ -1163,7 +1211,9 @@ async def extract_tables_from_pdf(
     answered: set = set()
     n_pages = 0
     try:
-        native, answered, n_pages = await asyncio.to_thread(extract_tables_natively, pdf_bytes)
+        native, answered, n_pages = await asyncio.to_thread(
+            extract_tables_natively, pdf_bytes, number_format
+        )
     except Exception:
         # A text layer we cannot walk simply means every page goes to the vision pass.
         logger.exception("Native table reader failed; falling back to vision for every page")
@@ -1254,14 +1304,14 @@ async def extract_tables_from_pdf(
             page_number = page_nums[0]
             tables: List[PdfTable] = []
             for out in result.tables:
-                if not _is_usable(out, page_number):
+                if not _is_usable(out, page_number, number_format):
                     continue
                 caption = (out.caption or "").strip()
                 tables.append(PdfTable(
                     page_number=page_number,
                     caption=caption,
                     unit=(out.unit or "").strip().strip("()") or _unit_from_caption(caption),
-                    grid=_assemble_grid(out),
+                    grid=_assemble_grid(out, number_format),
                     index_on_page=len(tables),
                 ))
             return tables
@@ -1288,7 +1338,7 @@ async def extract_tables_from_pdf(
     # they ARE the text layer, so there is nothing to check them against.
     try:
         pages_text = await asyncio.to_thread(_extract_pages_raw, pdf_bytes)
-        _verify_against_text_layer(transcribed, pages_text)
+        _verify_against_text_layer(transcribed, pages_text, number_format)
     except Exception:
         # A text layer we cannot read leaves the transcription exactly as it was; the tables
         # stay marked unverified, which is the honest outcome, not a reason to fail.

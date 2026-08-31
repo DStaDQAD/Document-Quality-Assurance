@@ -227,12 +227,30 @@ def _parse_scale_unit(unit: str) -> Optional[Tuple[float, Optional[str]]]:
     if "persen" in words:
         return None
     scale, currency, saw_scale = 1.0, None, False
-    for w in words:
-        if w in _SCALE_WORDS:
-            scale *= _SCALE_WORDS[w]
-            saw_scale = True
-        elif w in _CURRENCY_TOKENS and currency is None:
-            currency = _CURRENCY_TOKENS[w]
+    # Walk the words, consuming one when it is a unit term and two or three when only their
+    # concatenation is. BI's PDFs break words on a stray space, so Tabel 7 of
+    # sample_data/M2-Juli-2026.pdf is captioned '(t riliun Rp)'. Read word by word that yields
+    # 't', 'riliun', 'rp' — no scale term at all — and the unit silently degraded to plain
+    # rupiah, making _unit_factor('triliun Rp', 't riliun Rp') return 1e12 instead of 1,0. Same
+    # rejoining rule as table_model._label_words, and just as narrow: a join is only taken when
+    # the result is a term we already know.
+    i = 0
+    while i < len(words):
+        for span in (1, 2, 3):
+            if i + span > len(words):
+                break
+            token = "".join(words[i:i + span])
+            if token in _SCALE_WORDS:
+                scale *= _SCALE_WORDS[token]
+                saw_scale = True
+                break
+            if token in _CURRENCY_TOKENS:
+                if currency is None:
+                    currency = _CURRENCY_TOKENS[token]
+                break
+        else:
+            span = 1
+        i += span
     if not saw_scale and currency is None:
         return None
     return scale, currency

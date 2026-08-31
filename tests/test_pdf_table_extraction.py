@@ -1027,3 +1027,16 @@ def test_is_usable_rejects_a_header_that_cannot_cover_the_body():
         ],
     )
     assert _is_usable(table, page_number=6) is False
+
+
+def test_a_period_header_run_does_not_mix_months_with_quarters():
+    # Page 2 of sample_data/M2-Juli-2026.pdf clusters the narrative column into the header line,
+    # and its stray single letters read as Roman quarters. The 'i' made a five-token header for
+    # rows of four values, so every row was dropped and the page went to the vision pass.
+    from pdf_table_extraction import _line_periods
+
+    assert _line_periods("Jun Jul* Jun'26 Jul'26* i k t d i b d") == [
+        "Jun", "Jul*", "Jun'26", "Jul'26*",
+    ]
+    # A genuinely quarterly header (BI survey sheets) is untouched.
+    assert _line_periods("I II III IV") == ["I", "II", "III", "IV"]

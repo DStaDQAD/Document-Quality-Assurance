@@ -393,8 +393,54 @@ class ExtractedFact:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic Indonesian number parser
+# Deterministic number parser (Indonesian by default, English where a document says so)
 # ---------------------------------------------------------------------------
+
+# Unambiguous evidence of one convention: a group of EXACTLY three digits behind a separator
+# is a thousands group, and the other separator is then the decimal point. A bare decimal
+# ('10,0' / '10.0') is deliberately not evidence — it is the very thing that reads both ways,
+# and counting it would let a report's prose outvote its tables.
+_EN_GROUPING_RE = re.compile(r'\d,\d{3}(?!\d)')
+_ID_GROUPING_RE = re.compile(r'\d\.\d{3}(?!\d)')
+
+# How much evidence before overriding the Indonesian default. Both guards matter: the minimum
+# stops a lone stray match deciding a document (sample_data/laporan_penjualan_bertingkat.pdf
+# has exactly one English-looking token and is otherwise Indonesian), and the ratio stops a
+# handful of oddities outvoting a clear majority. Measured on the sample set, the real
+# documents are not close to either line — M2-Juli-2026.pdf is 657 to 6, the April reports 0
+# to ~660.
+_FORMAT_MIN_EVIDENCE = 3
+_FORMAT_MIN_RATIO = 3
+
+
+def detect_number_format(text: str) -> str:
+    """'id' or 'en' — which convention this text writes its numbers in.
+
+    Indonesian reports are not uniformly Indonesian. sample_data/M2-Juli-2026.pdf is written in
+    Indonesian and its prose uses Indonesian decimals ('tumbuh 8,7% (yoy)'), but every TABLE in
+    it is typeset in the English convention ('10,432.0'). Read as Indonesian, '10.0' loses its
+    decimal point and becomes 100 — which is where a report full of "Referensi 100,0%" against
+    "PDF 10,0%" came from, and why levels like '10,432.0' failed to parse at all.
+
+    Defaults to 'id' whenever the evidence is thin or contradictory, so a document that gives
+    no signal behaves exactly as it did before this function existed.
+    """
+    english = len(_EN_GROUPING_RE.findall(text))
+    indonesian = len(_ID_GROUPING_RE.findall(text))
+    if english >= _FORMAT_MIN_EVIDENCE and english >= _FORMAT_MIN_RATIO * max(indonesian, 1):
+        return "en"
+    return "id"
+
+
+def parse_number(raw: str, number_format: str = "id") -> Optional[float]:
+    """Parse a printed number to float under the given convention ('id' or 'en').
+
+    Everything except which separator means what is shared between the two: accounting-style
+    parentheses, an 'Rp' prefix, a trailing unit word, and the phantom spaces PDF extraction
+    leaves inside a number.
+    """
+    return _parse_number_impl(raw, decimal="," if number_format == "id" else ".")
+
 
 def _parse_indonesian_number(raw: str) -> Optional[float]:
     """Parse an Indonesian-format number string to float.
@@ -407,8 +453,50 @@ def _parse_indonesian_number(raw: str) -> Optional[float]:
       '2.396,5'   → 2396.5
       '(49,8)'    → -49.8   (accounting-style negative, the BI table convention)
 
+    Kept as the name every caller and test already uses; `parse_number` is the way in when the
+    convention is not known up front.
+
     Returns None and logs a warning if the string cannot be parsed.
     """
+    return _parse_number_impl(raw, decimal=",")
+
+
+def _decimal_separator(digits: str, preferred: str) -> Optional[str]:
+    """Which of '.'/',' is the decimal point in an already-cleaned numeral, or None if neither.
+
+    Mostly this is decided by the numeral itself, not by the document's convention, because a
+    THOUSANDS separator is always followed by exactly three digits:
+
+      '10,432.0' both separators  -> the later one is the decimal, whatever the convention
+      '1.713,2'  both separators  -> likewise
+      '10.0'     one, 1 digit after -> no convention reads that as a thousands group
+      '852,0'    one, 1 digit after -> same
+      '1.234.567' one kind, twice   -> grouping
+
+    That matters because a document is not always consistent with itself:
+    sample_data/M2-Juli-2026.pdf prints Tabel 1 as '10,432.0' and Tabel 7 as '1.713,2' — English
+    and Indonesian, four pages apart. Deciding per numeral gets both right; deciding per document
+    gets one of them wrong whichever way it is called.
+
+    `preferred` only breaks the genuinely ambiguous tie: a single separator followed by exactly
+    three digits and nothing else ('1.234' is 1234 in Indonesian and 1.234 in English).
+    """
+    commas, dots = digits.count(","), digits.count(".")
+    if commas and dots:
+        return "," if digits.rindex(",") > digits.rindex(".") else "."
+    separator = "," if commas else ("." if dots else None)
+    if separator is None:
+        return None
+    if digits.count(separator) > 1:
+        return None                      # repeated -> grouping ('1.234.567')
+    tail = digits.rsplit(separator, 1)[1]
+    if len(tail) != 3:
+        return separator                 # a group is always three digits, so this is a decimal
+    return separator if separator == preferred else None
+
+
+def _parse_number_impl(raw: str, decimal: str) -> Optional[float]:
+    """Shared body of parse_number — `decimal` is ',' (Indonesian) or '.' (English)."""
     def unwrap_parens(tok: str, neg: bool) -> Tuple[str, bool]:
         # Parentheses wrapping the WHOLE token come in two kinds, told apart by '%':
         #   '(49,8)'  — accounting-style negative, the BI TABLE convention → -49,8.
@@ -441,22 +529,26 @@ def _parse_indonesian_number(raw: str) -> Optional[float]:
     # Unwrap again: in '(49,8) triliun' the parentheses only surround the number, so they
     # are still intact after the unit suffix was stripped off.
     s, negative = unwrap_parens(s, negative)
-    # Remove any spaces still sitting inside the number. Indonesian numerals never contain a
-    # space, so an interior space is a PDF-extraction artifact (e.g. "2 1,3" -> "21,3", "8 ,9"
-    # -> "8,9"); left in, it made float() raise and the whole fact was dropped.
+    # Remove any spaces still sitting inside the number. A numeral never contains a space, so
+    # an interior space is a PDF-extraction artifact (e.g. "2 1,3" -> "21,3", "8 ,9" -> "8,9");
+    # left in, it made float() raise and the whole fact was dropped.
     s = re.sub(r'\s+', '', s)
 
     try:
-        if ',' in s:
-            # e.g. "10.355,1" → integer part "10.355", decimal part "1"
-            integer_part, decimal_part = s.rsplit(',', 1)
-            integer_part = integer_part.replace('.', '')   # remove thousand separators
+        mark = _decimal_separator(s, decimal)
+        if mark is not None:
+            integer_part, decimal_part = s.rsplit(mark, 1)
+            grouping = "." if mark == "," else ","
+            integer_part = integer_part.replace(grouping, '')   # remove thousand separators
             value = float(f"{integer_part}.{decimal_part}")
         else:
-            # No comma → no decimal; dots are thousand separators only
-            value = float(s.replace('.', ''))
+            # No decimal point → every separator present groups thousands.
+            value = float(s.replace(".", "").replace(",", ""))
     except ValueError:
-        logger.warning("Could not parse value_raw %r as Indonesian number", raw)
+        logger.warning(
+            "Could not parse value_raw %r as %s number", raw,
+            "Indonesian" if decimal == "," else "English",
+        )
         return None
 
     return -value if negative else value
