@@ -204,6 +204,27 @@ class TableData:
     # Row labels that represent the table-wide aggregate; BI uses both spellings.
     _TOTAL_ROW_NAMES: ClassVar[frozenset] = frozenset({"total", "jumlah"})
 
+    # Mutually exclusive statistical universes a BI table can belong to, recognised from its
+    # TITLE. Two tables from different universes routinely carry rows with identical names that
+    # measure different things: 'Tagihan Bersih kepada Pemerintah Pusat' is +838,0 in the M2
+    # tables (the whole monetary system) and -246,7 in the M0 one (Bank Indonesia's own balance
+    # sheet). See paired_verifier._same_series_plausible for how that is used.
+    _TABLE_SUBJECTS: ClassVar[Dict[str, "re.Pattern"]] = {
+        "m0": re.compile(r"uang\s*prim\s*er|m0", re.IGNORECASE),
+        "m2": re.compile(r"uang\s*beredar|m2", re.IGNORECASE),
+    }
+
+    def table_subject(self) -> Optional[str]:
+        """Which statistical universe this table belongs to, or None when the title does not say.
+
+        None means "no evidence either way" and callers must treat it as comparable with
+        anything — most tables (kredit, DPK, suku bunga) name no universe at all.
+        """
+        found = [name for name, pattern in self._TABLE_SUBJECTS.items()
+                 if pattern.search(self.title or "")]
+        # A title naming both ('Uang Primer' inside an M2 appendix) tells us nothing.
+        return found[0] if len(found) == 1 else None
+
     def _query_matches_table_subject(self, query: str) -> bool:
         """Return True when the query names this table's overall subject (per the title).
 

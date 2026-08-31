@@ -1494,12 +1494,25 @@ body.auth-locked .app {
     above_threshold: "Di Atas Ambang", below_threshold: "Di Bawah Ambang",
   };
 
-  function fmtValue(val, unit) {
-    if (val === null || val === undefined) return '<span class="na">—</span>';
-    const num = typeof val === "number"
+  function fmtNumber(val) {
+    return typeof val === "number"
       ? val.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 4 })
       : val;
+  }
+
+  /* Returns HTML — interpolate it raw, never through escapeHtml(). For anywhere the value has
+     to be plain text (a source chip, a title attribute), use fmtValueText instead. */
+  function fmtValue(val, unit) {
+    if (val === null || val === undefined) return '<span class="na">—</span>';
+    const num = fmtNumber(val);
     return unit === "persen_yoy" ? `${num}%` : `${num} <span class="na">${escapeHtml(unit || "")}</span>`;
+  }
+
+  function fmtValueText(val, unit) {
+    if (val === null || val === undefined) return "—";
+    const num = fmtNumber(val);
+    if (unit === "persen_yoy") return `${num}%`;
+    return unit ? `${num} ${unit}` : `${num}`;
   }
 
   function fmtDelta(delta, verdict) {
@@ -1702,8 +1715,11 @@ body.auth-locked .app {
           const sourceValues = item.source_values || [];
           const sourceChips = sourceValues.length > 1
             ? `<div class="fact-sources">${sourceValues.map((sv, n) => {
+                // Plain text, not fmtValue: this goes through escapeHtml below and into a
+                // title attribute, so HTML from fmtValue would be escaped a second time and
+                // the reader would see the literal <span class="na"> around the unit.
                 const v = sv.computed_value !== null && sv.computed_value !== undefined
-                  ? fmtValue(sv.computed_value, sv.computed_unit === "persen_yoy" ? "persen_yoy" : sv.computed_unit)
+                  ? fmtValueText(sv.computed_value, sv.computed_unit === "persen_yoy" ? "persen_yoy" : sv.computed_unit)
                   : VERDICT_LABEL[sv.verdict] || sv.verdict;
                 const cls = (conflict && n > 0 ? " is-conflicting" : "")
                   + (isUnverified(sv.source) ? " is-unverified" : "");

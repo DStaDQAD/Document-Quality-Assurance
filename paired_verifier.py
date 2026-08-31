@@ -906,6 +906,19 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             excel_unit = src.table.unit
             if src.table.axis_type == "categorical":
                 excel_unit = next((u for u in col_units if u), None) or src.table.unit
+            # A '%, yoy' table cannot answer "berapa triliun Rp". Without this the fallback
+            # below normalises the CLAIM's scale only, so Tabel 1's growth half answered a
+            # level claim about uang kartal with 15,7 / 1e12 = 0,0 triliun Rp and reported it
+            # as a Refuted second opinion. Gated on the claim carrying a real numeric scale,
+            # so a dimensionless 'persen'/index claim still reaches the fallback (the PMI case
+            # that branch documents).
+            if _is_growth_series(excel_unit) and _parse_scale_unit(fact.unit) is not None:
+                if best_reason is None:
+                    best_reason = (
+                        f"Sumber [{src.label}] bersatuan '{excel_unit}' (pertumbuhan), "
+                        f"tidak bisa menjawab klaim nilai dalam '{fact.unit}'."
+                    )
+                continue
             factor = _unit_factor(fact.unit, excel_unit)
             if factor is None and (not excel_unit or _parse_scale_unit(excel_unit) is None):
                 # The Excel column carries no numeric SCALE to convert TO: either no unit
@@ -1001,6 +1014,62 @@ def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
     return _unit_factor(left, right) is not None
 
 
+# Beyond this relative gap, two same-named rows are different series rather than two readings
+# of one. Measured over every row name shared between this report's M0 and M2 tables: the pairs
+# that ARE the same series compiled differently sit at 0,8% (uang kartal, 1.186,3 vs 1.195,6)
+# and 1,5% (aktiva luar negeri bersih), while the pairs that merely share a name start at 63,7%
+# and run past 100% (opposite signs). Anywhere in that gap works; 25% keeps a wide margin both
+# ways. Re-measure if a BI report of another kind starts carrying an M0 table.
+_DIFFERENT_SERIES_GAP = 0.25
+
+
+def _same_series_plausible(a: float, b: float) -> bool:
+    """Whether two sources' raw values could be readings of the SAME series.
+
+    Opposite signs, or a gap wider than _DIFFERENT_SERIES_GAP, means they cannot be: a series
+    that is +838,0 in one table and -246,7 in another is two different quantities sharing a row
+    name, not a discrepancy worth reporting to the reader.
+    """
+    if a == 0 and b == 0:
+        return True
+    if a * b < 0:
+        return False
+    scale = max(abs(a), abs(b))
+    return scale == 0 or abs(a - b) / scale <= _DIFFERENT_SERIES_GAP
+
+
+def _may_contradict(head: "_Candidate", other: "_Candidate") -> bool:
+    """Whether `other` is entitled to contradict `head`, given what each table is ABOUT.
+
+    Two tables from different statistical universes (see TableData.table_subject) routinely
+    print rows with identical names for different quantities — BI's own balance sheet versus
+    the whole monetary system's. Reporting those as "tabel internal tidak konsisten" was noise
+    on every claim about a determinant of M2.
+
+    They are still allowed to disagree when their numbers are close enough to be the same
+    series measured on a different basis: Lampiran 1 says uang kartal is 1.186,3 and Lampiran 6
+    says 1.195,6, and that 9,3 T gap is a real thing for a reader to know about. Only the
+    implausible pairings are silenced, and only across universes — two credit tables that
+    disagree are reported however far apart they are.
+    """
+    head_subject = head.src.table.table_subject()
+    other_subject = other.src.table.table_subject()
+    if head_subject is None or other_subject is None or head_subject == other_subject:
+        return True
+    raw_head = head.resolved[0][1] if head.resolved else None
+    raw_other = other.resolved[0][1] if other.resolved else None
+    if raw_head is None or raw_other is None:
+        return True
+    if _same_series_plausible(raw_head, raw_other):
+        return True
+    logger.info(
+        "Not reporting a conflict between [%s] (%s) and [%s] (%s): %s vs %s cannot be the "
+        "same series.",
+        head.src.label, head_subject, other.src.label, other_subject, raw_head, raw_other,
+    )
+    return False
+
+
 def _match_quality(cand: "_Candidate") -> float:
     """One number for 'how well does this source answer the claim', for the equal-quality tests.
 
@@ -1040,10 +1109,16 @@ def _attach_source_comparison(
     number that was never in question. This is the same score test the conflict loop needs, so
     hiding these costs no signal: a source too loose to contradict the winner had nothing to add.
     """
-    head_score = _match_quality(evaluated[head_index][0])
+    head_cand_for_filter = evaluated[head_index][0]
+    head_score = _match_quality(head_cand_for_filter)
     per_source = [evaluated[head_index]] + [
         pair for index, pair in enumerate(evaluated)
         if index != head_index and _match_quality(pair[0]) >= head_score - 1e-9
+        # A source measuring a different quantity is not a second reading of this claim, so it
+        # is not shown either — printing Lampiran 6's 56,1% (Bank Indonesia's net claims on
+        # government) beside Lampiran 1's 38,6% (the monetary system's) invites the reader to
+        # doubt a number that was never in question. Same reasoning as the score filter above.
+        and _may_contradict(head_cand_for_filter, pair[0])
     ]
     result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
@@ -1067,6 +1142,9 @@ def _attach_source_comparison(
         if not (head_cand.unit_comparable and cand.unit_comparable):
             continue
         if not _units_comparable(head_cand.src.table.unit, cand.src.table.unit):
+            continue
+        # Same row name, different statistical universe — see _may_contradict.
+        if not _may_contradict(head_cand, cand):
             continue
         if head.computed_value is not None and other.computed_value is not None:
             differs = abs(head.computed_value - other.computed_value) > MATCH_TOLERANCE

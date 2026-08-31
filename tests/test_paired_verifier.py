@@ -1670,3 +1670,107 @@ def test_yoy_refuses_a_prior_year_value_equal_to_the_claimed_growth():
     # 2.232,2 / 14,3 would have been reported as 15.509% yoy against a claim of 14,3%.
     assert result.verdict == "Inconclusive"
     assert "yoy" in result.reasoning.lower()
+
+
+# ---------------------------------------------------------------------------
+# Same row name, different statistical universe (M0 vs M2)
+# ---------------------------------------------------------------------------
+
+def _m0_m2_sources(row, m2_value, m0_value, prior_m2=None, prior_m0=None):
+    """One M2 table and one M0 table carrying the SAME row name, as BI's reports do."""
+    from paired_verifier import _ExcelSource
+    from table_model import TableData
+
+    out = []
+    for title, value, prior in (
+        ("Lampiran 1. Tabel Uang Beredar dan Faktor-Faktor yang Memengaruhinya", m2_value, prior_m2),
+        ("Lampiran 6. Tabel Uang Primer dan Faktor-Faktor yang Memengaruhinya", m0_value, prior_m0),
+    ):
+        table = TableData(title=title, unit="Triliun Rp", row_labels=[row])
+        table._data[(row, 2026, "Apr")] = value
+        if prior is not None:
+            table._data[(row, 2025, "Apr")] = prior
+        out.append(_ExcelSource(table=table, filename="report.pdf", sheet=title[:20], origin="pdf"))
+    return out
+
+
+def test_m0_table_does_not_contradict_an_m2_table_about_a_different_quantity():
+    from structured_extractor import ExtractedFact, PeriodPoint
+
+    # 'Tagihan Bersih kepada Pemerintah Pusat' is +838,0 for the monetary system and -246,7 on
+    # Bank Indonesia's own balance sheet. Opposite signs: one row name, two quantities.
+    sources = _m0_m2_sources("Tagihan Bersih kepada Pemerintah Pusat", 838.0, -246.7,
+                             prior_m2=604.4, prior_m0=-561.5)
+    fact = ExtractedFact(
+        operation="yoy_growth",
+        periods=[PeriodPoint(metric_label="Tagihan Bersih kepada Pemerintah Pusat",
+                             year=2026, month="Apr")],
+        claimed_value=38.6, unit="persen_yoy", context_quote="x",
+    )
+    result = _evaluate_fact(fact, sources)
+
+    assert result.verdict == "Entailed"
+    assert result.source_conflict is None, "M0 and M2 measure different things here"
+    # The unrelated series is not shown beside the answer either.
+    assert all("Uang Primer" not in sv.source for sv in result.source_values or [])
+
+
+def test_m0_table_still_contradicts_an_m2_table_when_the_numbers_are_close():
+    from structured_extractor import ExtractedFact, PeriodPoint
+
+    # Uang kartal is 1.186,3 in Lampiran 1 and 1.195,6 in Lampiran 6 — the same series compiled
+    # on a different basis. A 9,3 T gap is a real thing for a reviewer to know about, so the
+    # cross-universe rule must not swallow it.
+    sources = _m0_m2_sources("Uang Kartal di Luar Bank Umum dan BPR", 1186.3, 1195.6)
+    fact = ExtractedFact(
+        operation="value",
+        periods=[PeriodPoint(metric_label="Uang Kartal di Luar Bank Umum dan BPR",
+                             year=2026, month="Apr")],
+        claimed_value=1186.3, unit="triliun Rp", context_quote="x",
+    )
+    result = _evaluate_fact(fact, sources)
+
+    assert result.verdict == "Entailed"
+    assert result.source_conflict == "internal"
+
+
+def test_a_growth_table_cannot_answer_a_level_claim():
+    from paired_verifier import _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    # The '%, yoy' half of a snippet table holds 15,7 for this row. Converting that into a
+    # 'triliun Rp' claim produced 15,7 / 1e12 = 0,0 and reported it as a second opinion.
+    growth = TableData(title="Tabel 1. Uang Beredar dan Komponennya (%, yoy)", unit="%, yoy",
+                       row_labels=["Uang Kartal"])
+    growth._data[("Uang Kartal", 2026, "Apr")] = 15.7
+    fact = ExtractedFact(
+        operation="value",
+        periods=[PeriodPoint(metric_label="Uang Kartal", year=2026, month="Apr")],
+        claimed_value=1186.3, unit="triliun Rp", context_quote="x",
+    )
+    result = _evaluate_fact(
+        fact, [_ExcelSource(table=growth, filename="r.pdf", sheet="T1 yoy", origin="pdf")]
+    )
+
+    assert result.verdict == "Inconclusive"
+    assert result.computed_value != 0.0
+
+
+def test_a_percent_claim_still_reaches_a_percent_sheet():
+    from paired_verifier import _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    # Regression guard for the PMI case the unit fallback exists for: a 'persen' claim carries
+    # no numeric scale, so the growth-table rule above must not fire on it.
+    sheet = TableData(title="PMI-BI", unit="%, Indeks", row_labels=["PMI"])
+    sheet._data[("PMI", 2026, "Apr")] = 51.43
+    fact = ExtractedFact(
+        operation="value", periods=[PeriodPoint(metric_label="PMI", year=2026, month="Apr")],
+        claimed_value=51.43, unit="persen", context_quote="x",
+    )
+    result = _evaluate_fact(
+        fact, [_ExcelSource(table=sheet, filename="r.xlsx", sheet="PMI", origin="excel")]
+    )
+    assert result.verdict == "Entailed"
