@@ -1787,3 +1787,70 @@ def test_a_unit_word_split_by_a_stray_space_still_carries_its_scale():
     assert _unit_factor("triliun Rp", "m iliar Rp") == pytest.approx(1000.0)
     # A percentage still has no scale to convert to.
     assert _parse_scale_unit("%, yoy") is None
+
+
+def test_a_trend_about_growth_is_checked_against_the_growth_table():
+    from paired_verifier import _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    # "pertumbuhan giro meningkat sebesar 10,5% (yoy) dari 10,2% (yoy)" says the RATE rose. Giro's
+    # level fell over those same two months (3.087,8 -> 3.055,6), so checking the claim against
+    # the levels table answers a different question and calls a true sentence Tidak Sesuai.
+    levels = TableData(title="Tabel 4. Penghimpunan Dana Pihak Ketiga", unit="triliun Rp",
+                       row_labels=["Giro"])
+    levels._data.update({("Giro", 2026, "Jun"): 3087.8, ("Giro", 2026, "Jul"): 3055.6})
+    growth = TableData(title="Tabel 4. Penghimpunan Dana Pihak Ketiga (%, yoy)", unit="%, yoy",
+                       row_labels=["Giro"])
+    growth._data.update({("Giro", 2026, "Jun"): 10.2, ("Giro", 2026, "Jul"): 10.5})
+    sources = [
+        _ExcelSource(table=levels, filename="r.pdf", sheet="T4", origin="pdf"),
+        _ExcelSource(table=growth, filename="r.pdf", sheet="T4 yoy", origin="pdf"),
+    ]
+
+    def trend(metric):
+        fact = ExtractedFact(
+            operation="is_increasing",
+            periods=[PeriodPoint(metric_label=metric, year=2026, month=m) for m in ("Jun", "Jul")],
+            claimed_value=None, unit=None, context_quote="x",
+        )
+        return _evaluate_fact(fact, sources)
+
+    assert trend("pertumbuhan giro").verdict == "Entailed"
+    # A claim about the LEVEL still reads the levels, in source order as before.
+    assert trend("giro").periods[0].excel_value == pytest.approx(3087.8)
+
+
+def test_a_trend_sentence_comparing_two_growth_rates_reads_the_growth_table():
+    from paired_verifier import _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    # The metric here is a bare 'tabungan' — it is the SENTENCE that says the comparison is
+    # between growth rates: "meningkat dibandingkan pertumbuhan pada bulan sebelumnya ...
+    # sebesar 8,9% (yoy)". Tabungan's level fell over those months, so the levels table calls a
+    # true sentence Tidak Sesuai.
+    levels = TableData(title="Tabel 3. DPK", unit="triliun Rp", row_labels=["Tabungan"])
+    levels._data.update({("Tabungan", 2026, "Mar"): 3166.2, ("Tabungan", 2026, "Apr"): 3160.4})
+    growth = TableData(title="Tabel 3. DPK (%, yoy)", unit="%, yoy", row_labels=["Tabungan"])
+    growth._data.update({("Tabungan", 2026, "Mar"): 8.4, ("Tabungan", 2026, "Apr"): 8.9})
+    sources = [
+        _ExcelSource(table=levels, filename="r.pdf", sheet="T3", origin="pdf"),
+        _ExcelSource(table=growth, filename="r.pdf", sheet="T3 yoy", origin="pdf"),
+    ]
+
+    def trend(quote):
+        fact = ExtractedFact(
+            operation="is_increasing",
+            periods=[PeriodPoint(metric_label="tabungan", year=2026, month=m)
+                     for m in ("Mar", "Apr")],
+            claimed_value=None, unit=None, context_quote=quote,
+        )
+        return _evaluate_fact(fact, sources)
+
+    assert trend("tabungan meningkat dibandingkan pertumbuhan pada bulan "
+                 "sebelumnya sebesar 8,9% (yoy)").verdict == "Entailed"
+    # 'tumbuh' alone states a level and its growth side by side; it is not a comparison of
+    # rates, so the levels table still answers.
+    assert trend("Posisi tabungan tercatat Rp3.160,4 triliun, atau tumbuh 8,9% "
+                 "(yoy)").periods[0].excel_value == pytest.approx(3166.2)

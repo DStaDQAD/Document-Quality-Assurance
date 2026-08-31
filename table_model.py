@@ -210,8 +210,8 @@ class TableData:
     # tables (the whole monetary system) and -246,7 in the M0 one (Bank Indonesia's own balance
     # sheet). See paired_verifier._same_series_plausible for how that is used.
     _TABLE_SUBJECTS: ClassVar[Dict[str, "re.Pattern"]] = {
-        "m0": re.compile(r"uang\s*prim\s*er|m0", re.IGNORECASE),
-        "m2": re.compile(r"uang\s*beredar|m2", re.IGNORECASE),
+        "m0": re.compile(r"uang\s*prim\s*er|\bm0\b", re.IGNORECASE),
+        "m2": re.compile(r"uang\s*beredar|\bm2\b", re.IGNORECASE),
     }
 
     def table_subject(self) -> Optional[str]:

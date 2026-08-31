@@ -988,6 +988,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # Coverage first, then label quality. Stable sort, so ties keep source order as before.
     candidates.sort(key=lambda c: (-c.coverage, -c.score))
+    candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Every candidate is computed once — plain arithmetic over values already looked up. The
     # results are reused for the source comparison, so this costs no more than before.
     evaluated = [(c, _compute_operation(fact, c.resolved, c.factor, c.src)) for c in candidates]
@@ -1086,6 +1087,56 @@ def _may_contradict(head: "_Candidate", other: "_Candidate") -> bool:
         head.src.label, head_subject, other.src.label, other_subject, raw_head, raw_other,
     )
     return False
+
+
+# A metric named as the GROWTH of something rather than the thing itself.
+_GROWTH_METRIC_RE = re.compile(r"\bpertumbuhan\b", re.IGNORECASE)
+# A yoy figure quoted in the same sentence, which is what makes 'pertumbuhan' there a
+# comparison of RATES rather than a passing mention.
+_YOY_IN_QUOTE_RE = re.compile(r"\byoy\b", re.IGNORECASE)
+
+
+def _is_about_a_growth_rate(fact: ExtractedFact) -> bool:
+    """Whether a trend claim is about how fast something grew rather than how big it is.
+
+    Two signals, either of which settles it. The metric can say so outright ("pertumbuhan
+    giro"), or the sentence can compare against a previous period's GROWTH while quoting a yoy
+    figure — "tabungan dan simpanan berjangka meningkat dibandingkan pertumbuhan pada bulan
+    sebelumnya masing-masing sebesar 8,9% (yoy) dan 4,6% (yoy)". Both readings of that sentence
+    are true statements about different quantities, and only one of them is the claim.
+
+    Requiring the word 'pertumbuhan' and not merely 'tumbuh' keeps this off the report's
+    commonest shape, "Posisi M2 ... tercatat Rp10.253,7 triliun, atau tumbuh 9,2% (yoy)", which
+    states a level and its growth side by side rather than comparing two growth rates.
+    """
+    if any(_GROWTH_METRIC_RE.search(p.metric_label or "") for p in fact.periods):
+        return True
+    quote = fact.context_quote or ""
+    return bool(_GROWTH_METRIC_RE.search(quote) and _YOY_IN_QUOTE_RE.search(quote))
+
+
+def _prefer_growth_source_for_a_growth_trend(
+    fact: ExtractedFact, candidates: List["_Candidate"]
+) -> List["_Candidate"]:
+    """Put '%, yoy' sources first when a trend claim is about a growth RATE, not a level.
+
+    "pertumbuhan giro meningkat sebesar 10,5% (yoy) dari 10,2% (yoy)" says the growth rate rose.
+    Checked against the levels table it asks a different question — giro fell from Rp3.087,8 to
+    Rp3.055,6 triliun over those two months, both facts true at once — and the claim came back
+    Tidak Sesuai. The report prints both quantities under one caption and they are now separate
+    sources (see pdf_table_extraction._split_unit_blocks), so the right one can simply be chosen.
+
+    Only reorders, never discards: if no growth-series source resolved the claim, the levels one
+    still answers it exactly as before.
+    """
+    if fact.operation not in _TREND_OPS:
+        return candidates
+    if not _is_about_a_growth_rate(fact):
+        return candidates
+    growth = [c for c in candidates if _is_growth_series(c.src.table.unit)]
+    if not growth:
+        return candidates
+    return growth + [c for c in candidates if not _is_growth_series(c.src.table.unit)]
 
 
 def _match_quality(cand: "_Candidate") -> float:

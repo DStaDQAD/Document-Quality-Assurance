@@ -276,3 +276,19 @@ def test_query_coverage_zeroes_a_source_that_never_names_the_subject():
     # 'Korporasi' matches equally well in both; only the title says which one is about DPK.
     assert credit.query_coverage("DPK korporasi", "Korporasi") == 0.0
     assert dpk.query_coverage("DPK korporasi", "Korporasi") == 1.0
+
+
+def test_table_subject_recognises_both_the_spelt_out_name_and_the_abbreviation():
+    from table_model import TableData
+
+    def subject(title):
+        return TableData(title=title, unit="", row_labels=[]).table_subject()
+
+    assert subject("Lampiran 6. Tabel Uang Primer dan Faktor-Faktor yang Memengaruhinya") == "m0"
+    assert subject("Tabel 9. Komponen M0 adjusted") == "m0"
+    assert subject("Tabel 1. Uang Beredar dan Komponennya") == "m2"
+    assert subject("Lampiran 2. Pertumbuhan Uang Beredar (M2)") == "m2"
+    # Most tables name no universe at all and must stay comparable with anything.
+    assert subject("Tabel 6. Perkembangan Kredit Berdasarkan Jenis") is None
+    # A word that merely contains the abbreviation is not the abbreviation.
+    assert subject("Laporan M0X eksperimental") is None

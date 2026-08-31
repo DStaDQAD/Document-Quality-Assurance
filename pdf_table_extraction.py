@@ -658,6 +658,19 @@ _CAPTION_RE = re.compile(r'^(?:Tabel|Lampiran)\s*[IVX\d]+[.\s]', re.IGNORECASE)
 _HEADER_PERIOD_FRAC = 0.6
 
 
+# The identity a caption carries regardless of how its unit annotation was transcribed:
+# 'Tabel 8. Kredit UMKM (triliun Rp)' and 'Tabel 8. Kredit UMKM' are the same table.
+_CAPTION_ID_RE = re.compile(r'^\s*(tabel|lampiran)\s*([ivx\d]+)', re.IGNORECASE)
+
+
+def _caption_id(caption: str) -> str:
+    """'Tabel 8' / 'Lampiran 4' out of a caption, or the whole caption when it names neither."""
+    match = _CAPTION_ID_RE.match(caption or "")
+    if not match:
+        return re.sub(r'[^a-z0-9]', '', (caption or "").lower())
+    return f"{match.group(1).lower()}{match.group(2).lower()}"
+
+
 def _document_number_format(pdf_bytes: bytes) -> str:
     """Which number convention this PDF's tables are typeset in — see detect_number_format.
 
@@ -942,16 +955,34 @@ def _split_unit_blocks(periods: List[str]) -> Optional[Tuple[List[int], List[int
     year at all, so they are dropped too. Either way the report's own printed growth figures —
     the exact numbers most of its sentences quote — were unreadable.
 
-    The two blocks are told apart by how their months are written, which is BI's own convention:
-    a level column is bare ('Apr*'), a growth column names its year ("Apr'26*"). Both kinds must
-    be present, and each block must be wide enough to parse on its own.
+    Two layouts, because BI does not write these headers the same way every month:
+
+      'Mar | Apr* | Mar'26 | Apr'26*'   the growth half names its year, the level half does not
+      'Jun | Jul* | Jun    | Jul*'       both halves bare, the sequence simply repeats
+
+    The first is told apart by the year suffix. The second by the repeat: a period header never
+    lists the same month twice for one quantity, so a sequence that replays itself is two blocks
+    of the same months in different units. Without that second rule the July report's snippet
+    tables parsed as CATEGORICAL — 'Jun'/'Jul*' as plain column names, no dates at all — so
+    every claim about kredit properti, konstruksi or UMKM fell through to the coarser
+    whole-economy 'Kredit' row of Tabel 2 and was reported Tidak Sesuai against 13,0%.
+
+    Both blocks must be wide enough to parse on their own. The caller additionally requires the
+    header to annotate one half as '%, yoy' before acting on any of this.
     """
     level = [i for i, token in enumerate(periods) if _bare_period_token(token)]
-    growth = [i for i, token in enumerate(periods)
-              if not _bare_period_token(token) and _parse_period(token)]
-    if len(level) < _MIN_BLOCK_COLS or len(growth) < _MIN_BLOCK_COLS:
-        return None
-    return level, growth
+    dated = [i for i, token in enumerate(periods)
+             if not _bare_period_token(token) and _parse_period(token)]
+    if len(level) >= _MIN_BLOCK_COLS and len(dated) >= _MIN_BLOCK_COLS:
+        return level, dated
+
+    # All bare: split where the sequence starts over.
+    if len(level) == len(periods) and len(periods) >= 2 * _MIN_BLOCK_COLS and not len(periods) % 2:
+        half = len(periods) // 2
+        canonical = [_bare_period_token(t) for t in periods]
+        if canonical[:half] == canonical[half:]:
+            return list(range(half)), list(range(half, len(periods)))
+    return None
 
 
 def _tables_on_page(
@@ -1080,14 +1111,22 @@ def _tables_on_page(
             ) if distinct else None
             emit(caption, unit, level_cols, level_years, level_periods)
 
-            # The growth block's months carry their own year, so it needs no reconstruction —
-            # but the parser's two-row header path keys on BARE tokens under an int year row,
-            # so each "Apr'26*" is rewritten into that shape.
+            # The growth block is dated one of two ways. Where its months name their own year
+            # ("Apr'26*") that is authoritative, and only needs rewriting into the bare-token
+            # + year-row shape the parser's two-row header path keys on. Where the block simply
+            # repeats the level block's bare months, it covers the same periods, so it reuses
+            # the same reconstruction rather than inventing dates for it.
             parsed = [_parse_period(periods[c]) for c in growth_cols]
-            emit(
-                f"{caption} (%, yoy)", "%, yoy", growth_cols,
-                [year for year, _ in parsed], [month for _, month in parsed],
-            )
+            if all(parsed):
+                growth_years = [year for year, _ in parsed]
+                growth_periods = [month for _, month in parsed]
+            else:
+                growth_periods = [periods[c] for c in growth_cols]
+                growth_years = _reconstruct_year_row(
+                    distinct + [None] * max(0, len(growth_periods) - len(distinct)),
+                    list(growth_periods),
+                ) if distinct else None
+            emit(f"{caption} (%, yoy)", "%, yoy", growth_cols, growth_years, growth_periods)
             continue
 
         distinct = sorted(set(years))
@@ -1108,6 +1147,14 @@ def extract_tables_natively(
     layer, no caption, or a caption we could not turn into a table is left out of
     `pages_answered`, and the caller sends that page through the vision pass — a page we only
     half understand must not silently lose a table.
+
+    The tables it DID read on such a page are still returned. They are read out of the file by
+    code, so they are the better copy wherever both routes produce one, and dropping them cost
+    real answers: page 5 of sample_data/M2-Juli-2026.pdf yields Tabel 8 exactly (kredit UMKM
+    mikro 1,5 and 2,1, modal kerja -4,3 and -3,8) while Tabel 9 beside it yields nothing, and
+    discarding the pair left every UMKM claim to be answered by the whole-economy 'Kredit' row
+    of Tabel 2 — reported Tidak Sesuai against 13,0%. See extract_tables_from_pdf for how the
+    vision pass's copy of the same table is then dropped in favour of this one.
     """
     tables: List[PdfTable] = []
     answered: set = set()
@@ -1119,13 +1166,14 @@ def extract_tables_natively(
         # Captions read, not tables built: one caption can legitimately yield two tables when a
         # snippet prints levels and growth side by side (see _split_unit_blocks).
         captions_read = len({t.caption_index for t in found})
+        tables.extend(found)
         if found and captions_read == captions_seen:
-            tables.extend(found)
             answered.add(page_number)
         elif captions_seen:
             logger.info(
-                "Page %d: read %d of %d captioned table(s) natively — leaving the page to the "
-                "vision pass.", page_number, captions_read, captions_seen,
+                "Page %d: read %d of %d captioned table(s) natively — keeping those and leaving "
+                "the page to the vision pass for the rest.",
+                page_number, captions_read, captions_seen,
             )
     logger.info(
         "Native reader recovered %d table(s) from %d of %d page(s) with no LLM call.",
@@ -1344,10 +1392,21 @@ async def extract_tables_from_pdf(
         # stay marked unverified, which is the honest outcome, not a reason to fail.
         logger.exception("Text-layer verification skipped")
 
-    tables = in_page_order(native + transcribed)
+    # A partly-read page contributes from BOTH routes, so the same table can arrive twice.
+    # Keep the native copy: its values were read out of the file by code rather than off an
+    # image by the model, which is the whole reason the native pass runs first.
+    already_read = {(t.page_number, _caption_id(t.caption)) for t in native}
+    kept = [t for t in transcribed
+            if (t.page_number, _caption_id(t.caption)) not in already_read]
+    if len(kept) != len(transcribed):
+        logger.info(
+            "Dropping %d transcribed table(s) the text layer already answered.",
+            len(transcribed) - len(kept),
+        )
+    tables = in_page_order(native + kept)
     logger.info(
         "%d table(s) in total — %d read natively, %d transcribed: %s",
-        len(tables), len(native), len(transcribed),
+        len(tables), len(native), len(kept),
         ", ".join(t.label for t in tables) or "none",
     )
     _cache_put(key, tables)
