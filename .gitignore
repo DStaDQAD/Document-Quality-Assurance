@@ -11,6 +11,7 @@ statistik_makro.db
 # (contain actual report data, not synthetic samples like the .xlsx above)
 sample_data/M2-April-2026.pdf
 sample_data/M2-Maret-2026.pdf
+sample_data/M2-Juli-2026.pdf
 sample_data/superdjun.pdf
 sample_data/TABEL1_1.xls
 sample_data/TABEL1_19.xls
