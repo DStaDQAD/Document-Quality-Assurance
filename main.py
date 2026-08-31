@@ -178,10 +178,31 @@ async def auth_middleware(request: Request, call_next):
 
 STATIC_DIR = Path(__file__).parent / "static"
 
+# Which build is actually serving. Render injects RENDER_GIT_COMMIT; .git/ is excluded from the
+# image (see .dockerignore) so there is nothing else to read a revision from. Reported by
+# /health, because "the dashboard says it deployed but the app behaves like the old version" is
+# otherwise indistinguishable from a real bug — a deploy whose build failed keeps the previous
+# instance live while the newest commit is still what the dashboard shows.
+BUILD_ID = os.getenv("RENDER_GIT_COMMIT") or os.getenv("APP_BUILD") or "unknown"
+
+
+def _ui_checksum() -> str:
+    """Short digest of the shell the server would hand out, for comparing against a browser."""
+    try:
+        return hashlib.sha256((STATIC_DIR / "index.html").read_bytes()).hexdigest()[:12]
+    except OSError:
+        return "unknown"
+
 
 @app.get("/")
 async def ui_root() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+    # no-cache means "revalidate before reuse", not "never store": the ETag FileResponse already
+    # sends turns the check into a 304 on an unchanged file, so this costs a round trip and
+    # nothing else. Without it the browser is free to keep a stale shell after a deploy, and the
+    # user sees old JavaScript against a new API with no way to tell why.
+    return FileResponse(
+        STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+    )
 
 
 @app.get("/favicon.svg", include_in_schema=False)
@@ -762,7 +783,12 @@ async def get_table_data_endpoint(table_name: str, limit: int = 200, offset: int
 # the request still reaches the server.
 @app.api_route("/health", methods=["GET", "HEAD"])
 async def health() -> dict:
-    return {"status": "ok", "database_exists": DB_PATH.exists()}
+    return {
+        "status": "ok",
+        "database_exists": DB_PATH.exists(),
+        "build": BUILD_ID[:12],
+        "ui_checksum": _ui_checksum(),
+    }
 
 
 if __name__ == "__main__":

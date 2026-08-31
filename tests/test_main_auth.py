@@ -131,3 +131,29 @@ def test_session_cookie_is_lax_over_plain_http(monkeypatch):
     set_cookie = resp.headers["set-cookie"].lower()
     assert "samesite=lax" in set_cookie
     assert "secure" not in set_cookie
+
+
+def test_health_reports_which_build_is_serving(monkeypatch):
+    # "The dashboard says it deployed, but the app behaves like the old version" is
+    # indistinguishable from a real bug without this — a Render build that fails leaves the
+    # previous instance live while the newest commit is what the dashboard shows.
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "e47e990c58b22c60674116c6a839cccbf42f6407")
+    import importlib
+
+    import main as main_module
+    importlib.reload(main_module)
+    try:
+        body = TestClient(main_module.app).get("/health").json()
+        assert body["build"] == "e47e990c58b2"
+        # The shell's digest lets a stale browser copy be told apart from a stale server copy.
+        assert len(body["ui_checksum"]) == 12
+    finally:
+        monkeypatch.delenv("RENDER_GIT_COMMIT", raising=False)
+        importlib.reload(main_module)
+
+
+def test_shell_is_revalidated_so_a_deploy_cannot_leave_stale_javascript():
+    resp = _client().get("/")
+    assert resp.status_code == 200
+    # Not "never store" — with the ETag alongside it, this is one conditional request per load.
+    assert resp.headers["cache-control"] == "no-cache"
