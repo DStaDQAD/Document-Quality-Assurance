@@ -1040,3 +1040,53 @@ def test_a_period_header_run_does_not_mix_months_with_quarters():
     ]
     # A genuinely quarterly header (BI survey sheets) is untouched.
     assert _line_periods("I II III IV") == ["I", "II", "III", "IV"]
+
+
+def test_a_transcribed_snippet_table_is_split_into_levels_and_growth():
+    from pdf_table_extraction import _PdfTableOut, _assemble_grid, _split_grid_unit_blocks
+    from table_parser_generic import parse_generic_grid
+
+    # Page 1 of sample_data/M2-Juli-2026.pdf goes to the vision pass, and the split only existed
+    # on the text-layer route — so its growth columns were dropped as colliding periods and every
+    # yoy claim about M2 came back Tidak Cukup Data against the table that prints the answer.
+    out = _PdfTableOut(
+        caption="Tabel 1. Uang Beredar dan Komponennya (triliun Rp)", unit="triliun Rp",
+        header_rows=[["", "2026", "2026", "% (yoy)", "% (yoy)"],
+                     ["Komponen", "Jun", "Jul*", "Jun'26", "Jul'26*"]],
+        rows=[["Uang Beredar Luas (M2)", "10,432.0", "10,371.1", "8.7", "8.3"]],
+    )
+    grid = _assemble_grid(out, "en")
+    annotation = " ".join([out.unit] + [str(c) for r in out.header_rows for c in r if c])
+    parts = _split_grid_unit_blocks(grid, out.caption, "triliun Rp", annotation)
+
+    assert parts is not None and len(parts) == 2
+    levels, growth = (parse_generic_grid(g) for _c, _u, g in parts)
+    assert levels.lookup_fuzzy("Uang Beredar Luas (M2)", 2026, "Jul")[1] == pytest.approx(10371.1)
+    assert growth.lookup_fuzzy("Uang Beredar Luas (M2)", 2026, "Jul")[1] == pytest.approx(8.3)
+    assert parts[1][1] == "%, yoy"
+
+
+def test_a_table_with_only_one_unit_block_is_left_alone():
+    from pdf_table_extraction import _PdfTableOut, _assemble_grid, _split_grid_unit_blocks
+
+    out = _PdfTableOut(
+        caption="Lampiran 1. Tabel Uang Beredar (Triliun Rp)", unit="Triliun Rp",
+        header_rows=[["", "2026", "2026"], ["Uraian", "Jun", "Jul"]],
+        rows=[["Uang Beredar (M2)", "10.432,0", "10.371,1"]],
+    )
+    grid = _assemble_grid(out, "id")
+    assert _split_grid_unit_blocks(grid, out.caption, "Triliun Rp", "Triliun Rp") is None
+
+
+def test_repeated_rows_are_qualified_by_their_section():
+    from pdf_table_extraction import _qualify_repeated_rows
+
+    # BI nests by order, not indentation: a unique section row, then its breakdown.
+    assert _qualify_repeated_rows(
+        ["Giro", "Korporasi", "Perorangan", "Total", "Korporasi", "Perorangan"]
+    ) == ["Giro", "Giro > Korporasi", "Giro > Perorangan",
+          "Total", "Total > Korporasi", "Total > Perorangan"]
+    # A repeat with no section above it still cannot be placed.
+    assert _qualify_repeated_rows(["Korporasi", "Giro", "Korporasi"]) == [
+        None, "Giro", "Giro > Korporasi",
+    ]

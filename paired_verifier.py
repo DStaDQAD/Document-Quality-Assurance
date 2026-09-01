@@ -169,6 +169,9 @@ class _Candidate:
     src: _ExcelSource
     resolved: List[Tuple[str, float]]
     factor: float                         # divide raw values by this to reach the claim's unit
+    # 0 when the matched row's qualification matches the claim's, 1 otherwise — see
+    # _qualification_rank. Ranked between coverage and score.
+    qualification: int = 0
     # False when the source declared no scale of its own and only the claim's scale was
     # applied. Such a value is fine for a verdict but cannot be compared against another
     # source's (see _attach_source_comparison).
@@ -343,6 +346,26 @@ def _resolution_score(
         for p, (label, _) in zip(periods, resolved)
     ]
     return sum(scores) / len(scores) if scores else 0.0
+
+
+def _qualification_rank(periods: List[PeriodPoint], resolved: List[Tuple[str, float]]) -> int:
+    """0 when the matched rows are qualified exactly as the claim is, 1 otherwise.
+
+    A parent-qualified row ('Kredit Investasi > Konstruksi') carries its parent's words, which
+    inflates the plain word overlap `_resolution_score` measures: a claim about "kredit
+    konstruksi" — the property-credit component in Tabel 7 — scored 0,8 against that SECTOR row
+    of Lampiran 4 and only 0,67 against the plain 'Konstruksi' row that answers it. Comparing
+    like with like settles that without touching the score itself, which the survey workbooks
+    rely on to keep a national claim off a per-city row.
+
+    Ranked below coverage, so a claim whose scope words point at one table ("DPK korporasi" ->
+    the DPK table, whose rows are all qualified) still goes there.
+    """
+    mismatches = sum(
+        1 for p, (label, _value) in zip(periods, resolved)
+        if (QUAL_SEP in (label or "")) != (QUAL_SEP in (p.metric_label or ""))
+    )
+    return 1 if mismatches else 0
 
 
 def _coverage_score(
@@ -980,6 +1003,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         candidates.append(_Candidate(
             score=_resolution_score(fact.periods, resolved),
             coverage=coverage,
+            qualification=_qualification_rank(fact.periods, resolved),
             src=src, resolved=resolved, factor=factor, unit_comparable=unit_comparable,
         ))
 
@@ -987,7 +1011,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         return _inconclusive_result(fact, best_missing, best_reason)
 
     # Coverage first, then label quality. Stable sort, so ties keep source order as before.
-    candidates.sort(key=lambda c: (-c.coverage, -c.score))
+    candidates.sort(key=lambda c: (-c.coverage, c.qualification, -c.score))
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Every candidate is computed once — plain arithmetic over values already looked up. The
     # results are reused for the source comparison, so this costs no more than before.
@@ -1146,7 +1170,7 @@ def _match_quality(cand: "_Candidate") -> float:
     answering a different question, so it must not be promoted for reaching a verdict, nor
     reported as a second reading that contradicts the winner.
     """
-    return cand.coverage + cand.score / 1000.0
+    return cand.coverage - cand.qualification / 100.0 + cand.score / 1000.0
 
 
 def _source_value(cand: "_Candidate", result: FactVerificationResult) -> SourceValue:

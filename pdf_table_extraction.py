@@ -59,10 +59,12 @@ from pdf_extraction import (
 from statistics import median
 
 from structured_extractor import detect_number_format, parse_number
+from table_model import QUAL_SEP
 from table_parser_generic import (
     _MONTH_ABBREVS,
     _QUARTER_CANON,
     _bare_period_token,
+    _is_year_cell,
     _parse_period,
 )
 
@@ -387,6 +389,91 @@ def _assemble_grid(table: _PdfTableOut, number_format: str = "id") -> List[List]
 
     width = max((len(r) for r in grid), default=0)
     return [r + [None] * (width - len(r)) for r in grid]
+
+
+# How far down an assembled grid the period header can sit: caption, unit, year row, period row.
+_HEADER_SCAN_ROWS = 6
+
+
+def _split_grid_unit_blocks(
+    grid: List[List], caption: str, unit: str, annotation_text: str = ""
+) -> Optional[List[Tuple[str, str, List[List]]]]:
+    """Cut an assembled grid into its level half and its '%, yoy' half, or None.
+
+    The transcription route's counterpart to what `_tables_on_page` does for the text-layer
+    route, working on the finished grid because that is the only shape the vision path produces.
+    Without it a snippet table transcribed off a page image keeps both halves under one caption,
+    where `_drop_colliding_period_cols` throws all of them away — page 1 of
+    sample_data/M2-Juli-2026.pdf is exactly that, and every yoy claim about M2, giro rupiah or
+    simpanan berjangka came back Tidak Cukup Data against a table that prints the answer.
+
+    `annotation_text` is the transcription as the model sent it — caption, unit field and header
+    rows. It has to come in separately because assembly already blanked what the guard looks for:
+    `_reconstruct_year_row` rewrites the year row from the period sequence, and the '% (yoy)'
+    cells sitting in it are gone by the time there is a grid.
+
+    Returns [(caption, unit, grid), …] — two entries when the header stacks two unit blocks and
+    the annotations say one of them is growth, otherwise None so the caller keeps what it had.
+    """
+    period_row = None
+    for index, row in enumerate(grid[:_HEADER_SCAN_ROWS]):
+        if sum(1 for cell in row if _is_period_token(str(cell or ""))) >= 2:
+            period_row = index
+    if period_row is None:
+        return None
+    columns = [c for c, cell in enumerate(grid[period_row]) if _is_period_token(str(cell or ""))]
+    blocks = _split_unit_blocks([str(grid[period_row][c]) for c in columns])
+    if not blocks:
+        return None
+    # The annotation has to name one half as growth, exactly as the text-layer route requires.
+    # A transcription reports it either in the unit field or inline in the rows above the
+    # periods, so both are searched.
+    annotations = re.sub(r"\s+", "", " ".join(
+        [caption or "", unit or "", annotation_text or ""]
+        + [str(cell) for row in grid[:period_row] for cell in row if cell is not None]
+    ))
+    if not _YOY_BLOCK_RE.search(annotations) or _OTHER_PCT_BLOCK_RE.search(annotations):
+        return None
+
+    years_row = next(
+        (grid[r] for r in range(period_row - 1, -1, -1) if any(_is_year_cell(c) for c in grid[r])),
+        None,
+    )
+    body = [row for row in grid[period_row + 1:] if any(cell is not None for cell in row)]
+    label_of = lambda row: row[0] if row and row[0] is not None else ""
+
+    def build(indices: List[int], block_caption: str, block_unit: str):
+        cells = [columns[i] for i in indices]
+        tokens = [str(grid[period_row][c]) for c in cells]
+        parsed = [_parse_period(t) for t in tokens]
+        if all(parsed):
+            # "Apr'26*" dates itself; the parser keys on a bare token under an int year cell.
+            periods = [month for _year, month in parsed]
+            years = [year for year, _month in parsed]
+        else:
+            periods = list(tokens)
+            years = [
+                (years_row[c] if years_row and c < len(years_row) and _is_year_cell(years_row[c])
+                 else None)
+                for c in cells
+            ]
+        out: List[List] = [[block_caption]]
+        if block_unit:
+            out.append([f"({block_unit})"])
+        if any(y is not None for y in years):
+            out.append([None] + years)
+        out.append([None] + periods)
+        out.extend(
+            [label_of(row)] + [row[c] if c < len(row) else None for c in cells] for row in body
+        )
+        width = max(len(r) for r in out)
+        return block_caption, block_unit, [r + [None] * (width - len(r)) for r in out]
+
+    level, growth = blocks
+    return [
+        build(level, caption, unit),
+        build(growth, f"{caption} (%, yoy)", "%, yoy"),
+    ]
 
 
 def _is_usable(table: _PdfTableOut, page_number: int, number_format: str = "id") -> bool:
@@ -889,6 +976,39 @@ def _join_visual_line(glyphs: List[Tuple[float, float, float, str]]) -> Tuple[fl
 _PAREN_ONLY_RE = re.compile(r'^\((.+)\)$')
 
 
+def _qualify_repeated_rows(labels: List[str]) -> List[Optional[str]]:
+    """Rename each repeated row 'Parent > Child', or None where it cannot be placed.
+
+    A BI table nests by ORDER, not indentation: a section row whose name is unique, then its
+    breakdown. Tabel 4 of the M2 report prints 'Korporasi' and 'Perorangan' four times over,
+    once under each of Giro, Tabungan, Simpanan Berjangka and Total:
+
+        Total 9.716,8 9.666,9 8,1 7,7          <- unique, so it is the section
+        Korporasi 4.953,5 4.909,5 12,7 12,5    -> 'Total > Korporasi'
+        Perorangan 4.236,6 4.242,0 2,8 2,8     -> 'Total > Perorangan'
+
+    Dropping them (which is what this replaced) threw away the exact figures the report quotes —
+    "DPK korporasi tumbuh 12,5% (yoy) ... dari 12,7%" had no source at all and came back Tidak
+    Cukup Data. Qualifying them instead is what excel_parser_bi._bi_parse_collapsed already does
+    for workbooks, and table_model's leaf tier and `_qualifier_kept` are built for exactly this
+    label shape.
+
+    A repeat with no unique section above it still cannot be placed, and stays None: answering
+    from whichever copy came first is the confident-wrong-number case the original guard existed
+    to prevent.
+    """
+    seen = Counter(_norm_label(label) for label in labels)
+    out: List[Optional[str]] = []
+    section: Optional[str] = None
+    for label in labels:
+        if seen[_norm_label(label)] == 1:
+            section = label
+            out.append(label)
+        else:
+            out.append(f"{section}{QUAL_SEP}{label}" if section else None)
+    return out
+
+
 def _drop_ambiguous_rows(labels: List[str]) -> set:
     """Indices of rows whose label is not unique in the table, and so cannot be resolved.
 
@@ -942,6 +1062,20 @@ def _complete_wrapped_caption(caption: str, below: List[Tuple[float, str]]) -> s
         if candidate.count("(") == candidate.count(")"):
             return candidate
     return caption
+
+
+# A caption's continuation line is a short fragment ending in the unit annotation, never a
+# sentence. The cap keeps a stray line of narrative from the neighbouring column out of a title.
+_MAX_CONTINUATION_CHARS = 60
+
+
+def _extend_caption(caption: str, continuation: str) -> str:
+    """Put a wrapped title back together from the line the unit annotation was found on."""
+    if len(continuation) > _MAX_CONTINUATION_CHARS or continuation.rstrip().endswith("."):
+        return caption
+    if continuation.lower() in caption.lower():
+        return caption
+    return f"{caption} {continuation}".strip()
 
 
 def _split_unit_blocks(periods: List[str]) -> Optional[Tuple[List[int], List[int]]]:
@@ -1037,6 +1171,7 @@ def _tables_on_page(
         years: List[int] = []
         unit = _unit_from_caption(caption)
         zone_text: List[str] = []
+        continuation = ""
         for y, text in reading:
             if not (header_y <= y < caption_y):
                 continue
@@ -1047,8 +1182,16 @@ def _tables_on_page(
             # A long caption wraps, and the unit rides the continuation line: 'Tabel 3.
             # Penghimpunan Dana Pihak Ketiga Berdasarkan' / 'Valuta (triliun Rp)'.
             if not unit:
-                unit = _unit_from_caption(text.strip())
+                found = _unit_from_caption(text.strip())
+                if found:
+                    unit, continuation = found, text.strip()
         header_zone = " ".join(zone_text)
+        # That continuation line carries the REST OF THE TITLE too, and the missing words are
+        # load-bearing: Tabel 5 reads 'Perkembangan Kredit Berdasarkan' with 'Golongan Debitur'
+        # on the next line, so "penyaluran kredit kepada debitur korporasi" saw 'debitur' as a
+        # word the table accounts for nowhere and never reached the Korporasi row sitting in it.
+        if continuation and not _line_row(continuation, number_format):
+            caption = _extend_caption(caption, continuation)
 
         # Data rows come from the READING view, the only one that separates a label from the
         # values it is printed over.
@@ -1058,14 +1201,17 @@ def _tables_on_page(
             for row in [_line_row(text.strip(), number_format)]
             if row is not None and len(row[1]) == len(periods)
         ]
-        ambiguous = _drop_ambiguous_rows([label for label, _ in body])
-        if ambiguous:
+        qualified = _qualify_repeated_rows([label for label, _ in body])
+        renamed = sum(1 for old, new in zip(body, qualified) if new and new != old[0])
+        dropped = [old[0] for old, new in zip(body, qualified) if new is None]
+        if renamed or dropped:
             logger.info(
-                "Page %d, %s: dropping %d row(s) whose label repeats in the table (%s).",
-                page_number, caption[:40], len(ambiguous),
-                ", ".join(sorted({body[i][0] for i in ambiguous})),
+                "Page %d, %s: %d repeated row(s) qualified by their section, %d dropped with no "
+                "section above them (%s).",
+                page_number, caption[:40], renamed, len(dropped),
+                ", ".join(sorted(set(dropped))) or "none",
             )
-            body = [row for i, row in enumerate(body) if i not in ambiguous]
+        body = [(new, values) for (old, values), new in zip(body, qualified) if new is not None]
         if len(body) < 2:
             continue
 
@@ -1351,17 +1497,33 @@ async def extract_tables_from_pdf(
             # display/provenance metadata, never used to resolve a value.
             page_number = page_nums[0]
             tables: List[PdfTable] = []
-            for out in result.tables:
+            for caption_index, out in enumerate(result.tables):
                 if not _is_usable(out, page_number, number_format):
                     continue
                 caption = (out.caption or "").strip()
-                tables.append(PdfTable(
-                    page_number=page_number,
-                    caption=caption,
-                    unit=(out.unit or "").strip().strip("()") or _unit_from_caption(caption),
-                    grid=_assemble_grid(out, number_format),
-                    index_on_page=len(tables),
-                ))
+                unit = (out.unit or "").strip().strip("()") or _unit_from_caption(caption)
+                grid = _assemble_grid(out, number_format)
+                # A snippet table prints levels and growth under one caption; each half is its
+                # own table, exactly as on the text-layer route (see _split_grid_unit_blocks).
+                annotation_text = " ".join(
+                    [out.unit or ""] + [str(c) for r in out.header_rows for c in r if c]
+                )
+                parts = (_split_grid_unit_blocks(grid, caption, unit, annotation_text)
+                         or [(caption, unit, grid)])
+                if len(parts) > 1:
+                    logger.info(
+                        "Page %d, %s: splitting the transcribed table into a level half and a "
+                        "'%%, yoy' half.", page_number, caption[:40],
+                    )
+                for part_caption, part_unit, part_grid in parts:
+                    tables.append(PdfTable(
+                        page_number=page_number,
+                        caption=part_caption,
+                        unit=part_unit,
+                        grid=part_grid,
+                        index_on_page=len(tables),
+                        caption_index=caption_index,
+                    ))
             return tables
 
         tables = await call_vision_with_retry(

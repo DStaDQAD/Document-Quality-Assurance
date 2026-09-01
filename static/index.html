@@ -543,13 +543,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   border-radius: 4px; padding: 1px 6px; white-space: nowrap;
   max-width: 240px; overflow: hidden; text-overflow: ellipsis;
 }
-/* A source whose numbers the model read off a page image, because that page carried no text
-   layer to read them from. Worth telling apart from a code-read number when weighing a
-   verdict — see pdf_table_extraction._verify_against_text_layer. */
-.source-badge.is-unverified, .fact-source-chip.is-unverified {
-  background: #FFF7ED; border-color: #FED7AA; color: #9A3412;
-}
-
 /* ── Paired legacy (kept for safety) ── */
 .na { color: var(--text-400); }
 .page-badge {
@@ -639,14 +632,13 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
    colour, because a conflicted claim can be Entailed against its best source. */
 .fact-card.has-conflict { box-shadow: inset 0 0 0 1px #C4B5FD, 0 1px 5px rgba(11,31,58,0.05); }
 .badge.Conflict { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #5B21B6; }
-.conflict-strip, .mode-caveat {
+.conflict-strip {
   display: flex; align-items: flex-start; gap: 8px;
   font-size: 12px; line-height: 1.6; border-radius: var(--r);
   padding: 10px 14px; margin-top: 14px;
+  background: #F5F3FF; border: 1px solid #DDD6FE; color: #5B21B6;
 }
-.conflict-strip { background: #F5F3FF; border: 1px solid #DDD6FE; color: #5B21B6; }
-.mode-caveat    { background: var(--blue-50); border: 1px solid var(--blue-100); color: var(--text-500); }
-.conflict-strip .material-symbols-outlined, .mode-caveat .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
+.conflict-strip .material-symbols-outlined { font-size: 16px; flex-shrink: 0; }
 .fact-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .fact-source-chip {
   font-size: 10px; font-weight: 600; color: var(--text-500);
@@ -1565,32 +1557,12 @@ body.auth-locked .app {
     const mode = data.mode || "excel";
     const conflicts = data.conflict_count || 0;
 
-    // excel_filenames / excel_sheets / excel_parsers are parallel arrays, one entry per
-    // reference source, and "<filename> / <sheet>" is exactly the label the results carry in
-    // matched_excel_source and source_values[].source — so the parser of the source behind any
-    // given verdict can be looked up here. Parsers prefixed "pdf-" come from a table inside the
-    // PDF; the "-unverified" suffix means that page had no text layer, so the numbers are the
-    // model's reading of an image rather than values read out of the file by code.
-    const parserBySource = new Map();
-    const srcFiles = data.excel_filenames || [], srcSheets = data.excel_sheets || [];
-    const srcParsers = data.excel_parsers || [];
-    const nSources = Math.min(srcFiles.length, srcSheets.length, srcParsers.length);
-    for (let n = 0; n < nSources; n++) {
-      parserBySource.set(`${srcFiles[n]} / ${srcSheets[n]}`, srcParsers[n] || "");
-    }
-    const isUnverified = (source) => (parserBySource.get(source) || "").endsWith("-unverified");
-    const internalCount = srcParsers.filter((p) => (p || "").startsWith("pdf-")).length;
-    const unverifiedCount = srcParsers.filter((p) => (p || "").endsWith("-unverified")).length;
-
-    // Only worth a strip when there is something to caution about: a table read off a page
-    // with no text layer carries numbers the model read from an image rather than out of the
-    // file. Everything else is the normal case and needs no telling.
-    const caveat = (mode === "excel" || unverifiedCount === 0) ? "" : `<div class="mode-caveat">
-      <span class="material-symbols-outlined">info</span>
-      <span><strong>${unverifiedCount} dari ${internalCount} tabel</strong> di dalam PDF ada
-      di halaman tanpa lapisan teks, jadi angkanya dibaca AI dari gambar halaman. Klaim yang
-      bersumber dari tabel itu ditandai — periksa langsung ke tabel aslinya.</span>
-    </div>`;
+    // The response still reports each source's parser (the "-unverified" suffix marks a table
+    // read off a page image rather than out of the file), but that is no longer surfaced here.
+    // It was flagging tables on pages that DO have a text layer: a table whose rows carry fewer
+    // numbers than _verify_against_text_layer's threshold never gets verified, so Tabel 1 of the
+    // M2 report — two value columns — was labelled "read by AI" on a perfectly readable page.
+    // A caution that fires on the wrong thing costs more than it is worth.
     const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
       <span class="material-symbols-outlined">rule</span>
       <span><strong>${conflicts} klaim</strong> punya lebih dari satu sumber pembanding yang
@@ -1610,7 +1582,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${caveat}${conflictStrip}`;
+    </div>${conflictStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
@@ -1670,10 +1642,6 @@ body.auth-locked .app {
           const valCls   = verdict === "Refuted" ? "bad" : verdict === "Entailed" ? "ok" : "";
           const pageBadge = item.page_number != null ? `<span class="page-badge">Hal.&nbsp;${item.page_number}</span>` : "";
           const sourceBadge = item.matched_excel_source ? `<span class="source-badge" title="${escapeHtml(item.matched_excel_source)}">${escapeHtml(item.matched_excel_source)}</span>` : "";
-          // The verdict above rests on a number nobody could check against a text layer.
-          const unverifiedBadge = isUnverified(item.matched_excel_source)
-            ? `<span class="source-badge is-unverified" title="Halaman tabel ini tidak punya lapisan teks, jadi angkanya dibaca AI dari gambar halaman">Angka dibaca AI</span>`
-            : "";
           const quote    = item.context_quote ? `<div class="fact-quote">"${escapeHtml(item.context_quote)}"</div>` : "";
 
           const periodChips = periods.length > 1
@@ -1721,11 +1689,8 @@ body.auth-locked .app {
                 const v = sv.computed_value !== null && sv.computed_value !== undefined
                   ? fmtValueText(sv.computed_value, sv.computed_unit === "persen_yoy" ? "persen_yoy" : sv.computed_unit)
                   : VERDICT_LABEL[sv.verdict] || sv.verdict;
-                const cls = (conflict && n > 0 ? " is-conflicting" : "")
-                  + (isUnverified(sv.source) ? " is-unverified" : "");
-                const hint = isUnverified(sv.source)
-                  ? `${sv.source} — angka dibaca AI dari gambar halaman` : sv.source;
-                return `<span class="fact-source-chip${cls}" title="${escapeHtml(hint)}">${escapeHtml(sv.source)}: ${escapeHtml(String(v))}</span>`;
+                const cls = conflict && n > 0 ? " is-conflicting" : "";
+                return `<span class="fact-source-chip${cls}" title="${escapeHtml(sv.source)}">${escapeHtml(sv.source)}: ${escapeHtml(String(v))}</span>`;
               }).join("")}</div>`
             : "";
 
@@ -1740,7 +1705,6 @@ body.auth-locked .app {
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
               ${pageBadge}
               ${sourceBadge}
-              ${unverifiedBadge}
             </div>
             ${quote}
             ${periodChips}

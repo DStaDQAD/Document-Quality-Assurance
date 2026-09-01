@@ -292,3 +292,33 @@ def test_table_subject_recognises_both_the_spelt_out_name_and_the_abbreviation()
     assert subject("Tabel 6. Perkembangan Kredit Berdasarkan Jenis") is None
     # A word that merely contains the abbreviation is not the abbreviation.
     assert subject("Laporan M0X eksperimental") is None
+
+
+def test_a_bare_breakdown_claim_takes_the_aggregate_section():
+    from table_model import TableData
+
+    # Tabel 4 of the M2 report prints 'Korporasi' under each of Giro, Tabungan, Simpanan
+    # Berjangka and Total. "DPK korporasi" names no section, so it means the whole DPK's.
+    table = TableData(
+        title="Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah",
+        unit="%, yoy",
+        row_labels=["Giro", "Giro > Korporasi", "Total", "Total > Korporasi"],
+    )
+    table._data.update({
+        ("Giro", 2026, "Jul"): 10.5, ("Giro > Korporasi", 2026, "Jul"): 13.1,
+        ("Total", 2026, "Jul"): 7.7, ("Total > Korporasi", 2026, "Jul"): 12.5,
+    })
+    assert table.lookup_fuzzy("DPK korporasi", 2026, "Jul") == ("Total > Korporasi", 12.5)
+    # Naming the section still picks that section.
+    assert table.lookup_fuzzy("giro korporasi", 2026, "Jul") == ("Giro > Korporasi", 13.1)
+
+
+def test_two_words_that_differ_only_by_a_derivational_prefix_are_one_word():
+    from table_model import _same_root
+
+    # The prose writes "kredit KEpemilikan rumah"; the table row reads "Kredit PEmilikan Rumah".
+    assert _same_root("kepemilikan", "pemilikan")
+    # But a stemmer would collapse 'perusahaan' to 'usaha' and let a claim about "skala usaha
+    # mikro" match the sector row "Jasa Perusahaan". Requiring prefix + whole word keeps them apart.
+    assert not _same_root("usaha", "perusahaan")
+    assert not _same_root("rumah", "perumahan")

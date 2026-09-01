@@ -68,6 +68,28 @@ def _label_words(text: str) -> set:
     return words
 
 
+# Indonesian derivational prefixes. The narrative and the table routinely build different nouns
+# off one root — "kredit KEpemilikan rumah" in the prose against a row headed "Kredit PEmilikan
+# Rumah" — and to a word-set comparison those share nothing at all.
+_PREFIXES = ("keper", "peng", "pem", "pen", "per", "ke", "pe")
+
+
+def _same_root(a: str, b: str) -> bool:
+    """True when two words differ only by one derivational prefix.
+
+    Deliberately a pairwise test rather than a stemmer. Stemming both sides down to a root
+    collapses words that are genuinely different: 'perusahaan' reduces to 'usaha', which would
+    let a claim about "kredit skala usaha mikro" match the sector row "Keuangan, Real Estat dan
+    Jasa Perusahaan". Requiring one word to be the other PLUS a prefix keeps that apart —
+    'per' + 'usaha' is 'perusaha', not 'perusahaan' — while still pairing 'ke' + 'pemilikan'
+    with 'kepemilikan'.
+    """
+    if a == b:
+        return True
+    longer, shorter = (a, b) if len(a) > len(b) else (b, a)
+    return any(longer == prefix + shorter for prefix in _PREFIXES)
+
+
 def _label_is_covered_by(label: str, q_words: set, ignorable: frozenset) -> bool:
     """True when every meaningful word of `label` is accounted for by the claim's words.
 
@@ -82,7 +104,8 @@ def _label_is_covered_by(label: str, q_words: set, ignorable: frozenset) -> bool
     raw = [w.lower() for w in re.findall(r"\w+", label)]
     i = 0
     while i < len(raw):
-        if raw[i] in q_words or raw[i] in ignorable:
+        if (raw[i] in q_words or raw[i] in ignorable
+                or any(_same_root(raw[i], w) for w in q_words)):
             i += 1
             continue
         merged = False
@@ -225,6 +248,14 @@ class TableData:
         # A title naming both ('Uang Primer' inside an M2 appendix) tells us nothing.
         return found[0] if len(found) == 1 else None
 
+    @classmethod
+    def _is_aggregate(cls, label: str) -> bool:
+        """True for a section row that holds the table-wide total ('Total', 'Total Jenis
+        Simpanan', 'Jumlah'), told by its first significant word."""
+        words = re.findall(r"\w+", label.lower())
+        return bool(words) and words[0] in cls._TOTAL_ROW_NAMES
+
+
     def _query_matches_table_subject(self, query: str) -> bool:
         """Return True when the query names this table's overall subject (per the title).
 
@@ -366,10 +397,17 @@ class TableData:
                     continue
                 tier_l_in_q.append((label, (-len(earned), -len(label))))
             if QUAL_SEP in label:
-                leaf = _canon(label.rsplit(QUAL_SEP, 1)[1])
+                parent, _, child = label.rpartition(QUAL_SEP)
+                leaf = _canon(child)
                 if leaf and leaf in q_canon:
                     overlap = len(_sig_words(label) & q_words)
-                    tier_leaf.append((label, (-overlap, -len(leaf))))
+                    # Among parents the query does not distinguish between, the aggregate one is
+                    # what a bare claim means: "DPK korporasi" is the whole DPK's korporasi
+                    # figure, not giro's. Ranked BELOW word overlap, so a query that does name a
+                    # section ("giro korporasi") still picks that section.
+                    tier_leaf.append(
+                        (label, (-overlap, 0 if self._is_aggregate(parent) else 1, -len(leaf)))
+                    )
             # The last two tiers ignore where the spaces fell (see _tight / _label_words), so a
             # label the PDF broke mid-word can still be recognised. They run LAST: a label that
             # matches on its real words always wins over one that only matches once the stray

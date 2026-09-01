@@ -277,6 +277,12 @@ IMPORTANT RULES:
    about total credit ("Penyaluran kredit pada April 2026 tercatat sebesar Rp8.606,6
    triliun") was checked against the DPK table's Total (Rp9.567,7 triliun). Write the series
    the sentence names — 'Penyaluran kredit', 'Total DPK' — and let the code find the row.
+4a. NEVER use a bare aggregate word as metric_label. 'Total', 'Jumlah' and 'Total UMKM' name
+   no series on their own — this report carries a row called 'Total' in its DPK table, its
+   credit table, its UMKM table and its sector appendix, and a claim labelled that way gets
+   answered by whichever one is read first. Say what is being totalled, in the narrative's own
+   words: "Penyaluran kredit pada Juli 2026 tercatat sebesar Rp8.606,6 triliun" is
+   metric_label 'Penyaluran kredit', never 'Total'.
 4b. KEEP THE SCOPE WORD the surrounding sentence puts on the metric. A report states the same
    breakdown for several populations, so 'ekspansi kredit UMKM ... bersumber dari ekspansi pada
    kredit investasi sebesar 10,1% (yoy)' is about UMKM investment credit — metric_label
