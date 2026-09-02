@@ -1854,3 +1854,59 @@ def test_a_trend_sentence_comparing_two_growth_rates_reads_the_growth_table():
     # rates, so the levels table still answers.
     assert trend("Posisi tabungan tercatat Rp3.160,4 triliun, atau tumbuh 8,9% "
                  "(yoy)").periods[0].excel_value == pytest.approx(3166.2)
+
+
+def test_a_table_without_a_year_ago_column_does_not_block_one_that_has_it():
+    from paired_verifier import _ExcelSource
+    from structured_extractor import ExtractedFact, PeriodPoint
+    from table_model import TableData
+
+    # Tabel 1 of M2-Juli-2026.pdf carries only Jun and Jul, no growth block and no year-ago
+    # column — but its row is spelled exactly as the claim is, so it won the ranking and then
+    # answered "no data" while Lampiran 2 printed the figure.
+    thin = TableData(title="Tabel 1. Uang Beredar dan Komponennya", unit="triliun Rp",
+                     row_labels=["Uang Beredar Luas (M2)"])
+    thin._data[("Uang Beredar Luas (M2)", 2026, "Jul")] = 10371.1
+    growth = TableData(title="Lampiran 2. Pertumbuhan Uang Beredar", unit="%, yoy",
+                       row_labels=["Uang Beredar (M2)"])
+    growth._data[("Uang Beredar (M2)", 2026, "Jul")] = 8.3
+    fact = ExtractedFact(
+        operation="yoy_growth",
+        periods=[PeriodPoint(metric_label="Uang Beredar Luas (M2)", year=2026, month="Jul")],
+        claimed_value=8.3, unit="persen_yoy", context_quote="x",
+    )
+    result = _evaluate_fact(fact, [
+        _ExcelSource(table=thin, filename="r.pdf", sheet="T1", origin="pdf"),
+        _ExcelSource(table=growth, filename="r.pdf", sheet="L2", origin="pdf"),
+    ])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(8.3)
+    # The reader is told the headline number did not come from the closest label match.
+    assert "kecocokan label terbaik" in result.reasoning
+
+
+@pytest.mark.parametrize(
+    "label,claim,narrower",
+    [
+        # A word AFTER the claim's own terms narrows the series.
+        ("Kredit Properti", "Kredit", True),
+        # A word BEFORE them only names the section the report files it under.
+        ("Simpanan Giro Rupiah", "Giro Rupiah", False),
+        # Dropping or rewording the claim's terms keeps the same series.
+        ("Uang Beredar (M2)", "Uang Beredar Luas (M2)", False),
+        # The PDF's mid-word splits must not read as words the row adds.
+        ("Kredit Konsum si (KK)", "Kredit Konsumsi (KK)", False),
+        ("Giro Sektor Sw asta di BI", "Giro Sektor Swasta", False),
+    ],
+)
+def test_only_a_trailing_extra_word_makes_a_row_too_narrow_to_stand_in(label, claim, narrower):
+    from paired_verifier import _is_narrower_than_the_claim
+    from structured_extractor import ExtractedFact, PeriodPoint
+
+    fact = ExtractedFact(
+        operation="yoy_growth",
+        periods=[PeriodPoint(metric_label=claim, year=2026, month="Jul")],
+        claimed_value=1.0, unit="persen_yoy", context_quote="x",
+    )
+    assert _is_narrower_than_the_claim(fact, [(label, 1.0)]) is narrower

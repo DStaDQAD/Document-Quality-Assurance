@@ -90,6 +90,22 @@ def _same_root(a: str, b: str) -> bool:
     return any(longer == prefix + shorter for prefix in _PREFIXES)
 
 
+def _query_names_several(q_words: set, members: List[str]) -> bool:
+    """True when the claim names two or more of `members` by what distinguishes them.
+
+    Members are the competing halves of one family — the children matched under a single parent,
+    or the parents a single child appeared under. A word shared by all of them says nothing
+    about which is meant ('Rupiah' appears in BOTH 'Tabungan Lainnya (Rupiah dan Valas)' and
+    'Simpanan Berjangka (Rupiah dan Valas)'), so only the words unique to a member count.
+    """
+    if len(members) < 2:
+        return False
+    words = [_sig_words(m) for m in members]
+    shared = set.intersection(*words) if words else set()
+    named = sum(1 for w in words if (w - shared) & q_words)
+    return named >= 2
+
+
 def _label_is_covered_by(label: str, q_words: set, ignorable: frozenset) -> bool:
     """True when every meaningful word of `label` is accounted for by the claim's words.
 
@@ -309,6 +325,17 @@ class TableData:
             w for w in q_words
             if w in known or (self._SUBJECT_SYNONYMS.get(w, frozenset()) & known)
         }
+        # A dimension the claim names is accounted for by a table that BREAKS IT OUT, even when
+        # the matched row does not repeat it. "Simpanan Berjangka (Rupiah & Valas)" is a
+        # component of uang kuasi, and both Lampiran 2 and the DPK table carry a row of exactly
+        # that name — 4,6 against 4,8. Only Lampiran 2 splits it into Rupiah and Valas rows, so
+        # only Lampiran 2 is talking about the thing the claim named.
+        residual = q_words - covered
+        if residual:
+            broken_out = set()
+            for row in self.row_labels:
+                broken_out |= _label_words(row)
+            covered |= residual & broken_out
         # A term _SUBJECT_SYNONYMS knows about names what the report is TALKING ABOUT, not a
         # detail of it. A source that mentions it nowhere is answering a different question, so
         # it scores zero rather than partial credit and _evaluate_fact drops it: "DPK korporasi"
@@ -370,6 +397,8 @@ class TableData:
         q_tight = _tight(query)
         q_words = _sig_words(query)
         tier_exact, tier_q_in_l, tier_l_in_q, tier_leaf = [], [], [], []
+        leaf_family: Dict[str, List[str]] = {}     # parent -> children of it that matched
+        leaf_siblings: Dict[str, List[str]] = {}  # leaf -> parents it appeared under
         tier_tight_q_in_l, tier_tight_words = [], []
         for label in labels:
             l_canon = _canon(label)
@@ -408,6 +437,8 @@ class TableData:
                     tier_leaf.append(
                         (label, (-overlap, 0 if self._is_aggregate(parent) else 1, -len(leaf)))
                     )
+                    leaf_family.setdefault(parent, []).append(child)
+                    leaf_siblings.setdefault(leaf, []).append(parent)
             # The last two tiers ignore where the spaces fell (see _tight / _label_words), so a
             # label the PDF broke mid-word can still be recognised. They run LAST: a label that
             # matches on its real words always wins over one that only matches once the stray
@@ -431,6 +462,29 @@ class TableData:
                     tier_tight_words.append(
                         (label, (-len(covered), -_tight_score(query, label), len(label)))
                     )
+        # A query that NAMES two members of one family is asking for their combination, not for
+        # either one. "Simpanan Berjangka (Rupiah & Valas)" does this twice over, because the two
+        # appendices nest the same pair in opposite orders:
+        #
+        #   Lampiran 2   'Simpanan Berjangka > Rupiah' / '> Valas'   -> one parent, two children
+        #   Lampiran 3   'Rupiah > Simpanan Berjangka' / 'Valas > …' -> one child, two parents
+        #
+        # Either shape means the same thing, so both are dropped and a lower tier reaches the
+        # combined row (4,6) instead of a sub-total (0,4 in Lampiran 2, 0,66 in Lampiran 3).
+        #
+        # Mere co-occurrence is NOT enough — a leaf legitimately sits under several parents, and
+        # picking between them by parent words is what this tier is for. So the members are
+        # counted by the words that tell them APART: "tabungan lainnya rupiah" names only
+        # 'Tabungan Lainnya' among the parents carrying a 'Rupiah' child, so it survives.
+        dropped = {name for group in (leaf_family, leaf_siblings)
+                   for name, members in group.items()
+                   if _query_names_several(q_words, members)}
+        if dropped:
+            tier_leaf = [
+                candidate for candidate in tier_leaf
+                if candidate[0].rpartition(QUAL_SEP)[0] not in dropped
+                and _canon(candidate[0].rpartition(QUAL_SEP)[2]) not in dropped
+            ]
         return [
             tier_exact, tier_q_in_l, tier_leaf, tier_l_in_q,
             tier_tight_q_in_l, tier_tight_words,

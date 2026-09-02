@@ -283,6 +283,12 @@ IMPORTANT RULES:
    answered by whichever one is read first. Say what is being totalled, in the narrative's own
    words: "Penyaluran kredit pada Juli 2026 tercatat sebesar Rp8.606,6 triliun" is
    metric_label 'Penyaluran kredit', never 'Total'.
+4c. A ROW NAME THAT REPEATS ACROSS TABLES NEEDS ITS SCOPE. This report carries a row called
+   'Simpanan Berjangka' twice — once as a component of uang kuasi (4,6% in Juli 2026) and once
+   as a type of DPK (4,8%) — and likewise 'Giro' and 'Tabungan'. When the paragraph says which
+   one it is about, put that in metric_label: "uang kuasi ... terutama simpanan berjangka yang
+   tumbuh sebesar 4,6% (yoy)" is metric_label 'Simpanan Berjangka (Rupiah & Valas)' or
+   'simpanan berjangka uang kuasi', never a bare 'Simpanan Berjangka'.
 4b. KEEP THE SCOPE WORD the surrounding sentence puts on the metric. A report states the same
    breakdown for several populations, so 'ekspansi kredit UMKM ... bersumber dari ekspansi pada
    kredit investasi sebesar 10,1% (yoy)' is about UMKM investment credit — metric_label

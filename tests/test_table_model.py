@@ -322,3 +322,32 @@ def test_two_words_that_differ_only_by_a_derivational_prefix_are_one_word():
     # mikro" match the sector row "Jasa Perusahaan". Requiring prefix + whole word keeps them apart.
     assert not _same_root("usaha", "perusahaan")
     assert not _same_root("rumah", "perumahan")
+
+
+def test_a_claim_naming_two_members_of_a_family_takes_neither():
+    from table_model import TableData
+
+    # "Simpanan Berjangka (Rupiah & Valas)" names both halves, so it means their combination.
+    # Lampiran 2 nests them one way and Lampiran 3 the other; both must fall through to the
+    # combined row rather than answer with a sub-total.
+    for rows, expected in (
+        (["Simpanan Berjangka", "Simpanan Berjangka > Rupiah", "Simpanan Berjangka > Valas"],
+         "Simpanan Berjangka"),
+        (["Simpanan Berjangka", "Rupiah > Simpanan Berjangka", "Valas > Simpanan Berjangka"],
+         "Simpanan Berjangka"),
+    ):
+        table = TableData(title="Lampiran", unit="%, yoy", row_labels=rows)
+        for i, row in enumerate(rows):
+            table._data[(row, 2026, "Jul")] = float(i)
+        matched, _value = table.lookup_fuzzy("Simpanan Berjangka (Rupiah & Valas)", 2026, "Jul")
+        assert matched == expected
+
+    # Naming only ONE member still picks that member — the case the leaf tier exists for.
+    table = TableData(
+        title="Lampiran", unit="%, yoy",
+        row_labels=["Tabungan Lainnya (Rupiah dan Valas) > Rupiah",
+                    "Simpanan Berjangka (Rupiah dan Valas) > Rupiah"],
+    )
+    table._data[("Tabungan Lainnya (Rupiah dan Valas) > Rupiah", 2026, "Jul")] = 7.0
+    table._data[("Simpanan Berjangka (Rupiah dan Valas) > Rupiah", 2026, "Jul")] = 1.0
+    assert table.lookup_fuzzy("tabungan lainnya rupiah", 2026, "Jul")[1] == 7.0

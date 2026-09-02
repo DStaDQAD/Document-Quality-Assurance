@@ -520,6 +520,97 @@ def _is_growth_series(unit: Optional[str]) -> bool:
     return bool(unit and re.search(r'\byoy\b', unit, re.IGNORECASE))
 
 
+def _is_narrower_than_the_claim(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]]
+) -> bool:
+    """True when a matched row adds a word the claim never used, making it a subset of it.
+
+    Only consulted once a better-named source has already been dropped for holding no data, so
+    the question is narrow: may THIS row answer in its place?
+
+    Where the extra word SITS is what tells the two cases apart, and BI's labels are consistent
+    about it — they read "Category Subject Qualifier":
+
+      claim 'Kredit'      vs row 'Kredit Properti'        -> 'properti' trails: a breakdown
+      claim 'Giro Rupiah' vs row 'Simpanan Giro Rupiah'   -> 'simpanan' leads: the family it is in
+
+    So a word added AFTER the claim's own terms narrows the series and disqualifies the row,
+    while one added before it only names the section the report files it under. Answering a
+    credit claim from the property breakdown is answering a different question; answering
+    "giro rupiah" from 'Simpanan Giro Rupiah' is the same series under Lampiran 2's wording.
+    """
+    for point, (label, _value) in zip(fact.periods, resolved):
+        claim_words = _sig_words(point.metric_label or "")
+        words = _rejoined_words(label, claim_words)
+        matched = [i for i, w in enumerate(words) if w in claim_words]
+        if not matched:
+            continue
+        trailing = [w for w in words[max(matched) + 1:]
+                    if len(w) > 2 and w not in claim_words]
+        if trailing:
+            return True
+    return False
+
+
+def _rejoined_words(label: str, claim_words: set) -> List[str]:
+    """The label's words, with the PDF's mid-word splits put back together where the claim says
+    how. 'Kredit Konsum si (KK)' reads as ['kredit', 'konsumsi', 'kk'] for a claim about Kredit
+    Konsumsi — without this the stray 'konsum' looks like a word the row adds, and the row that
+    answers the claim exactly gets rejected as a narrower series.
+    """
+    raw = re.findall(r"\w+", (label or "").lower())
+    out: List[str] = []
+    i = 0
+    while i < len(raw):
+        if raw[i] in claim_words:
+            out.append(raw[i])
+            i += 1
+            continue
+        joined = next(
+            ("".join(raw[i:i + span]) for span in (2, 3)
+             if i + span <= len(raw) and "".join(raw[i:i + span]) in claim_words),
+            None,
+        )
+        if joined:
+            out.append(joined)
+            i += len(joined) and next(
+                span for span in (2, 3)
+                if i + span <= len(raw) and "".join(raw[i:i + span]) == joined
+            )
+            continue
+        out.append(raw[i])
+        i += 1
+    return out
+
+
+def _can_answer(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
+) -> bool:
+    """Whether this source holds what the OPERATION needs, not just the points it names.
+
+    Resolving a claim only checks the periods it mentions, so a table that carries the current
+    month but nothing to compare it against still wins the source ranking on the strength of its
+    row name — and then answers "no data", while a table that could have answered was never
+    consulted. Tabel 1 of sample_data/M2-Juli-2026.pdf is exactly that: two columns, Jun and
+    Jul, no growth block and no year-ago column, but its row is spelled 'Uang Beredar Luas (M2)'
+    — the claim's wording exactly, where Tabel 2 and Lampiran 2 both say 'Uang Beredar (M2)'. So
+    "M2 tumbuh 8,3% (yoy)" came back Tidak Cukup Data against a report that prints 8,3 twice.
+
+    This does not loosen matching. A source dropped here would have returned Inconclusive
+    anyway; the only thing that changes is which source gets to be the answer, and
+    `_coverage_score` still keeps a claim inside the tables that cover its scope words.
+    """
+    if fact.operation != "yoy_growth" or not resolved:
+        return True
+    # Same two ways of getting a growth figure that _compute_yoy_growth uses, in the same order.
+    if _is_growth_series(src.table.unit):
+        return True
+    point = fact.periods[0]
+    matched_label = resolved[0][0]
+    _prior_label, prior = src.table.lookup_fuzzy(matched_label, point.year - 1, point.month)
+    return prior is not None
+
+
 def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
     p = fact.periods[0]
     matched_label, curr_raw = resolved[0]
@@ -926,6 +1017,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None
     best_reason: Optional[str] = None
+    # Rows that named the claim but held none of the data the operation needs — see _can_answer
+    # and _is_narrower_than_the_claim.
+    dropped_for_lack_of_data: List[str] = []
+    displaced_source: Optional[str] = None
     # One _Candidate per source that resolved every data point — see _resolution_score. The
     # best-scoring one produces the verdict; the rest become source_values and can raise a
     # conflict (see _attach_source_comparison).
@@ -936,6 +1031,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         if missing:
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
+            continue
+        if not _can_answer(fact, resolved, src):
+            if best_reason is None:
+                point = fact.periods[0]
+                best_reason = (
+                    f"No data found in Excel [{src.label}] for metric '{resolved[0][0]}' "
+                    f"at {point.month} {point.year - 1} (needed for yoy denominator)."
+                )
+            dropped_for_lack_of_data.append(resolved[0][0])
+            if displaced_source is None:
+                displaced_source = src.label
             continue
 
         factor = 1.0
@@ -991,6 +1097,14 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         # real breakdown row, so whichever sheet the user happened to upload first would
         # win. Keep scanning and keep the closest label match; ties keep the earlier
         # source, so single-source behaviour is unchanged.
+        # A source only stands in for one that named the claim better and had no data if it is
+        # not a NARROWER series. "Kredit" also matches a 'Kredit Properti' row, and answering a
+        # credit claim from the property breakdown is answering a different question — the guard
+        # test_a_looser_label_match_may_not_supply_the_answer pins down. A row that adds no word
+        # the claim did not use is the same series worded differently ('Uang Beredar (M2)' for a
+        # claim about 'Uang Beredar Luas (M2)'), and may stand in.
+        if dropped_for_lack_of_data and _is_narrower_than_the_claim(fact, resolved):
+            continue
         coverage = _coverage_score(fact.periods, resolved, src)
         if coverage <= 0.0:
             # Nothing this source names has anything to do with what the claim asked about —
@@ -1035,7 +1149,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             head_index = index
             break
 
-    return _attach_source_comparison(evaluated, head_index)
+    return _attach_source_comparison(evaluated, head_index, displaced_source)
 
 
 def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
@@ -1187,6 +1301,7 @@ def _source_value(cand: "_Candidate", result: FactVerificationResult) -> SourceV
 def _attach_source_comparison(
     evaluated: List[Tuple["_Candidate", FactVerificationResult]],
     head_index: int,
+    displaced: Optional[str] = None,
 ) -> FactVerificationResult:
     """The verdict of the chosen source, plus what every other resolving source said.
 
@@ -1216,8 +1331,18 @@ def _attach_source_comparison(
     result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
 
+    # When the answer did not come from the closest label match, say so — the reader is entitled
+    # to know the headline number was taken from a table that matched the metric less exactly,
+    # whether that source was outranked here or dropped earlier for holding no usable data.
+    passed_over = evaluated[0][0].src.label if head_index != 0 else displaced
+    note = (
+        f" | Sumber dengan kecocokan label terbaik "
+        f"([{passed_over}]) tidak memuat data yang dibutuhkan; "
+        f"nilai diambil dari [{per_source[0][0].src.label}]."
+    ) if passed_over else ""
+
     if len(per_source) == 1:
-        return result
+        return result.model_copy(update={"reasoning": result.reasoning + note}) if note else result
 
     head_cand, head = per_source[0][0], values[0]
     conflict: Optional[str] = None
@@ -1249,15 +1374,7 @@ def _attach_source_comparison(
             conflict = "internal" if head.origin == other.origin == "pdf" else "cross"
             break
 
-    # When the answer did not come from the closest label match, say so: the reader is entitled
-    # to know the headline number was taken from a table that matched the metric less exactly.
-    reasoning = result.reasoning
-    if head_index != 0:
-        reasoning += (
-            f" | Sumber dengan kecocokan label terbaik "
-            f"([{evaluated[0][0].src.label}]) tidak memuat data yang dibutuhkan; "
-            f"nilai diambil dari [{head_cand.src.label}]."
-        )
+    reasoning = result.reasoning + note
 
     if conflict is None:
         return result.model_copy(update={"source_values": values, "reasoning": reasoning})
