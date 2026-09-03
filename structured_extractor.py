@@ -21,6 +21,7 @@ PDF tables are intentionally excluded because their raw structure is handled sep
 
 import asyncio
 import logging
+import os
 import re
 from dataclasses import dataclass
 from typing import Callable, List, Literal, Optional, Tuple
@@ -32,6 +33,19 @@ from pydantic import BaseModel, Field
 from table_model import _sig_words
 
 logger = logging.getLogger("fact-checker")
+
+# Characters of narrative per extraction call. Chunks run concurrently, so the wall time is set
+# by the BIGGEST one, which makes shrinking this look like free speed. It is not: measured twice
+# each on the April report, 4.000 finished in 26-35s against 38-46s, but "Tidak Cukup Data" rose
+# from 8 to 13-15 and a false Refuted appeared. Less narrative per call means vaguer metric
+# names — a claim whose subject sits in the previous chunk comes back labelled 'Total', which no
+# table can answer. Coverage is worth more than ten seconds here.
+#
+# Lowered only deliberately, and never without re-checking the Inconclusive count. There is also
+# no semaphore on these calls, unlike the vision pass (GEMINI_VISION_CONCURRENCY), so more chunks
+# means more concurrent requests — on Gemini's free tier (5/minute) raise this rather than lower
+# it, to make fewer and larger calls.
+EXTRACTION_CHUNK_CHARS = int(os.getenv("EXTRACTION_CHUNK_CHARS", "6000"))
 
 # Maps full month names (English and Indonesian) to 3-letter abbreviations.
 # The LLM occasionally ignores the "3-letter only" instruction and outputs
@@ -1005,7 +1019,7 @@ def extract_structured_facts(
     narrative_text: str,
     row_labels: List[str],
     llm: BaseChatModel,
-    max_chars_per_chunk: int = 6_000,
+    max_chars_per_chunk: int = EXTRACTION_CHUNK_CHARS,
     fallback_llm: Optional[BaseChatModel] = None,
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
 ) -> List[ExtractedFact]:
@@ -1019,7 +1033,7 @@ def extract_structured_facts(
         narrative_text:     Full text of the PDF (pypdf or vision output).
         row_labels:         Combined metric names from all Excel sources.
         llm:                Primary chat model with structured-output support.
-        max_chars_per_chunk: Max chars per LLM call (default 8 000).
+        max_chars_per_chunk: Max chars per LLM call (see EXTRACTION_CHUNK_CHARS).
         fallback_llm:       Optional secondary model tried if the primary fails.
         source_labels:      Optional list of (table_title, row_labels) per source.
                             When provided, the LLM sees each source's title so it
@@ -1052,7 +1066,7 @@ async def extract_structured_facts_async(
     narrative_text: str,
     row_labels: List[str],
     llm: BaseChatModel,
-    max_chars_per_chunk: int = 6_000,
+    max_chars_per_chunk: int = EXTRACTION_CHUNK_CHARS,
     fallback_llm: Optional[BaseChatModel] = None,
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,

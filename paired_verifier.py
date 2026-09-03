@@ -1686,6 +1686,32 @@ def _deduplicate_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
     return unique
 
 
+def _merge_sources_sharing_rows(
+    sources: List[Tuple[str, List[str]]]
+) -> List[Tuple[str, List[str]]]:
+    """Collapse sources whose row lists are identical into one entry naming both tables.
+
+    Splitting a snippet table into its level half and its '%, yoy' half doubles the source
+    count, and the two halves carry exactly the same row names — so the extraction prompt
+    listed every row twice, in every chunk. On the April report that is 22 sources for 12
+    distinct row lists, and 11.262 characters of prompt where 8.179 say the same thing.
+
+    The titles are kept, both of them: `_build_row_labels_block` shows them so the model can
+    tell what 'Total' totals in a given table, and losing that would trade prompt size for the
+    ambiguity that costs verdicts. Order is preserved so the first table to advertise a row list
+    still leads.
+    """
+    order: List[Tuple[str, ...]] = []
+    titles: Dict[Tuple[str, ...], List[str]] = {}
+    for desc, labels in sources:
+        key = tuple(labels)
+        if key not in titles:
+            titles[key] = []
+            order.append(key)
+        titles[key].append(desc)
+    return [("; ".join(titles[key]), list(key)) for key in order]
+
+
 async def verify_paired(
     narrative_text: str,
     excel_sources: List[Tuple[bytes, str, str]],
@@ -1837,10 +1863,10 @@ async def verify_paired(
     # Internal mode can produce a dozen sources, and _build_row_labels_block prints every
     # advertised label into EVERY extraction chunk's prompt — cap the per-source list so the
     # prompt does not grow with the page count. all_row_labels below is already deduplicated.
-    source_labels_for_extractor = [
+    source_labels_for_extractor = _merge_sources_sharing_rows([
         (_source_desc(src), src.table.row_labels[:_MAX_LABELS_PER_SOURCE])
         for src in parsed_sources
-    ]
+    ])
 
     # Combined flat list for de-duplication (required by extract_structured_facts_async signature)
     all_row_labels: List[str] = []
