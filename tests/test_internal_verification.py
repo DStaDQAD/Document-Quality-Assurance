@@ -221,6 +221,58 @@ def test_two_conclusive_sources_in_the_same_unit_still_conflict():
     assert {sv.verdict for sv in result.source_values} == {"Entailed", "Refuted"}
 
 
+def test_a_dpk_table_and_an_m2_table_do_not_contradict_over_a_shared_row_name():
+    # Measured on sample_data/M2-Juli-2026.pdf. 'Simpanan Berjangka' is a row of BOTH the DPK
+    # table and the M2 appendix, but they are different aggregates: 3.429,1 T against 3.236,9 T
+    # for Jul 2026, because DPK counts deposits M2's uang kuasi leaves out. Their growth rates
+    # differ for the same reason — 4,8% against 4,6% — and reporting that as the report
+    # contradicting itself was a false alarm on a claim that was right.
+    dpk = _make_table(
+        title="Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah",
+        unit="%, yoy", data={("Simpanan Berjangka", 2026, "Jul"): 4.8},
+    )
+    # Written with the split glyphs the PDF actually prints, which is what defeated the title
+    # regex and left this table classified as "no universe at all".
+    m2 = _make_table(
+        title="Lampiran 2. Pertumbuhan U ang Beredar dan Faktor yang Mem engaruhinya",
+        unit="%, yoy", data={("Simpanan Berjangka", 2026, "Jul"): 4.6},
+    )
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=4.8, unit="persen_yoy",
+        periods=[_make_period(metric_label="Simpanan Berjangka", month="Jul")],
+    )
+    result = _evaluate_fact(fact, [
+        _pdf_source(dpk, page=3, caption="Tabel 4. Penghimpunan Dana Pihak Ketiga"),
+        _pdf_source(m2, page=8, caption="Lampiran 2. Pertumbuhan U ang Beredar"),
+    ])
+
+    assert result.verdict == "Entailed"
+    assert result.source_conflict is None
+    # Nor is the other universe's number printed beside the answer, for the same reason.
+    assert all("Lampiran 2" not in sv.source for sv in result.source_values or [])
+
+
+def test_two_growth_tables_from_different_universes_are_never_compared():
+    # _DIFFERENT_SERIES_GAP was measured on LEVELS, where two readings of one series sit within
+    # 1,5% and two name-sharers start at 63,7%. Growth rates carry no such separation: these two
+    # are 25% apart, close enough for the levels rule to call them the same series, and still
+    # nothing alike. On a growth table the value gap proves nothing, so it must not be consulted.
+    dpk = _make_table(title="Lampiran 3. Tabel Dana Pihak Ketiga di Perbankan",
+                      unit="%, yoy", data={("Simpanan Berjangka", 2026, "Jul"): 8.0})
+    m2 = _make_table(title="Lampiran 2. Pertumbuhan Uang Beredar",
+                     unit="%, yoy", data={("Simpanan Berjangka", 2026, "Jul"): 6.0})
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=8.0, unit="persen_yoy",
+        periods=[_make_period(metric_label="Simpanan Berjangka", month="Jul")],
+    )
+    result = _evaluate_fact(fact, [
+        _pdf_source(dpk, page=8, caption="Lampiran 3. DPK"),
+        _pdf_source(m2, page=8, caption="Lampiran 2. Pertumbuhan"),
+    ])
+
+    assert result.source_conflict is None
+
+
 def test_a_source_with_an_unknown_unit_does_not_raise_a_conflict():
     known = _make_table(unit="triliun Rp", data={("Total", 2026, "Apr"): 10355.1})
     unknown = _make_table(unit="", data={("Total", 2026, "Apr"): 11999.9})

@@ -251,16 +251,31 @@ class TableData:
     _TABLE_SUBJECTS: ClassVar[Dict[str, "re.Pattern"]] = {
         "m0": re.compile(r"uang\s*prim\s*er|\bm0\b", re.IGNORECASE),
         "m2": re.compile(r"uang\s*beredar|\bm2\b", re.IGNORECASE),
+        # DPK is a WIDER aggregate than M2's uang kuasi and prints rows of the same name:
+        # 'Simpanan Berjangka' is 3.429,1 T in Lampiran 3 and 3.236,9 T in Lampiran 1, and the
+        # growth rates differ to match (4,8% against 4,6%). Without a universe of its own the
+        # DPK table read as a second opinion on the M2 one, and every such claim came back
+        # "tabel internal tidak konsisten" over a number that was right.
+        "dpk": re.compile(r"dana\s*pihak\s*ketiga|\bdpk\b", re.IGNORECASE),
     }
 
     def table_subject(self) -> Optional[str]:
         """Which statistical universe this table belongs to, or None when the title does not say.
 
         None means "no evidence either way" and callers must treat it as comparable with
-        anything — most tables (kredit, DPK, suku bunga) name no universe at all.
+        anything — most tables (kredit, suku bunga) name no universe at all.
+
+        Each pattern is tried against the title AND against a copy with the whitespace squeezed
+        out, because BI's PDFs break words on a stray space and the break lands mid-word:
+        Lampiran 2 of sample_data/M2-Juli-2026.pdf is captioned 'Pertumbuhan U ang Beredar',
+        which the spelt-out patterns cannot match however tolerant their own spacing is.
+        Squeezing alone is not enough either, since it destroys the word boundaries the M0/M2
+        abbreviations rely on, so the two passes are a union rather than substitutes.
         """
+        title = self.title or ""
+        squeezed = re.sub(r"\s+", "", title)
         found = [name for name, pattern in self._TABLE_SUBJECTS.items()
-                 if pattern.search(self.title or "")]
+                 if pattern.search(title) or pattern.search(squeezed)]
         # A title naming both ('Uang Primer' inside an M2 appendix) tells us nothing.
         return found[0] if len(found) == 1 else None
 

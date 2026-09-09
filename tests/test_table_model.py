@@ -288,10 +288,34 @@ def test_table_subject_recognises_both_the_spelt_out_name_and_the_abbreviation()
     assert subject("Tabel 9. Komponen M0 adjusted") == "m0"
     assert subject("Tabel 1. Uang Beredar dan Komponennya") == "m2"
     assert subject("Lampiran 2. Pertumbuhan Uang Beredar (M2)") == "m2"
+    # DPK is a WIDER aggregate than M2's uang kuasi and prints rows of the same name, so it has
+    # to be its own universe: 'Simpanan Berjangka' is 3.429,1 T in the DPK appendix and
+    # 3.236,9 T in the M2 one.
+    assert subject("Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah") == "dpk"
+    assert subject("Lampiran 3. Tabel Dana Pihak Ketiga di Perbankan") == "dpk"
+    assert subject("Tabel 3. Penghimpunan DPK") == "dpk"
     # Most tables name no universe at all and must stay comparable with anything.
     assert subject("Tabel 6. Perkembangan Kredit Berdasarkan Jenis") is None
     # A word that merely contains the abbreviation is not the abbreviation.
     assert subject("Laporan M0X eksperimental") is None
+
+
+def test_a_title_broken_by_a_stray_space_still_names_its_universe():
+    from table_model import TableData
+
+    def subject(title):
+        return TableData(title=title, unit="", row_labels=[]).table_subject()
+
+    # BI's PDFs break words on a stray space, and the break lands INSIDE the word: page 8 of
+    # sample_data/M2-Juli-2026.pdf is captioned 'Pertumbuhan U ang Beredar dan Faktor yang Mem
+    # engaruhinya'. 'uang\s*beredar' cannot match 'U ang Beredar', so that table classified as
+    # None and the cross-universe guard was silently dead on it.
+    assert subject("Lampiran 2. Pertumbuhan U ang Beredar dan Faktor yang Mem engaruhinya") == "m2"
+    assert subject("Lampiran 6. Tabel Uang Prim er dan Faktor-Faktor yang Memengaruhinya") == "m0"
+    assert subject("Lampiran 3. Tabel Dana Pihak Ket iga di Perbankan") == "dpk"
+    # Closing the gap must not open a new one: squeezing the spaces out cannot invent an
+    # abbreviation that was never printed as a word of its own.
+    assert subject("Laporan M 0X eksperimental") is None
 
 
 def test_a_bare_breakdown_claim_takes_the_aggregate_section():

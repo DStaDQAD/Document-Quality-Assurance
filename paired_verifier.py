@@ -1177,6 +1177,10 @@ def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
 # and 1,5% (aktiva luar negeri bersih), while the pairs that merely share a name start at 63,7%
 # and run past 100% (opposite signs). Anywhere in that gap works; 25% keeps a wide margin both
 # ways. Re-measure if a BI report of another kind starts carrying an M0 table.
+#
+# Those figures are LEVELS, and the separation they rest on does not exist between growth rates:
+# 4,8% and 4,6% are two different aggregates one percent apart. _may_contradict therefore never
+# consults this band for a growth series.
 _DIFFERENT_SERIES_GAP = 0.25
 
 
@@ -1205,14 +1209,27 @@ def _may_contradict(head: "_Candidate", other: "_Candidate") -> bool:
 
     They are still allowed to disagree when their numbers are close enough to be the same
     series measured on a different basis: Lampiran 1 says uang kartal is 1.186,3 and Lampiran 6
-    says 1.195,6, and that 9,3 T gap is a real thing for a reader to know about. Only the
-    implausible pairings are silenced, and only across universes — two credit tables that
-    disagree are reported however far apart they are.
+    says 1.195,6, and that 9,3 T gap is a real thing for a reader to know about. That leniency
+    is for LEVELS only — see the growth-series guard below. Only the implausible pairings are
+    silenced, and only across universes — two credit tables that disagree are reported however
+    far apart they are.
     """
     head_subject = head.src.table.table_subject()
     other_subject = other.src.table.table_subject()
     if head_subject is None or other_subject is None or head_subject == other_subject:
         return True
+    # _DIFFERENT_SERIES_GAP was measured on levels, where two readings of one series sit within
+    # 1,5% and two rows that merely share a name start at 63,7%. Growth rates carry no such
+    # separation: DPK's simpanan berjangka grew 4,8% and M2's narrower one 4,6%, four percent
+    # apart and nothing alike. On a growth table the value gap proves nothing, so a
+    # cross-universe pair is simply not comparable and the leniency below must not be reached.
+    if _is_growth_series(head.src.table.unit) or _is_growth_series(other.src.table.unit):
+        logger.info(
+            "Not reporting a conflict between [%s] (%s) and [%s] (%s): growth rates from "
+            "different statistical universes.",
+            head.src.label, head_subject, other.src.label, other_subject,
+        )
+        return False
     raw_head = head.resolved[0][1] if head.resolved else None
     raw_other = other.resolved[0][1] if other.resolved else None
     if raw_head is None or raw_other is None:

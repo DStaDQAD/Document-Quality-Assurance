@@ -156,3 +156,35 @@
   expected:
     verdict: Entailed
     computed_value: 10253.6519
+
+- id: no_conflict_across_statistical_universes
+  description: >
+    DPK and M2 both carry a row called 'Simpanan Berjangka', but DPK is the wider aggregate —
+    3.429,1 T against 3.236,9 T for Jul 2026 — so their growth rates differ by design. Real
+    figures from M2-Juli-2026.pdf, where this was reported as the report contradicting itself.
+    The M2 title is spelt with the split glyphs the PDF actually prints.
+  tables:
+    - title: "Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah"
+      unit: "%, yoy"
+      filename: "M2-Juli-2026.pdf"
+      sheet: "Hal. 3 · Tabel 4"
+      origin: pdf
+      data:
+        - {label: "Simpanan Berjangka", year: 2026, month: Jul, value: 4.8}
+    - title: "Lampiran 2. Pertumbuhan U ang Beredar dan Faktor yang Mem engaruhinya"
+      unit: "%, yoy"
+      filename: "M2-Juli-2026.pdf"
+      sheet: "Hal. 8 · Lampiran 2"
+      origin: pdf
+      data:
+        - {label: "Simpanan Berjangka", year: 2026, month: Jul, value: 4.6}
+  fact:
+    operation: yoy_growth
+    unit: "persen_yoy"
+    claimed_value: 4.8
+    context_quote: "Simpanan berjangka tumbuh sebesar 4,8% (yoy)"
+    periods:
+      - {metric_label: "Simpanan Berjangka", year: 2026, month: Jul}
+  expected:
+    verdict: Entailed
+    computed_value: 4.8
