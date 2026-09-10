@@ -743,6 +743,12 @@ _PAGE_MARKER_LINE = re.compile(r'^\[== Halaman \d+ ==\]$')
 _TABLE_PAGE_THRESHOLD = 0.70  # skip page entirely when ≥70% of classified lines are table rows
 # Titles that identify a page as a statistical appendix, not narrative
 _APPENDIX_TITLE_RE = re.compile(r'^(Lampiran|Tabel\s+[IVX]+\.)', re.IGNORECASE)
+# How many of a page's opening lines may be searched for that title. The caption is not always
+# the first one: the text layer hoists the running footer above it on every appendix page of
+# sample_data/M2-Juli-2026.pdf, so 'Departemen Statistik 10' leads and 'Lampiran 6. ...' follows.
+# Three leaves room for a header and a footer both landing on top, while staying far enough from
+# the body that a passing mention of an appendix inside prose cannot drop a narrative page.
+_APPENDIX_TITLE_LOOKAHEAD = 3
 # Lines that start with * or ** — could be a footnote/disclaimer marker (e.g. "*Angka sementara")
 # OR a markdown bullet point from the vision LLM (e.g. "*   M2 tumbuh sebesar 9,7% (yoy) ...").
 # Footnotes in these reports are pure prose with no dated figures; real narrative bullets always
@@ -816,9 +822,13 @@ def _filter_narrative(full_text: str) -> str:
         marker = raw_lines[0] if _PAGE_MARKER_LINE.match(raw_lines[0]) else None
         content_lines = raw_lines[1:] if marker else raw_lines
 
-        # Rule 1: skip appendix pages by their title
-        first_content = next((l for l in content_lines if len(l.split()) >= 3), "")
-        if _APPENDIX_TITLE_RE.match(first_content):
+        # Rule 1: skip appendix pages by their title, which sits at the top of the page but not
+        # always on its first line — see _APPENDIX_TITLE_LOOKAHEAD. Reading only the first line
+        # let all four appendix pages of the July report through, and its page-10 methodology
+        # footnote (the historical GWM positions, which no M2 report tabulates) turned into nine
+        # claims that could only ever come back "not enough data".
+        leading = [l for l in content_lines if len(l.split()) >= 3][:_APPENDIX_TITLE_LOOKAHEAD]
+        if any(_APPENDIX_TITLE_RE.match(l) for l in leading):
             logger.debug("Skipping appendix %s", marker or "page")
             continue
 

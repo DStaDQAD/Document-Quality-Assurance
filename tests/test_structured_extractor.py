@@ -183,6 +183,41 @@ def test_filter_narrative_keeps_prose_drops_footnotes_and_appendix_pages():
     assert "1.234,5" not in result
 
 
+def test_filter_narrative_drops_an_appendix_page_behind_a_running_footer():
+    # Measured on sample_data/M2-Juli-2026.pdf. The text layer hoists the running footer above
+    # the caption on every appendix page, so "Departemen Statistik 10" is the first content line
+    # and "Lampiran 6. ..." only the second. Reading one line let all four appendix pages through,
+    # and page 10's methodology footnote — a list of historical GWM policy positions, not a figure
+    # this report publishes — became nine claims no table could ever answer.
+    full_text = (
+        "[== Halaman 10 ==]\n"
+        "Departemen Statistik 10\n"
+        "Lampiran 6. Tabel Uang Primer dan Faktor -Faktor yang Memengaruhinya (Triliun Rp)\n"
+        "Keterangan:\n"
+        "2) Giro Bank Umum di BI Adjusted adalah Giro Bank Umum di BI yang telah mengisolasi "
+        "dampak insentif likuiditas. Posisi GWM Ketentuan untuk BUK adalah Januari 2020 (5,5%), "
+        "Mei 2020 (3%), Juli 2021 (3,5%).\n"
+    )
+
+    assert _filter_narrative(full_text) == ""
+
+
+def test_filter_narrative_keeps_a_narrative_page_that_captions_its_own_table():
+    # The guard the rule above must not trade away. Narrative pages carry snippet-table captions
+    # of their own, right at the top and behind the same footer — but they are Arabic-numbered
+    # ("Tabel 8."), which the appendix pattern deliberately does not match. Dropping these pages
+    # would cost real claims, which is a worse failure than the noise being fixed.
+    full_text = (
+        "[== Halaman 5 ==]\n"
+        "Departemen Statistik 5\n"
+        "Tabel 8. Kredit UMKM (triliun Rp)\n"
+        "Penyaluran kredit kepada UMKM pada Juli 2026 tumbuh sebesar 1,6% (yoy), meningkat "
+        "dibandingkan pertumbuhan bulan sebelumnya sebesar 1,0% (yoy).\n"
+    )
+
+    assert "tumbuh sebesar 1,6%" in _filter_narrative(full_text)
+
+
 def test_filter_narrative_drops_page_dominated_by_numeric_table_rows():
     full_text = (
         "[== Halaman 3 ==]\n"
