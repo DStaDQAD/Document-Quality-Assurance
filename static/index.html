@@ -594,6 +594,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   border-color: transparent; color: white; font-weight: 700;
   box-shadow: 0 2px 8px rgba(11,31,58,0.22);
 }
+.fact-empty { padding: 14px 0; }
 
 .material-symbols-outlined {
   font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
@@ -1624,11 +1625,11 @@ body.auth-locked .app {
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
-      <button class="filter-btn${defaultFilter === 'all' ? ' active' : ''}" data-filter="all">Semua (${total})</button>
-      <button class="filter-btn${defaultFilter === 'Refuted' ? ' active' : ''}" data-filter="Refuted">Tidak Sesuai (${r})</button>
-      <button class="filter-btn" data-filter="Entailed">Sesuai (${e})</button>
-      <button class="filter-btn" data-filter="Inconclusive">Tidak Cukup Data (${i})</button>
-      ${conflicts > 0 ? `<button class="filter-btn" data-filter="conflict">Sumber Bertentangan (${conflicts})</button>` : ""}
+      <button class="filter-btn${defaultFilter === 'all' ? ' active' : ''}" data-filter="all">Semua (<span class="filter-count">${total}</span>)</button>
+      <button class="filter-btn${defaultFilter === 'Refuted' ? ' active' : ''}" data-filter="Refuted">Tidak Sesuai (<span class="filter-count">${r}</span>)</button>
+      <button class="filter-btn" data-filter="Entailed">Sesuai (<span class="filter-count">${e}</span>)</button>
+      <button class="filter-btn" data-filter="Inconclusive">Tidak Cukup Data (<span class="filter-count">${i}</span>)</button>
+      ${conflicts > 0 ? `<button class="filter-btn" data-filter="conflict">Sumber Bertentangan (<span class="filter-count">${conflicts}</span>)</button>` : ""}
     </div>`;
 
     const uniqueSources = [...new Set(data.results.map((it) => it.matched_excel_source).filter(Boolean))];
@@ -1779,6 +1780,7 @@ body.auth-locked .app {
 
     const factPanel = `<div class="report-tab-panel active" data-report-panel="fact">
       ${toolbarRow}${filterBar}<div class="fact-cards">${cards}</div>
+      ${data.results.length ? `<p class="muted-text fact-empty" hidden>Tidak ada fakta yang cocok dengan filter ini.</p>` : ""}
     </div>`;
 
     const typoPanel = `<div class="report-tab-panel" data-report-panel="typo">
@@ -1837,20 +1839,36 @@ body.auth-locked .app {
     let currentSource = "";
     let currentPage = "";
 
+    // Each chip counts the cards the OTHER filters (search, source, page) leave standing, so
+    // its number is what clicking it would show.
     function applyFilters() {
       const q = currentSearch.trim().toLowerCase();
+      const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0 };
+      let visible = 0;
       resultEl.querySelectorAll(".fact-card").forEach((card) => {
+        const matchesOthers = (!currentSource || card.dataset.source === currentSource)
+          && (!currentPage || card.dataset.page === currentPage)
+          && (!q || card.dataset.search.includes(q));
+        if (matchesOthers) {
+          counts.all++;
+          counts[card.dataset.verdict] = (counts[card.dataset.verdict] || 0) + 1;
+          if (card.dataset.conflict === "1") counts.conflict++;
+        }
         // "conflict" is a filter over a separate axis from the verdicts, so it can't just
         // compare against data-verdict like the other chips do.
         const matchesVerdict = currentVerdict === "all"
           || (currentVerdict === "conflict"
                 ? card.dataset.conflict === "1"
                 : card.dataset.verdict === currentVerdict);
-        const matchesSource  = !currentSource || card.dataset.source === currentSource;
-        const matchesPage    = !currentPage || card.dataset.page === currentPage;
-        const matchesSearch  = !q || card.dataset.search.includes(q);
-        card.classList.toggle("hidden-fact", !(matchesVerdict && matchesSource && matchesPage && matchesSearch));
+        const show = matchesVerdict && matchesOthers;
+        card.classList.toggle("hidden-fact", !show);
+        if (show) visible++;
       });
+      resultEl.querySelectorAll(".filter-btn .filter-count").forEach((el) => {
+        el.textContent = counts[el.closest(".filter-btn").dataset.filter] ?? 0;
+      });
+      const emptyEl = resultEl.querySelector(".fact-empty");
+      if (emptyEl) emptyEl.hidden = visible > 0;
     }
 
     resultEl.querySelectorAll(".filter-btn").forEach((btn) => {
@@ -1870,6 +1888,8 @@ body.auth-locked .app {
 
     const pageSelect = resultEl.querySelector("#fact-page-select");
     if (pageSelect) pageSelect.addEventListener("change", () => { currentPage = pageSelect.value; applyFilters(); });
+
+    applyFilters();
   }
 
   // ══ Paired verification with streamed progress ══════════════════════
