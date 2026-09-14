@@ -307,6 +307,55 @@ def _m2_page_lines():
     return reading, visual
 
 
+def _umkm_page_lines():
+    """Page 5 of M2-Juni-2026.pdf: a two-column page where the header shares a line with prose.
+
+    The visual view is what normally rescues a split header, but here it ruins it: the narrative
+    column sits at the same height as the table's header, so sorting glyphs by x yields
+    "M i J * M i'26 J '26* bu la n sebel u m nya Rata rata te rti m ba ng s u ku b u nga" and no
+    period line can be read out of it. The reading view keeps the table's own line intact.
+
+    Measured cost of giving up here: the page reported "read 0 of 1 captioned table(s)", Tabel 8
+    never became a source, and seven UMKM claims were answered by economy-wide credit rows
+    instead — every one of them a false Tidak Sesuai.
+    """
+    reading = [
+        (557.10, "Pada Juni 2026 , suku bunga kredit dan suku bunga"),
+        (553.49, "Tabel 8. Kredit UMKM (triliun Rp)"),
+        (537.88, "simpanan mengalami peningkatan dibandingkan"),
+        (532.24, "2026 % (yoy)"),
+        (524.55, "Keterangan"),
+        (518.84, "Mei Jun* Mei'26 Jun'26*"),
+        (518.61, "bulan sebelumnya. Rata-rata tertimbang suku bunga"),
+        (502.60, "Skala Usaha"),
+        (489.46, "Mikro 664,7 664,1 0,6 1,5"),
+        (475.77, "Kecil 509,9 517,3 (0,3) 0,1"),
+        (462.05, "Menengah 334,8 337,7 1,8 1,6"),
+        (447.26, "Jenis Penggunaan"),
+        (434.68, "Modal Kerja 1.002,6 1.008,5 (4,5) (4,3)"),
+        (420.96, "Investasi 506,9 510,6 12,5 13,5"),
+        (407.59, "Total UMKM 1.509,5 1.519,1 0,6 1,0"),
+    ]
+    # The polluted line sits WHERE the clean header is in the reading view — it replaces it
+    # rather than joining it, which is the whole difficulty: the visual view has no period
+    # line to give, and every other page's header is only readable there.
+    visual = [
+        (518.68, "M i J * M i'26 J '26* bu la n sebel u m nya Rata rata te rti m ba ng s u ku b u nga"),
+    ] + [line for line in reading if line[1] != "Mei Jun* Mei'26 Jun'26*"]
+    return reading, visual
+
+
+def test_tables_on_page_reads_a_header_the_visual_view_cannot_give():
+    tables, captions = _tables_on_page(*_umkm_page_lines(), 5)
+
+    assert captions == 1
+    assert tables, "the caption must still produce a table"
+    umkm = [row for t in tables for row in t.grid if row and row[0] == "Total UMKM"]
+    assert umkm, "the UMKM rows are in the reading view and must survive"
+    assert any(1.0 in row for row in umkm), "Juni's 1,0% (yoy) is what seven false verdicts turned on"
+    assert any(1519.1 in row for row in umkm), "and its level, for the claims stated in triliun"
+
+
 def test_tables_on_page_rebuilds_a_table_from_lines():
     tables, captions = _tables_on_page(*_m2_page_lines(), 7)
     assert captions == 1

@@ -1152,15 +1152,24 @@ def _tables_on_page(
         floor = captions[order + 1][0] if order + 1 < len(captions) else float("-inf")
 
         # Header, years and unit come from the VISUAL view: a header split across text objects
-        # only reassembles when its glyphs are sorted by x.
+        # only reassembles when its glyphs are sorted by x. When that view cannot produce one,
+        # fall back to the READING view — on a two-column page the narrative sits at the same
+        # height as the table's header, so sorting by x glues the two into
+        # "M i J * M i'26 J '26* bu la n sebel u m nya Rata rata te rti m ba ng s u ku b u nga"
+        # while the reading view keeps the table's own line ("Mei Jun* Mei'26 Jun'26*") intact.
+        # Page 5 of M2-Juni-2026.pdf gave up here, so Tabel 8 never became a source and seven
+        # UMKM claims were answered by economy-wide credit rows instead.
         header_y: Optional[float] = None
         periods: Optional[List[str]] = None
-        for y, text in sorted(visual, key=lambda item: -item[0]):
-            if not (floor < y < caption_y):
-                continue
-            found = _line_periods(text.strip())
-            if found is not None:
-                header_y, periods = y, found
+        for view in (visual, reading):
+            for y, text in sorted(view, key=lambda item: -item[0]):
+                if not (floor < y < caption_y):
+                    continue
+                found = _line_periods(text.strip())
+                if found is not None:
+                    header_y, periods = y, found
+                    break
+            if periods is not None:
                 break
         if periods is None:
             continue
