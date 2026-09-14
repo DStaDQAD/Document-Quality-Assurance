@@ -6,9 +6,12 @@ before the result, the result payload matches the non-streaming endpoint, and a 
 failure is delivered in-band (the 200 and its headers are long gone by the time it happens).
 """
 
+import asyncio
 import json
+from io import BytesIO
 from unittest.mock import patch
 
+from fastapi import UploadFile
 from fastapi.testclient import TestClient
 
 import main
@@ -239,3 +242,40 @@ def test_stream_shares_one_narrative_extraction_between_both_checks(
     mock_extract_narrative_text.assert_called_once()
     assert mock_verify_paired.call_args.kwargs["narrative_text"] == mock_extract_narrative_text.return_value
     assert mock_check_typos.call_args.args[0] == mock_extract_narrative_text.return_value
+
+
+def test_stream_cancels_the_pipeline_when_the_client_goes_away():
+    """The UI's Batalkan button aborts the fetch. The pipeline runs as its own task, so unless
+    the stream cancels it, a cancelled run keeps extracting and spending LLM tokens for nobody."""
+    seen = {"cancelled": False}
+
+    async def pipeline_that_never_finishes(pdf_bytes, pdf_name, excel_sources, emit=None, **_kwargs):
+        emit({"type": "stage", "stage": "pdf", "status": "running"})
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            seen["cancelled"] = True
+            raise
+
+    async def disconnect_after_first_line():
+        with patch("main._run_paired_pipeline", pipeline_that_never_finishes):
+            response = await main.verify_paired_stream_endpoint(
+                pdf_file=UploadFile(file=BytesIO(b"%PDF-1.4 fake"), filename="report.pdf"),
+                excel_file=[UploadFile(file=BytesIO(b"xls-bytes"), filename="TABEL1_1.xls")],
+                sheet_names="I.1",
+                mode="excel",
+                run_typo_check=True,
+            )
+            stream = response.body_iterator
+            first_line = await stream.__anext__()
+            await stream.aclose()
+            for _ in range(5):
+                await asyncio.sleep(0)
+        # Read before asyncio.run returns: its shutdown cancels every leftover task itself,
+        # which would make this pass even if the stream never cancelled anything.
+        return first_line, seen["cancelled"]
+
+    first_line, cancelled = asyncio.run(disconnect_after_first_line())
+
+    assert json.loads(first_line)["stage"] == "pdf"
+    assert cancelled

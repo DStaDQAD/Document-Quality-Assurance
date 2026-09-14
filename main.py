@@ -720,19 +720,27 @@ async def verify_paired_stream_endpoint(
 
         task = asyncio.create_task(run())
 
-        while True:
-            event = await queue.get()
-            if event is done_sentinel:
-                break
-            yield json.dumps(event, ensure_ascii=False) + "\n"
-
+        # Starlette cancels this generator when the client disconnects (the UI's Batalkan
+        # button aborts the fetch). The pipeline is a separate task, so it has to be cancelled
+        # explicitly or it runs on — still calling the LLM — for a reader who has gone. Work
+        # already inside asyncio.to_thread finishes that one call; no later stage starts.
         try:
-            result = await task
-            payload = {"type": "result", "data": result.model_dump(mode="json")}
-        except Exception as exc:
-            logger.exception("Paired verification (stream) failed")
-            payload = {"type": "error", "detail": str(exc)}
-        yield json.dumps(payload, ensure_ascii=False) + "\n"
+            while True:
+                event = await queue.get()
+                if event is done_sentinel:
+                    break
+                yield json.dumps(event, ensure_ascii=False) + "\n"
+
+            try:
+                result = await task
+                payload = {"type": "result", "data": result.model_dump(mode="json")}
+            except Exception as exc:
+                logger.exception("Paired verification (stream) failed")
+                payload = {"type": "error", "detail": str(exc)}
+            yield json.dumps(payload, ensure_ascii=False) + "\n"
+        finally:
+            if not task.done():
+                task.cancel()
 
     return StreamingResponse(
         event_stream(),
