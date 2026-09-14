@@ -264,6 +264,9 @@ select { cursor: pointer; }
 }
 .dropzone-sm .material-symbols-outlined { color: var(--blue-500); font-size: 22px; }
 .dropzone-sm .dz-sub     { font-size: 11px; color: var(--text-400); }
+/* Brief flash when a dropped/picked file is the wrong type and was ignored */
+.dropzone-sm.is-rejected { border-color: #EF4444; background: #FFF5F5; }
+.dropzone-sm.is-rejected .dz-sub { color: var(--red-700); }
 .dropzone-sm .dz-filename { font-size: 11px; color: var(--blue-500); font-weight: 600; }
 
 /* ── Upload row ── */
@@ -1182,25 +1185,60 @@ body.auth-locked .app {
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   let excelSources = []; // [{container, inp, picker}]
 
-  function attachDropzoneBehavior(dz, inp, fn, onFile, placeholder = "Pilih file Excel") {
+  const isPdfFile   = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
+  const isExcelFile = (f) => /\.xlsx?$/i.test(f.name);
+
+  // One file per entry. Several files dropped (or picked) at once fill this entry with the
+  // first and open a new entry for each of the rest. Files of the wrong type are ignored with
+  // a brief flash, since `accept` only filters the picker dialog, never a drop.
+  // Returns assign(file), which puts a file into this entry as if it had been dropped on it.
+  function attachDropzoneBehavior(dz, inp, fn, { placeholder, accepts, rejectText, onFile, addEntry }) {
+    let current = null;
+    let flashTimer = null;
+
+    const showCurrent = () => setFilenameText(fn, current?.name || placeholder);
+    function keepOnly(file) {
+      const dt = new DataTransfer();
+      if (file) dt.items.add(file);
+      inp.files = dt.files;
+    }
+    function assign(file) {
+      current = file;
+      keepOnly(file);
+      showCurrent();
+      if (onFile) onFile(file);
+    }
+    function flashRejected() {
+      clearTimeout(flashTimer);
+      dz.classList.add("is-rejected");
+      setFilenameText(fn, rejectText);
+      flashTimer = setTimeout(() => { dz.classList.remove("is-rejected"); showCurrent(); }, 2500);
+    }
+    function take(fileList) {
+      const files = [...fileList];
+      const valid = files.filter(accepts);
+      if (!valid.length) {
+        // A rejected pick — or a cancelled dialog, which clears the input — must not
+        // take away the file already in this entry.
+        keepOnly(current);
+        if (files.length) flashRejected();
+        return;
+      }
+      assign(valid[0]);
+      valid.slice(1).forEach((f) => addEntry().assign(f));
+      if (valid.length < files.length) flashRejected();
+    }
+
     dz.addEventListener("click", () => inp.click());
-    inp.addEventListener("change", () => {
-      const file = inp.files[0];
-      setFilenameText(fn, file?.name || placeholder);
-      if (file && onFile) onFile(file);
-    });
+    inp.addEventListener("change", () => take(inp.files));
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
     dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
     dz.addEventListener("drop", (e) => {
       e.preventDefault();
       dz.classList.remove("drag-over");
-      const file = e.dataTransfer.files[0];
-      if (file) {
-        const dt = new DataTransfer(); dt.items.add(file); inp.files = dt.files;
-        setFilenameText(fn, file.name);
-        if (onFile) onFile(file);
-      }
+      take(e.dataTransfer.files);
     });
+    return assign;
   }
 
   // ── Multi-select sheet picker ─────────────────────────────────────────
@@ -1327,7 +1365,7 @@ body.auth-locked .app {
         <div class="dropzone-sm excel-dz" id="excel-dz-${uid}">
           <span class="material-symbols-outlined">table_chart</span>
           <div class="dz-sub" id="excel-fn-${uid}">Pilih file Excel</div>
-          <input type="file" id="excel-inp-${uid}" accept="${EXCEL_ACCEPT}" style="display:none">
+          <input type="file" id="excel-inp-${uid}" accept="${EXCEL_ACCEPT}" multiple style="display:none">
         </div>
         <button type="button" class="remove-excel-btn" title="Hapus" style="visibility:hidden">
           <span class="material-symbols-outlined">close</span>
@@ -1354,16 +1392,24 @@ body.auth-locked .app {
     const picker  = container.querySelector(".sheet-multiselect");
     const removeBtn = container.querySelector(".remove-excel-btn");
     initSheetPicker(picker);
-    attachDropzoneBehavior(dz, inp, fn, (file) => loadSheetsIntoPicker(file, picker));
+    const assign = attachDropzoneBehavior(dz, inp, fn, {
+      placeholder: "Pilih file Excel",
+      accepts: isExcelFile,
+      rejectText: "File selain Excel diabaikan",
+      onFile: (file) => loadSheetsIntoPicker(file, picker),
+      addEntry: addExcelSource,
+    });
     removeBtn.addEventListener("click", () => {
       if (excelSources.length <= 1) return;
       excelSources = excelSources.filter(s => s.container !== container);
       container.remove();
       updateRemoveButtons();
     });
-    excelSources.push({ container, inp, picker });
+    const src = { container, inp, picker, assign };
+    excelSources.push(src);
     document.getElementById("excel-sources-container").appendChild(container);
     updateRemoveButtons();
+    return src;
   }
 
   addExcelSource(); // initialize with one source
@@ -1390,7 +1436,7 @@ body.auth-locked .app {
         <div class="dropzone-sm" id="pdf-dz-${uid}">
           <span class="material-symbols-outlined">picture_as_pdf</span>
           <div class="dz-sub" id="pdf-fn-${uid}">Pilih file PDF</div>
-          <input type="file" id="pdf-inp-${uid}" accept="application/pdf" style="display:none">
+          <input type="file" id="pdf-inp-${uid}" accept="application/pdf" multiple style="display:none">
         </div>
         <button type="button" class="remove-excel-btn" title="Hapus" style="visibility:hidden">
           <span class="material-symbols-outlined">close</span>
@@ -1400,20 +1446,35 @@ body.auth-locked .app {
     const fn  = container.querySelector(`#pdf-fn-${uid}`);
     const dz  = container.querySelector(`#pdf-dz-${uid}`);
     const removeBtn = container.querySelector(".remove-excel-btn");
-    attachDropzoneBehavior(dz, inp, fn, null, "Pilih file PDF");
+    const assign = attachDropzoneBehavior(dz, inp, fn, {
+      placeholder: "Pilih file PDF",
+      accepts: isPdfFile,
+      rejectText: "File selain PDF diabaikan",
+      addEntry: addPdfSource,
+    });
     removeBtn.addEventListener("click", () => {
       if (pdfSources.length <= 1) return;
       pdfSources = pdfSources.filter(s => s.container !== container);
       container.remove();
       updatePdfRemoveButtons();
     });
-    pdfSources.push({ container, inp });
+    const src = { container, inp, assign };
+    pdfSources.push(src);
     document.getElementById("pdf-sources-container").appendChild(container);
     updatePdfRemoveButtons();
+    return src;
   }
 
   addPdfSource(); // initialize with one PDF field
   document.getElementById("add-pdf-btn").addEventListener("click", addPdfSource);
+
+  // A drop that misses a dropzone would make the browser open the file in place of the app,
+  // throwing away every pick made so far. Outside a dropzone, show "not allowed" instead.
+  document.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    if (!e.target.closest?.(".dropzone-sm")) e.dataTransfer.dropEffect = "none";
+  });
+  document.addEventListener("drop", (e) => e.preventDefault());
 
   // ── Advanced settings: which tables the claims are compared against, and whether the
   // spelling/grammar pass runs. Both are read by the submit handler below. ──
