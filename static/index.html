@@ -127,20 +127,9 @@ textarea, input, select, button { font-family: inherit; }
 .content::-webkit-scrollbar-track { background: transparent; }
 .content::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 2px; }
 
-.page-footer {
-  height: 40px; background: var(--white); border-top: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 0 28px; flex-shrink: 0;
-}
-.footer-text { font-size: 11px; color: var(--text-400); }
-.footer-links { display: flex; gap: 20px; }
-.footer-links a { font-size: 11px; color: var(--text-400); cursor: pointer; text-decoration: none; transition: color 0.12s; }
-.footer-links a:hover { color: var(--navy-900); }
-
 /* ── Panels ── */
 .panel { display: none; }
 .panel.active { display: block; }
-.panel-wrap { max-width: 680px; margin: 0 auto; }
 .panel-wrap-wide { max-width: 1040px; margin: 0 auto; }
 
 /* ── Cards ── */
@@ -220,34 +209,11 @@ select { cursor: pointer; }
 .cancel-btn .material-symbols-outlined { font-size: 16px; }
 
 /* ── Dropzones ── */
-.dropzone {
-  border: 2px dashed var(--border); border-radius: var(--r-lg);
-  padding: 38px 20px;
-  display: flex; flex-direction: column;
-  align-items: center; justify-content: center;
-  cursor: pointer; text-align: center;
-  transition: all 0.15s;
-  background: linear-gradient(180deg, #FAFCFF, var(--page-bg));
-}
-.dropzone:hover, .dropzone.drag-over {
-  border-color: var(--blue-400);
-  background: linear-gradient(180deg, #F0F6FF, #E8F0FF);
-  box-shadow: 0 0 0 4px rgba(59,130,246,0.08);
-}
-.dz-icon {
-  width: 56px; height: 56px;
-  background: linear-gradient(135deg, var(--blue-100), var(--blue-50));
-  border-radius: 10px; border: 1px solid var(--blue-200);
-  display: flex; align-items: center; justify-content: center; margin-bottom: 12px;
-}
-.dz-icon .material-symbols-outlined { color: var(--blue-500); font-size: 26px; }
-.dz-title { font-size: 13px; font-weight: 600; color: var(--text-900); margin-bottom: 3px; }
 .dz-sub   {
   font-size: 11px; color: var(--text-400);
   width: 100%; max-width: 100%; overflow: hidden;
   text-overflow: ellipsis; white-space: nowrap;
 }
-.dz-filename { font-size: 11px; color: var(--blue-500); margin-top: 8px; font-weight: 600; }
 
 .dropzone-sm {
   border: 2px dashed var(--border); border-radius: var(--r);
@@ -267,7 +233,6 @@ select { cursor: pointer; }
 /* Brief flash when a dropped/picked file is the wrong type and was ignored */
 .dropzone-sm.is-rejected { border-color: #EF4444; background: #FFF5F5; }
 .dropzone-sm.is-rejected .dz-sub { color: var(--red-700); }
-.dropzone-sm .dz-filename { font-size: 11px; color: var(--blue-500); font-weight: 600; }
 
 /* ── Upload row ── */
 .upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -277,8 +242,6 @@ select { cursor: pointer; }
   font-size: 10px; font-weight: 700; color: var(--text-500);
   text-transform: uppercase; letter-spacing: 0.07em;
 }
-.sheet-row { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
-.sheet-row label { font-size: 13px; color: var(--text-500); white-space: nowrap; }
 
 /* ── Advanced settings (in-flow disclosure) ──
    Deliberately NOT a popover: .card has overflow:hidden, which is the only reason the
@@ -325,23 +288,7 @@ select { cursor: pointer; }
 .upload-field.is-muted { opacity: 0.45; }
 .upload-field.is-muted .dropzone-sm, .upload-field.is-muted .add-excel-btn { pointer-events: none; }
 
-/* ── Result: claim cards ── */
-.claim-card {
-  background: var(--white);
-  border: 1px solid var(--border);
-  border-left: 4px solid var(--border);
-  border-radius: var(--r-lg);
-  padding: 15px 18px; margin-bottom: 10px;
-  box-shadow: 0 2px 8px rgba(11,31,58,0.05);
-  transition: box-shadow 0.15s;
-}
-.claim-card:hover { box-shadow: 0 4px 16px rgba(11,31,58,0.09); }
-.claim-card.Entailed     { border-left-color: #22C55E; background: linear-gradient(to right, #F0FDF6, white 60%); }
-.claim-card.Refuted      { border-left-color: #EF4444; background: linear-gradient(to right, #FFF5F5, white 60%); }
-.claim-card.Inconclusive { border-left-color: #F59E0B; background: linear-gradient(to right, #FFFBF0, white 60%); }
-.claim-card.Error        { border-left-color: #9CA3AF; }
-.claim-text { font-weight: 600; font-size: 13px; color: var(--text-900); margin-bottom: 7px; line-height: 1.5; }
-
+/* ── Verdict badges ── */
 .badge {
   display: inline-flex; align-items: center;
   font-size: 10px; font-weight: 700;
@@ -351,26 +298,8 @@ select { cursor: pointer; }
 .badge.Entailed     { background: linear-gradient(135deg, #D1FAE5, #A7F3D0); color: var(--green-700); }
 .badge.Refuted      { background: linear-gradient(135deg, #FEE2E2, #FECACA); color: var(--red-700); }
 .badge.Inconclusive { background: linear-gradient(135deg, #FEF3C7, #FDE68A); color: var(--amber-700); }
-.badge.Error        { background: #F3F4F6; color: #374151; }
 
-.reasoning { font-size: 12px; line-height: 1.65; color: var(--text-500); margin: 4px 0 2px; }
-
-pre.sql {
-  position: relative;
-  background: linear-gradient(180deg, #0D1117, #111827);
-  color: #C9D1D9;
-  font-family: 'JetBrains Mono', ui-monospace, monospace;
-  padding: 26px 14px 12px; border-radius: var(--r);
-  font-size: 11px; overflow-x: auto; margin: 10px 0 0;
-  border: 1px solid rgba(255,255,255,0.06);
-}
-pre.sql::before {
-  content: "SQL"; position: absolute; top: 9px; left: 14px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.1em;
-  color: rgba(59,130,246,0.5);
-}
-
-/* ── Loading / error / summary ── */
+/* ── Loading / error ── */
 .loading {
   color: var(--text-500); font-size: 13px;
   display: flex; align-items: center; gap: 9px; padding: 14px 0;
@@ -437,39 +366,7 @@ pre.sql::before {
   color: #991B1B; padding: 11px 15px;
   border-radius: var(--r); margin-top: 10px; font-size: 13px;
 }
-.summary-line {
-  font-size: 13px; margin-bottom: 14px; padding: 11px 15px;
-  background: linear-gradient(135deg, #EFF6FF, #F0F8FF);
-  border: 1px solid var(--blue-100); border-radius: var(--r-lg);
-  color: var(--text-900); line-height: 1.6;
-}
 .muted-text { font-size: 13px; color: var(--text-400); }
-
-/* ── Table-family suggestions for unfound (Inconclusive) claims ── */
-.table-suggestions {
-  position: relative;
-  background: linear-gradient(135deg, #FFFBEB, #FEFCE8);
-  border: 1px solid #FDE68A;
-  border-left: 3px solid #F59E0B;
-  border-radius: var(--r-lg);
-  padding: 12px 34px 12px 15px; margin-bottom: 14px;
-  font-size: 13px; color: var(--text-900); line-height: 1.55;
-}
-.notice-close {
-  position: absolute; top: 8px; right: 8px;
-  display: flex; align-items: center; justify-content: center;
-  border: none; background: transparent; cursor: pointer;
-  color: #B45309; padding: 3px; border-radius: 6px;
-}
-.notice-close .material-symbols-outlined { font-size: 17px; }
-.notice-close:hover { background: rgba(245, 158, 11, .18); }
-.table-suggestions-title {
-  display: flex; align-items: center; gap: 7px;
-  font-weight: 600; margin-bottom: 8px;
-}
-.table-suggestions-title .material-symbols-outlined { font-size: 18px; color: #F59E0B; }
-.table-suggestion-item { padding: 5px 0 5px 25px; }
-.table-suggestion-metrics { font-size: 12px; color: var(--text-500); margin-top: 2px; }
 
 /* ── Data table card ── */
 .data-card {
@@ -507,7 +404,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .remove-excel-btn .material-symbols-outlined { font-size: 14px; }
 .source-sheet-row { display: flex; align-items: center; gap: 8px; }
 .source-sheet-row label { font-size: 11px; color: var(--text-500); white-space: nowrap; }
-.source-sheet-row input { width: 72px; }
 /* Multi-select sheet picker: a select-look toggle opening a checkbox panel */
 .sheet-multiselect { position: relative; flex: 1; min-width: 0; max-width: 240px; }
 .sheet-ms-toggle {
@@ -562,7 +458,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   border-radius: 4px; padding: 1px 6px; white-space: nowrap;
   max-width: 240px; overflow: hidden; text-overflow: ellipsis;
 }
-/* ── Paired legacy (kept for safety) ── */
+/* ── Shared small labels ── */
 .na { color: var(--text-400); }
 .page-badge {
   display: inline-flex; align-items: center;
@@ -719,8 +615,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 }
 
 /* ── Paired: typo/grammar section ── */
-.typo-section { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
-.typo-section-title { font-size: 14px; font-weight: 700; color: var(--text-900); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
 .typo-stat-chips { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .typo-chip {
   font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
@@ -1607,13 +1501,6 @@ body.auth-locked .app {
     const num = fmtNumber(val);
     if (unit === "persen_yoy") return `${num}%`;
     return unit ? `${num} ${unit}` : `${num}`;
-  }
-
-  function fmtDelta(delta, verdict) {
-    if (delta === null || delta === undefined) return '<span class="na">—</span>';
-    const cls = verdict === "Entailed" ? "delta-ok" : "delta-bad";
-    const num = Number(delta).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 4 });
-    return `<span class="${cls}">${num}</span>`;
   }
 
   function renderDonutSVG(e, r, i) {
