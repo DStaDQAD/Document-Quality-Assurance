@@ -464,15 +464,22 @@ def _growth_tolerance(current: float, prior: float) -> float:
     report's own 1,5% sits comfortably inside that. Comparing against the bare 0,05 tolerance
     reported Tidak Sesuai on a figure the document had every right to print.
 
-    The band shrinks to nothing as the base grows (on 2.153,6 it is 0,005pp), so this changes
-    nothing for the ordinary case and only stops the checker from claiming precision the
-    source never had. A directly-printed growth cell is unaffected — there is no division.
+    The band is ADDED to the ordinary tolerance rather than compared against it: the claim's
+    own rounding (what MATCH_TOLERANCE stands for) and the levels' rounding are independent
+    sources of slack, and taking the larger threw the smaller away. On M2-Juni-2026 the report
+    printed 37,4% (yoy) while its own levels 799,0 / 581,3 imply 37,4505% — Δ = 0,0505, refuted
+    by half a thousandth of a point, because the 0,0204 the levels carry was discarded for
+    being smaller than 0,05.
+
+    The band shrinks to nothing as the base grows (on 9.387,9 it is 0,001pp), so this stays a
+    rounding allowance rather than a blanket loosening. A directly-printed growth cell is
+    unaffected — there is no division.
     """
     if not prior:
         return MATCH_TOLERANCE
     half = _printing_step(prior) / 2
     band = 100 * (half / abs(prior)) * (1 + abs(current / prior))
-    return max(MATCH_TOLERANCE, round(band, 4))
+    return round(MATCH_TOLERANCE + band, 4)
 
 
 def _make_result(

@@ -11,6 +11,8 @@ from paired_verifier import (
     _build_table_suggestions,
     _deduplicate_facts,
     _evaluate_fact,
+    _growth_tolerance,
+    _numeric_verdict,
     _parse_scale_unit,
     _parse_table_with_fallback,
     _pointer_pass,
@@ -1358,6 +1360,45 @@ def test_cascade_raises_combined_error_when_both_parsers_fail():
         _parse_table_with_fallback(b"not an excel file at all", "S")
 
 
+# ---------------------------------------------------------------------------
+# Rounding: a growth computed from printed levels carries TWO uncertainties
+# ---------------------------------------------------------------------------
+
+def test_growth_tolerance_adds_the_claims_own_rounding_to_the_level_band():
+    """M2-Juni-2026: the report prints 37,4% (yoy) and its own Lampiran levels (799,0 and
+    581,3) imply 37,4505%. The claim is a correct rounding of that figure, but the two
+    uncertainties were combined with max(): the level band is 0,0204 and never beats the
+    claim's own half-step of 0,05, so the pair was judged at 0,05 and Δ = 0,0505 came back
+    Tidak Sesuai by half a thousandth of a point. The two are independent, so they add."""
+    tolerance = _growth_tolerance(799.0, 581.3)
+    delta, verdict = _numeric_verdict(37.4, 37.4505, tolerance)
+
+    assert verdict == "Entailed", f"delta={delta} tolerance={tolerance}"
+
+
+def test_growth_tolerance_covers_the_giro_case_too():
+    """Same document, same shape: 12,6% claimed against 12,6537% computed from 852,0 / 756,3."""
+    tolerance = _growth_tolerance(852.0, 756.3)
+    _, verdict = _numeric_verdict(12.6, 12.6537, tolerance)
+
+    assert verdict == "Entailed"
+
+
+def test_growth_tolerance_still_refuses_a_figure_rounding_cannot_explain():
+    """The widened band must stay a rounding allowance, not a blanket amnesty."""
+    tolerance = _growth_tolerance(799.0, 581.3)
+    _, verdict = _numeric_verdict(36.9, 37.4505, tolerance)
+
+    assert verdict == "Refuted"
+
+
+def test_growth_tolerance_on_a_large_base_stays_tight():
+    """The level band shrinks as the base grows, so an ordinary claim is judged as before."""
+    tolerance = _growth_tolerance(10432.8, 9595.3)
+
+    assert tolerance < 0.06
+
+
 @patch("paired_verifier.parse_table_with_llm")
 @patch("paired_verifier.parse_generic_table")
 @patch("paired_verifier.parse_bi_table")
@@ -1665,9 +1706,11 @@ def test_growth_tolerance_widens_only_where_rounding_actually_bites():
     # 7,6 against 7,5: each is printed to a tenth, so the growth they imply carries more than
     # a point of slack and the report's own 1,5% is inside it.
     assert _growth_tolerance(7.6, 7.5) > 1.0
-    # On a base three orders of magnitude larger the rounding is irrelevant and the ordinary
-    # tolerance stands — this must not become a blanket loosening.
-    assert _growth_tolerance(10253.7, 9387.9) == MATCH_TOLERANCE
+    # On a base three orders of magnitude larger the levels' own rounding is worth a thousandth
+    # of a point, so the tolerance stays within a hair of the ordinary one — this must not
+    # become a blanket loosening. (It is no longer EQUAL to it: the levels' band is added to the
+    # claim's own rounding rather than replacing it, so that neither uncertainty is discarded.)
+    assert MATCH_TOLERANCE < _growth_tolerance(10253.7, 9387.9) < MATCH_TOLERANCE + 0.01
 
 
 def test_yoy_refuses_a_prior_year_value_equal_to_the_claimed_growth():
