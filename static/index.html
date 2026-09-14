@@ -297,6 +297,8 @@ select { cursor: pointer; }
   display: flex; flex-direction: column; gap: 14px;
   border-top: 1px solid var(--border); margin-top: 12px; padding-top: 14px;
 }
+/* Without this the display:flex above beats the hidden attribute and the panel never closes. */
+.adv-panel[hidden] { display: none; }
 .adv-field { display: flex; flex-direction: column; gap: 7px; }
 .segmented { display: flex; flex-wrap: wrap; gap: 0; }
 .seg-btn {
