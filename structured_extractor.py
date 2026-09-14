@@ -870,16 +870,72 @@ def _filter_narrative(full_text: str) -> str:
     return "\n".join(result_parts)
 
 
+_PAGE_MARKER_ONLY_RE = re.compile(r'\[== Halaman \d+ ==\]')
+
+
+def _split_oversized_block(block: str, max_chars: int) -> List[str]:
+    """Cut one page block into budget-sized pieces, repeating its page marker on each.
+
+    A page block is normally kept whole, and nearly always fits. It stops fitting when the
+    vision narrative pass runs away: on a scanned report one batch came back with a single
+    page marker for three pages and 248.339 chars of text — 6,5x what the document actually
+    contains — and that one block went to the extraction model as a 240.867-char call
+    (in=175.790 out=168.769 tokens, 575s, against 62.877/16.741 and 44s for the same report's
+    digital twin). Staying under the budget is the entire point of chunking, so a block that
+    large is cut on line boundaries instead of sent whole.
+
+    The marker is repeated on every piece because each extracted fact is attributed to the page
+    its chunk names; a piece without one would file its facts under the previous page. A single
+    line longer than the budget is still emitted intact — truncating it would delete a claim.
+    """
+    match = _PAGE_MARKER_ONLY_RE.match(block)
+    prefix = f"{match.group(0)}\n" if match else ""
+    body = block[match.end():].lstrip("\n") if match else block
+
+    # A block ends with a newline, so split() leaves a trailing empty line. Carried into the
+    # loop it becomes a piece of its own — a whole LLM call for a page marker and nothing else.
+    lines = body.split("\n")
+    while lines and not lines[-1].strip():
+        lines.pop()
+    if not lines:
+        return [block]
+
+    pieces: List[str] = []
+    current: List[str] = []
+    current_len = len(prefix)
+    for line in lines:
+        if current and current_len + len(line) + 1 > max_chars:
+            pieces.append(prefix + "\n".join(current) + "\n")
+            current = []
+            current_len = len(prefix)
+        current.append(line)
+        current_len += len(line) + 1
+    if current:
+        pieces.append(prefix + "\n".join(current) + "\n")
+    return pieces or [block]
+
+
 def _split_into_page_chunks(filtered_text: str, max_chars: int) -> List[str]:
-    """Split page-marker-annotated text into chunks ≤ max_chars, keeping page blocks together."""
+    """Split page-marker-annotated text into chunks ≤ max_chars, keeping page blocks together.
+
+    A page block larger than the budget on its own is cut down first (see
+    _split_oversized_block), so one runaway page can no longer become one enormous LLM call.
+    """
     page_blocks = re.split(r'(?=\[== Halaman \d+ ==\])', filtered_text)
     page_blocks = [b for b in page_blocks if b.strip()]
+
+    sized_blocks: List[str] = []
+    for block in page_blocks:
+        if len(block) > max_chars:
+            sized_blocks.extend(_split_oversized_block(block, max_chars))
+        else:
+            sized_blocks.append(block)
 
     chunks: List[str] = []
     current: List[str] = []
     current_len = 0
 
-    for block in page_blocks:
+    for block in sized_blocks:
         if current_len + len(block) > max_chars and current:
             chunks.append("".join(current))
             current = [block]
