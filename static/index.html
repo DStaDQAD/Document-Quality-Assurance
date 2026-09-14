@@ -662,6 +662,26 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 }
 .fact-source-chip.is-conflicting { background: #F5F3FF; border-color: #DDD6FE; color: #5B21B6; }
 
+/* The backend's reasoning, folded away by default: the card already carries the verdict and
+   the numbers, this is for the reader who wants to know which row and which formula gave them. */
+.fact-detail { margin-top: 10px; }
+.fact-detail summary {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-size: 12px; font-weight: 600; color: var(--blue-500);
+  cursor: pointer; list-style: none; user-select: none;
+}
+.fact-detail summary::-webkit-details-marker { display: none; }
+.fact-detail summary:hover { color: var(--blue-600); }
+.fact-detail summary .material-symbols-outlined { font-size: 16px; transition: transform 0.15s; }
+.fact-detail[open] summary .material-symbols-outlined { transform: rotate(180deg); }
+.fact-detail ul {
+  list-style: none; margin-top: 8px; padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  display: flex; flex-direction: column; gap: 3px;
+  font-size: 12px; line-height: 1.6; color: var(--text-500);
+  overflow-wrap: anywhere;
+}
+
 .fact-card-top {
   display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
 }
@@ -1712,6 +1732,16 @@ body.auth-locked .app {
               }).join("")}</div>`
             : "";
 
+          // The backend's own account of the verdict — matched row, formula, tolerance, any cell
+          // the AI pointed at — arrives as " | "-separated parts; one line each.
+          const reasonParts = (item.reasoning || "").split(" | ").map((s) => s.trim()).filter(Boolean);
+          const detail = reasonParts.length
+            ? `<details class="fact-detail">
+                <summary>Detail <span class="material-symbols-outlined">expand_more</span></summary>
+                <ul>${reasonParts.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
+              </details>`
+            : "";
+
           const hidden = defaultFilter !== "all" && verdict !== defaultFilter ? " hidden-fact" : "";
           const searchText = escapeHtml(`${item.metric_label} ${item.context_quote || ""}`.toLowerCase());
           return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-search="${searchText}">
@@ -1728,6 +1758,7 @@ body.auth-locked .app {
             ${periodChips}
             <div class="fact-comparison">${comparison}</div>
             ${sourceChips}
+            ${detail}
           </div>`;
         }).join("");
 
