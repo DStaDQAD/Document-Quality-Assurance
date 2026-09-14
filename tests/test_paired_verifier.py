@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from cell_pointer import _BatchCellPointers, _CellPointer
+from cell_pointer import _MultiCellPointer, _MultiSourcePointers, _SheetUnit
 from excel_parser_bi import BITableData
 from langchain_core.runnables import RunnableLambda
 from paired_verifier import (
@@ -1050,7 +1050,9 @@ def test_pointer_pass_resolves_value_claim_with_provenance():
     fact = _kpr_fact()
     results = [_evaluate_fact(fact, [src])]
     assert results[0].verdict == "Inconclusive"
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=2)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=2)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
 
@@ -1065,7 +1067,9 @@ def test_pointer_pass_out_of_range_pointer_keeps_original_inconclusive():
     src = _pointer_only_source(_POINTER_GRID)
     fact = _kpr_fact()
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=9, col=9)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=9, col=9)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
 
@@ -1087,7 +1091,9 @@ def test_pointer_pass_rejects_pointer_at_row_unrelated_to_metric():
         claimed_value=1.03, unit="",
     )
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=2)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=2)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
 
@@ -1100,7 +1106,9 @@ def test_pointer_pass_non_numeric_cell_keeps_original_inconclusive():
     src = _pointer_only_source(_POINTER_GRID)
     fact = _kpr_fact()
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=2, col=1)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=2, col=1)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
 
@@ -1124,9 +1132,9 @@ def test_pointer_pass_yoy_uses_synthesized_prior_year_cell():
     src = _pointer_only_source(grid)
     fact = _kpr_fact(operation="yoy_growth", claimed_value=5.0, unit="persen_yoy")
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(pointers=[
-        _CellPointer(query_index=0, found=True, row=1, col=2),  # 2026 Q2 = 42.0
-        _CellPointer(query_index=1, found=True, row=1, col=1),  # 2025 Q2 = 40.0
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=2),  # 2026 Q2 = 42.0
+        _MultiCellPointer(source_index=0, query_index=1, found=True, row=1, col=1),  # 2025 Q2 = 40.0
     ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
@@ -1142,7 +1150,9 @@ def test_pointer_pass_wrong_numeric_cell_yields_attributed_verdict():
     src = _pointer_only_source(_POINTER_GRID)
     fact = _kpr_fact()  # claims 40.63, pointer aims at 38.0
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
 
@@ -1152,7 +1162,7 @@ def test_pointer_pass_wrong_numeric_cell_yields_attributed_verdict():
     assert "R1K1" in new[0].reasoning
 
 
-def test_pointer_pass_batches_all_facts_into_one_call_per_source():
+def test_pointer_pass_batches_every_fact_into_one_call():
     src = _pointer_only_source(_POINTER_GRID)
     facts = [
         _kpr_fact(),
@@ -1160,15 +1170,15 @@ def test_pointer_pass_batches_all_facts_into_one_call_per_source():
                   claimed_value=99.9),
     ]
     results = [_evaluate_fact(f, [src]) for f in facts]
-    batch = _BatchCellPointers(pointers=[
-        _CellPointer(query_index=0, found=True, row=1, col=2),
-        _CellPointer(query_index=1, found=True, row=2, col=2),
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=2),
+        _MultiCellPointer(source_index=0, query_index=1, found=True, row=2, col=2),
     ])
     log = []
 
     new, n = asyncio.run(_pointer_pass(facts, results, [src], _pointer_llm(batch, log)))
 
-    assert len(log) == 1  # one batched call for the whole source
+    assert len(log) == 1  # one batched call for the whole document
     assert n == 2
     assert all(r.resolved_via == "pointer" for r in new)
 
@@ -1180,7 +1190,9 @@ def test_pointer_pass_skips_a_source_that_cannot_hold_any_queried_metric():
     fact = _kpr_fact()
     results = [_evaluate_fact(fact, [src])]
     log = []
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1)
+    ])
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch, log)))
 
@@ -1190,8 +1202,10 @@ def test_pointer_pass_skips_a_source_that_cannot_hold_any_queried_metric():
 
 
 def test_pointer_pass_asks_each_source_only_about_metrics_it_could_hold():
-    # Two sheets, one metric each: neither should be asked about the other's metric, and
-    # both facts must still resolve — the query indices are renumbered per source.
+    # Two sheets, one metric each: neither may be asked about the other's metric, and both
+    # facts must still resolve. They now share ONE call, so that filtering shows up as each
+    # source's own "asks:" line instead of as a separate call, and the query list is numbered
+    # once for the whole document rather than per source.
     kpr_src = _pointer_only_source([["Metrik", "x"], ["KPR/KPA", 40.63]])
     dev_src = _pointer_only_source([["Metrik", "x"], ["Cadangan Devisa", 12.5]])
     facts = [
@@ -1200,17 +1214,20 @@ def test_pointer_pass_asks_each_source_only_about_metrics_it_could_hold():
                   claimed_value=12.5),
     ]
     results = [_evaluate_fact(f, [kpr_src, dev_src]) for f in facts]
-    # Each source sees exactly one query, so both answer at local index 0.
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1),
+        _MultiCellPointer(source_index=1, query_index=1, found=True, row=1, col=1),
+    ])
     log = []
 
     new, n = asyncio.run(
         _pointer_pass(facts, results, [kpr_src, dev_src], _pointer_llm(batch, log))
     )
 
-    assert len(log) == 2
-    for prompt_value in log:
-        assert "1." not in prompt_value.to_string().split("QUERIES:")[1]
+    assert len(log) == 1
+    prompt = log[0].to_string()
+    assert "asks: 0\n" in prompt
+    assert "asks: 1\n" in prompt
     assert n == 2
     assert [r.verdict for r in new] == ["Entailed", "Entailed"]
 
@@ -1237,10 +1254,12 @@ def test_verify_paired_end_to_end_pointer_resolution_on_unparseable_sheet(mock_e
     )
     mock_extract_facts.return_value = [fact]
 
-    batch = _BatchCellPointers(pointers=[_CellPointer(query_index=0, found=True, row=1, col=1)])
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1)
+    ])
 
     def _structured(schema, **_kw):
-        if schema is _BatchCellPointers:
+        if schema is _MultiSourcePointers:
             return RunnableLambda(lambda _pv: batch)
 
         def _fail(_pv):
@@ -1273,9 +1292,9 @@ def test_pointer_pass_sheet_unit_enables_scale_conversion_on_pointer_only_source
         claimed_value=8.9, unit="triliun Rp",
     )
     results = [_evaluate_fact(fact, [src])]
-    batch = _BatchCellPointers(
-        sheet_unit="Miliar Rp",
-        pointers=[_CellPointer(query_index=0, found=True, row=0, col=1)],
+    batch = _MultiSourcePointers(
+        units=[_SheetUnit(source_index=0, unit="Miliar Rp")],
+        pointers=[_MultiCellPointer(source_index=0, query_index=0, found=True, row=0, col=1)],
     )
 
     new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))

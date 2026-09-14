@@ -86,6 +86,39 @@ class _BatchCellPointers(BaseModel):
     pointers: List[_CellPointer] = Field(default_factory=list)
 
 
+class _MultiCellPointer(BaseModel):
+    """A pointer that also says WHICH source's snapshot it was read from."""
+    source_index: int = Field(..., description="Index of the source, as printed in [n].")
+    query_index: int = Field(..., description="Index of the query this pointer answers.")
+    found: bool = Field(
+        ..., description="False when THIS source has no cell for the query."
+    )
+    row: Optional[int] = Field(
+        None, description="0-based row index of the DATA cell within that source."
+    )
+    col: Optional[int] = Field(
+        None, description="0-based column index of the DATA cell within that source."
+    )
+
+
+class _SheetUnit(BaseModel):
+    """One source's measurement-unit annotation."""
+    source_index: int = Field(..., description="Index of the source, as printed in [n].")
+    unit: Optional[str] = Field(
+        None,
+        description=(
+            "That source's unit annotation text if visible (e.g. 'Miliar Rp'), else null. "
+            "Text only, never a number."
+        ),
+    )
+
+
+class _MultiSourcePointers(BaseModel):
+    """Pointers for every source at once — the batched form of _BatchCellPointers."""
+    units: List[_SheetUnit] = Field(default_factory=list)
+    pointers: List[_MultiCellPointer] = Field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
 # Queries
 # ---------------------------------------------------------------------------
@@ -218,6 +251,39 @@ _POINTER_PROMPT = ChatPromptTemplate.from_messages([
 def build_pointer_chain(llm: BaseChatModel):
     """Prompt | structured-output chain — separate builder so tests can mock it."""
     return _POINTER_PROMPT | llm.with_structured_output(_BatchCellPointers)
+
+
+# The same rules, plus what changes when several sources share one call. Appended rather than
+# written out again: a second copy of the system prompt would add back the tokens this batching
+# exists to remove.
+_MULTI_SOURCE_ADDENDUM = """
+You are shown SEVERAL sources, each introduced by "[n] <name>" and followed by its own
+snapshot. Row/column indices are PER SOURCE, so always report the source_index of the
+snapshot you read the coordinate from.
+
+Each source lists, on its "asks:" line, the query numbers it may answer — ignore the others
+for that source. A query can be held by MORE THAN ONE source: answer it for EVERY source
+that genuinely holds it, one pointer per source. Rule 5 still applies per source — a source
+without the metric gets found=false, never a substitute row.
+"""
+
+_MULTI_HUMAN_TEMPLATE = """\
+SOURCES:
+{sources_block}
+
+QUERIES:
+{queries_block}
+"""
+
+_MULTI_POINTER_PROMPT = ChatPromptTemplate.from_messages([
+    ("system", _POINTER_SYSTEM_PROMPT + _MULTI_SOURCE_ADDENDUM),
+    ("human", _MULTI_HUMAN_TEMPLATE),
+])
+
+
+def build_multi_pointer_chain(llm: BaseChatModel):
+    """Batched counterpart of build_pointer_chain — separate builder so tests can mock it."""
+    return _MULTI_POINTER_PROMPT | llm.with_structured_output(_MultiSourcePointers)
 
 
 # ---------------------------------------------------------------------------
@@ -431,12 +497,21 @@ async def resolve_pointers(
         return {}, None
 
     snapshot, truncation_note = build_snapshot(grid, queries)
+    n_cols = max((len(r) for r in grid), default=0)
+    queries_block = "\n".join(f"{i}. {q.desc}" for i, q in enumerate(queries))
+    # What this call costs, split into its two halves. Internal mode makes one call per
+    # transcribed table, so both halves are paid once per source: the snapshot, and the query
+    # list — whose descriptions each carry up to 200 chars of the claim's own sentence.
+    logger.info(
+        "Cell pointer: snapshot %d chars + queries %d chars for %d quer(ies) over a %dx%d grid",
+        len(snapshot), len(queries_block), len(queries), len(grid), n_cols,
+    )
     payload = {
         "n_rows": len(grid),
-        "n_cols": max((len(r) for r in grid), default=0),
+        "n_cols": n_cols,
         "truncation_note": truncation_note,
         "snapshot": snapshot,
-        "queries_block": "\n".join(f"{i}. {q.desc}" for i, q in enumerate(queries)),
+        "queries_block": queries_block,
     }
 
     result = None
@@ -459,7 +534,100 @@ async def resolve_pointers(
             continue
         pointers[ptr.query_index] = (ptr.row, ptr.col)
     sheet_unit = (result.sheet_unit or "").strip() or None
+    # Separates "the model found nothing here" from "the model pointed somewhere and the
+    # plausibility guard threw it out" — the two cost the same call but mean different things
+    # about whether this tier is worth what it costs.
+    logger.info(
+        "Cell pointer: model answered %d of %d quer(ies)", len(pointers), len(queries)
+    )
     return pointers, sheet_unit
+
+
+async def resolve_pointers_multi(
+    sources: List[Tuple[str, List[List], List[int]]],
+    queries: List[PointQuery],
+    llm: BaseChatModel,
+    fallback_llm: Optional[BaseChatModel] = None,
+) -> List[Tuple[Dict[int, Tuple[int, int]], Optional[str]]]:
+    """One call for every source: [(pointers, sheet_unit)] aligned with `sources`.
+
+    `sources` is (label, grid, allowed query indices); the indices are positions in `queries`,
+    which is numbered once for the whole call — so the local/global translation the per-source
+    path needed disappears here.
+
+    Why batch at all: internal mode turns one report into ~25 sources, and asking each on its
+    own re-sent the system prompt and the entire query list every time. Measured on the April
+    report (2026-09-14, 22 sources): 44.990 chars of repeated prompt and 45.231 of repeated
+    query text against 29.002 chars of actual snapshot — the repetition cost more than the
+    payload it carried, and the snapshots are the only part that genuinely differs per source.
+
+    Coverage is deliberately unchanged: every source still gets asked about every query that
+    passed its own filter, and a query may come back answered for several sources, because the
+    caller still takes the first source (in order) whose cells all read.
+    """
+    empty: List[Tuple[Dict[int, Tuple[int, int]], Optional[str]]] = [({}, None) for _ in sources]
+    active = [
+        (si, label, grid, list(allowed))
+        for si, (label, grid, allowed) in enumerate(sources)
+        if grid and allowed
+    ]
+    if not active or not queries:
+        return empty
+
+    blocks: List[str] = []
+    for si, label, grid, allowed in active:
+        subset = [queries[i] for i in allowed if 0 <= i < len(queries)]
+        snapshot, truncation_note = build_snapshot(grid, subset)
+        n_cols = max((len(r) for r in grid), default=0)
+        blocks.append(
+            f"[{si}] {label} — {len(grid)} rows x {n_cols} cols{truncation_note}\n"
+            f"asks: {', '.join(str(i) for i in allowed)}\n"
+            f"{snapshot}"
+        )
+    sources_block = "\n\n".join(blocks)
+    queries_block = "\n".join(f"{i}. {q.desc}" for i, q in enumerate(queries))
+    logger.info(
+        "Cell pointer: one call for %d source(s) — snapshots %d chars + queries %d chars "
+        "for %d quer(ies)",
+        len(active), sum(len(b) for b in blocks), len(queries_block), len(queries),
+    )
+
+    result = None
+    for candidate in (llm, fallback_llm):
+        if candidate is None:
+            continue
+        try:
+            result = await build_multi_pointer_chain(candidate).ainvoke({
+                "sources_block": sources_block,
+                "queries_block": queries_block,
+            })
+            break
+        except Exception as exc:
+            logger.warning("Cell-pointer batched LLM call failed: %s", exc)
+    if result is None:
+        return empty
+
+    allowed_by_source = {si: set(allowed) for si, _label, _grid, allowed in active}
+    maps: List[Dict[int, Tuple[int, int]]] = [{} for _ in sources]
+    units: List[Optional[str]] = [None for _ in sources]
+    for ptr in result.pointers:
+        if not ptr.found or ptr.row is None or ptr.col is None:
+            continue
+        # A pointer for a source that was never shown, or for a query that source was not
+        # offered, would smuggle back the very filtering that keeps a sheet from answering
+        # about a metric it cannot hold.
+        if ptr.query_index not in allowed_by_source.get(ptr.source_index, ()):
+            continue
+        maps[ptr.source_index].setdefault(ptr.query_index, (ptr.row, ptr.col))
+    for entry in result.units:
+        if entry.source_index in allowed_by_source:
+            units[entry.source_index] = (entry.unit or "").strip() or None
+
+    logger.info(
+        "Cell pointer: model answered %d of %d quer(ies) across %d source(s)",
+        sum(len(m) for m in maps), len(queries), len(active),
+    )
+    return [(maps[i], units[i]) for i in range(len(sources))]
 
 
 def read_grid_cell(grid: List[List], row: int, col: int) -> Optional[float]:

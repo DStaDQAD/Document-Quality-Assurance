@@ -19,7 +19,6 @@ whose structure defeats every parser stay verifiable ("pointer-only" sources) �
 never supplies a number, only a location that is reported in the result's provenance.
 """
 
-import asyncio
 import logging
 import re
 from dataclasses import dataclass
@@ -35,7 +34,7 @@ from cell_pointer import (
     pointer_column_matches,
     pointer_is_plausible,
     read_grid_cell,
-    resolve_pointers,
+    resolve_pointers_multi,
 )
 from excel_parser_bi import BITableData, parse_bi_table
 from pdf_table_extraction import PdfTable
@@ -1556,24 +1555,6 @@ def _parse_grid_with_fallback(
 # the LLM points at grid coordinates, code reads the values (see cell_pointer.py).
 # ---------------------------------------------------------------------------
 
-async def _resolve_source_pointers(
-    kept: List[Tuple[int, PointQuery]],
-    grid: List[List],
-    llm: BaseChatModel,
-    fallback_llm: Optional[BaseChatModel] = None,
-) -> Tuple[Dict[int, Tuple[int, int]], Optional[str]]:
-    """resolve_pointers for one source's surviving queries, keyed back to global indices.
-
-    resolve_pointers numbers the queries it is given from zero; the caller tracks them by
-    their position in the full list, so the two numbering schemes are translated here.
-    An empty selection short-circuits without any LLM call.
-    """
-    if not kept:
-        return {}, None
-    local, sheet_unit = await resolve_pointers([q for _, q in kept], grid, llm, fallback_llm)
-    return {kept[i][0]: coord for i, coord in local.items()}, sheet_unit
-
-
 async def _pointer_pass(
     facts: List[ExtractedFact],
     results: List[FactVerificationResult],
@@ -1584,7 +1565,7 @@ async def _pointer_pass(
     """Re-resolve fully-unresolved claims via LLM cell pointers.
 
     Candidates are results that stayed Inconclusive without matching any source (the
-    same predicate _build_table_suggestions uses). One batched pointer call per
+    same predicate _build_table_suggestions uses). ONE batched pointer call covers every
     grid-bearing source; a fact is accepted from the first source (upload order) where
     EVERY needed cell — including the synthesized prior-year point for yoy_growth —
     yields a numeric value via read_grid_cell. The values are injected into a fresh
@@ -1622,10 +1603,19 @@ async def _pointer_pass(
                 src.filename, src.sheet, len(kept), len(queries),
             )
 
-    resolutions = await asyncio.gather(*[
-        _resolve_source_pointers(kept, src.grid, llm, fallback_llm)
-        for src, kept in zip(grid_sources, per_source_queries)
-    ])
+    # One call for all of them. The snapshots are the only part that differs per source; the
+    # system prompt and the query list are identical, and sending those once per source was
+    # most of what this tier cost (measured 2026-09-14: 22 calls, 45k chars of repeated query
+    # text and 45k of repeated prompt against 29k of actual snapshot).
+    resolutions = await resolve_pointers_multi(
+        [
+            (f"{src.filename} / {src.sheet}", src.grid, [qi for qi, _q in kept])
+            for src, kept in zip(grid_sources, per_source_queries)
+        ],
+        queries,
+        llm,
+        fallback_llm,
+    )
 
     new_results = list(results)
     n_resolved = 0

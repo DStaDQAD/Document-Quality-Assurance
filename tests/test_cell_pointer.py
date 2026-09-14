@@ -6,6 +6,9 @@ from langchain_core.runnables import RunnableLambda
 from cell_pointer import (
     _BatchCellPointers,
     _CellPointer,
+    _MultiCellPointer,
+    _MultiSourcePointers,
+    _SheetUnit,
     PointQuery,
     build_point_queries,
     build_snapshot,
@@ -13,6 +16,7 @@ from cell_pointer import (
     pointer_is_plausible,
     read_grid_cell,
     resolve_pointers,
+    resolve_pointers_multi,
 )
 from structured_extractor import ExtractedFact, PeriodPoint
 
@@ -360,6 +364,160 @@ def test_resolve_pointers_no_queries_short_circuits_without_llm_call():
     assert pointers == {}
     assert unit is None
     llm.with_structured_output.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# resolve_pointers_multi — every source in ONE call
+#
+# Internal mode turns one report into ~25 sources, and asking each separately re-sent the
+# 511-token system prompt AND the whole query list every time. Measured on the April report
+# (2026-09-14): 22 calls, 45.231 chars of query text and 44.990 of prompt against only 29.002
+# chars of actual snapshot — the repetition was the cost, not the payload.
+# ---------------------------------------------------------------------------
+
+_GRID_A = [["Metric", 2026], ["KPR/KPA", 40.63]]
+_GRID_B = [["Metric", 2026], ["Kredit UMKM", 12.5]]
+_MULTI_QUERIES = [
+    PointQuery(fact_index=0, data_key=("KPR/KPA", 2026, "Q2"), desc="d0"),
+    PointQuery(fact_index=1, data_key=("Kredit UMKM", 2026, "Q2"), desc="d1"),
+]
+# (label, grid, the GLOBAL query indices this source may be asked about)
+_MULTI_SOURCES = [("A.xls / S1", _GRID_A, [0]), ("B.xls / S2", _GRID_B, [1])]
+
+
+def test_resolve_pointers_multi_asks_every_source_in_a_single_call():
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1),
+        _MultiCellPointer(source_index=1, query_index=1, found=True, row=1, col=1),
+    ])
+    log = []
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_returning(batch, log))
+    )
+
+    assert len(log) == 1
+    assert [pointers for pointers, _ in resolutions] == [{0: (1, 1)}, {1: (1, 1)}]
+
+
+def test_resolve_pointers_multi_returns_one_slot_per_source_in_order():
+    """paired_verifier zips the result against its own source list, so the alignment is the
+    contract — a source the model ignored still gets its (empty) slot."""
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=1, query_index=1, found=True, row=1, col=1),
+    ])
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_returning(batch))
+    )
+
+    assert len(resolutions) == len(_MULTI_SOURCES)
+    assert resolutions[0][0] == {}
+
+
+def test_resolve_pointers_multi_lets_two_sources_answer_the_same_query():
+    """Asking each source separately meant a claim could be answered by any of them; the
+    caller still takes the first source whose cells all read, so both answers must survive."""
+    sources = [("A.xls / S1", _GRID_A, [0]), ("B.xls / S2", _GRID_A, [0])]
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1),
+        _MultiCellPointer(source_index=1, query_index=0, found=True, row=1, col=1),
+    ])
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(sources, _MULTI_QUERIES, _llm_returning(batch))
+    )
+
+    assert [pointers for pointers, _ in resolutions] == [{0: (1, 1)}, {0: (1, 1)}]
+
+
+def test_resolve_pointers_multi_drops_unusable_pointers():
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=False, row=1, col=1),
+        _MultiCellPointer(source_index=9, query_index=0, found=True, row=1, col=1),
+        _MultiCellPointer(source_index=0, query_index=7, found=True, row=1, col=1),
+        _MultiCellPointer(source_index=1, query_index=1, found=True, row=None, col=1),
+    ])
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_returning(batch))
+    )
+
+    assert [pointers for pointers, _ in resolutions] == [{}, {}]
+
+
+def test_resolve_pointers_multi_rejects_a_query_the_source_was_not_offered():
+    """The per-source filter is what keeps a sheet from answering about a metric it cannot
+    hold; a pointer outside that offer would smuggle the filtered query back in."""
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=1, found=True, row=1, col=1),
+    ])
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_returning(batch))
+    )
+
+    assert resolutions[0][0] == {}
+
+
+def test_resolve_pointers_multi_maps_units_per_source():
+    batch = _MultiSourcePointers(
+        units=[_SheetUnit(source_index=1, unit=" Miliar Rp ")],
+        pointers=[],
+    )
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_returning(batch))
+    )
+
+    assert [unit for _, unit in resolutions] == [None, "Miliar Rp"]
+
+
+def test_resolve_pointers_multi_skips_a_source_with_nothing_to_ask():
+    """A source whose queries were all filtered out costs a snapshot for nothing."""
+    sources = [("A.xls / S1", _GRID_A, [0]), ("B.xls / S2", _GRID_B, [])]
+    batch = _MultiSourcePointers(pointers=[])
+    log = []
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(sources, _MULTI_QUERIES, _llm_returning(batch, log))
+    )
+
+    assert len(resolutions) == 2
+    assert "B.xls / S2" not in str(log[0])
+
+
+def test_resolve_pointers_multi_no_source_has_queries_skips_the_llm():
+    llm = Mock()
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi([("A.xls / S1", _GRID_A, [])], _MULTI_QUERIES, llm)
+    )
+
+    assert resolutions == [({}, None)]
+    llm.with_structured_output.assert_not_called()
+
+
+def test_resolve_pointers_multi_swallows_llm_failure():
+    resolutions = asyncio.run(
+        resolve_pointers_multi(_MULTI_SOURCES, _MULTI_QUERIES, _llm_raising())
+    )
+
+    assert resolutions == [({}, None), ({}, None)]
+
+
+def test_resolve_pointers_multi_uses_fallback_llm_when_primary_fails():
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1),
+    ])
+
+    resolutions = asyncio.run(
+        resolve_pointers_multi(
+            _MULTI_SOURCES, _MULTI_QUERIES, _llm_raising(), fallback_llm=_llm_returning(batch)
+        )
+    )
+
+    assert resolutions[0][0] == {0: (1, 1)}
 
 
 # ---------------------------------------------------------------------------
