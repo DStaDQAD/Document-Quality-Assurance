@@ -443,7 +443,13 @@ class TableData:
             if QUAL_SEP in label:
                 parent, _, child = label.rpartition(QUAL_SEP)
                 leaf = _canon(child)
-                if leaf and leaf in q_canon:
+                # Same guard the label-in-query tier carries, for the same reason: a leaf that
+                # merely appears inside a longer claim must not answer a claim about a
+                # DIFFERENT quantity. "suku bunga simpanan berjangka tenor 1 bulan" reached the
+                # 'Total Jenis Simpanan > Simpanan Berjangka' leaf of a DPK table and was
+                # checked, as a rate, against a balance. This tier was the only one of the
+                # three that never asked.
+                if leaf and leaf in q_canon and self._query_is_about_the_label(query, label):
                     overlap = len(_sig_words(label) & q_words)
                     # Among parents the query does not distinguish between, the aggregate one is
                     # what a bare claim means: "DPK korporasi" is the whole DPK's korporasi

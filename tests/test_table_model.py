@@ -123,6 +123,30 @@ def test_lookup_fuzzy_rejects_a_qualified_query_answered_by_the_bare_parent():
     ) == (None, None)
 
 
+def test_lookup_fuzzy_rejects_a_leaf_match_that_names_a_different_quantity():
+    """M2-Juni-2026: "suku bunga simpanan berjangka tenor 1 bulan" (4,77%) was answered by the
+    'Simpanan Berjangka' leaf of a DPK table, which holds balances — reported Tidak Sesuai
+    against 6,3. The report carries no interest-rate table at all, so the honest answer is no
+    data. _query_is_about_the_label already guards the label-in-query tier against exactly this
+    sentence; the leaf tier reached the same row without asking."""
+    table = _make_temporal(["Total Jenis Simpanan > Simpanan Berjangka"])
+
+    assert table.lookup_fuzzy(
+        "suku bunga simpanan berjangka tenor 1 bulan", 2026, "Jun"
+    ) == (None, None)
+
+
+def test_lookup_fuzzy_still_answers_a_leaf_query_that_adds_no_new_subject():
+    """The guard must not close the tier it protects: a query naming the same quantity still
+    resolves."""
+    table = _make_temporal(["Total Jenis Simpanan > Simpanan Berjangka"])
+
+    matched, value = table.lookup_fuzzy("simpanan berjangka", 2026, "Jun")
+
+    assert matched == "Total Jenis Simpanan > Simpanan Berjangka"
+    assert value == 1.0
+
+
 def test_lookup_fuzzy_rejects_a_leaf_match_on_a_single_shared_word():
     # 'Lainnya' shares one word out of three with 'tingkat pendidikan lainnya'.
     table = _make_temporal(["Lainnya", "Tabungan/deposito"])
