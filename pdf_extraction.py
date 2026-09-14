@@ -51,6 +51,15 @@ _VISION_PAGES_PER_CALL_ENV = int(os.getenv("VISION_PAGES_PER_CALL", "0"))
 # between one wave of calls and three on a scanned report. See plan_vision_concurrency.
 GEMINI_VISION_CONCURRENCY = int(os.getenv("GEMINI_VISION_CONCURRENCY", "4"))
 
+# Vision models bill an image per TILE (Gemini: one 768x768 tile = 258 tokens), so the price
+# steps at each tile boundary instead of rising with the pixel count. A report page rendered at
+# a fixed 150 DPI came out 1275x1754 px — two tiles wide by three tall, six in all — while any
+# render whose long side fits within 1536 px is 2x2, four tiles, a third cheaper. Every DPI from
+# 96 to 131 lands on that same four-tile count, so the only question is which of them keeps the
+# most detail. The cap is expressed in PIXELS rather than DPI so an unusual page size gets the
+# same treatment instead of a number guessed for one paper format. 0 disables it.
+VISION_RENDER_MAX_PX = int(os.getenv("VISION_RENDER_MAX_PX", "1536"))
+
 # Marks the start of each page's text in extract_text_from_pdf's/vision's output.
 # Shared across modules that need to strip markers or attribute a char offset to a page.
 PAGE_MARKER_RE = re.compile(r'\[== Halaman (\d+) ==\]')
@@ -383,8 +392,27 @@ def _strip_tabular_content(text: str) -> str:
     return '\n'.join(result)
 
 
+def render_scale(
+    width_pt: float, height_pt: float, dpi: int = 150, max_px: int = VISION_RENDER_MAX_PX
+) -> float:
+    """Render scale for one page: `dpi`, lowered only as far as `max_px` on the long side needs.
+
+    Keeps the page inside the cheaper tile count (see VISION_RENDER_MAX_PX) while spending every
+    pixel that fits, because the resolution below the boundary is free and small digits in a
+    Lampiran table are the first thing a lower render loses.
+    """
+    dpi_scale = dpi / 72
+    longest = max(width_pt, height_pt)
+    if not max_px or longest <= 0:
+        return dpi_scale
+    return min(dpi_scale, max_px / longest)
+
+
 def _render_pages_to_b64(
-    file_bytes: bytes, dpi: int, pages: Optional[set] = None
+    file_bytes: bytes,
+    dpi: int,
+    pages: Optional[set] = None,
+    max_px: int = VISION_RENDER_MAX_PX,
 ) -> list[str]:
     """Render PDF pages to base64-encoded PNG strings (CPU-bound, call in a thread).
 
@@ -392,6 +420,9 @@ def _render_pages_to_b64(
     result stays indexable by page number. Since the native table reader started answering most
     pages on its own, rendering the whole document meant rasterising ten pages at 150 DPI to
     send one — the skipped ones cost ~0,4s each for nothing. None means render everything.
+
+    The scale is decided per page (see render_scale), so a document that mixes page sizes still
+    sends every page at the largest render its tile budget allows.
     """
     try:
         import pypdfium2 as pdfium
@@ -402,13 +433,13 @@ def _render_pages_to_b64(
             "Install them with: pip install pypdfium2 Pillow"
         )
     doc = pdfium.PdfDocument(file_bytes)
-    scale = dpi / 72
     result = []
     for i in range(len(doc)):
         if pages is not None and i not in pages:
             result.append(None)
             continue
         page = doc[i]
+        scale = render_scale(page.get_width(), page.get_height(), dpi, max_px)
         bitmap = page.render(scale=scale, rotation=0)
         pil_image = bitmap.to_pil()
         buf = io.BytesIO()
