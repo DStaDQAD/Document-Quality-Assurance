@@ -160,7 +160,7 @@ textarea, input, select, button { font-family: inherit; }
   padding: 13px 22px;
   background: linear-gradient(180deg, #F6F9FF 0%, #EEF3FF 100%);
   border-top: 1px solid var(--border);
-  display: flex; justify-content: flex-end; align-items: center;
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
 }
 .form-label {
   display: block; font-size: 11px; font-weight: 700;
@@ -204,6 +204,20 @@ select { cursor: pointer; }
 .run-btn:active:not(:disabled) { transform: scale(0.97) translateY(0); }
 .run-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .run-btn .material-symbols-outlined { font-size: 16px; }
+/* Secondary action beside .run-btn, shown only while a verification is running. The [hidden]
+   rule is needed because display:inline-flex would otherwise beat the attribute's display:none. */
+.cancel-btn {
+  background: var(--white); color: var(--text-500);
+  border: 1px solid var(--border); border-radius: var(--r);
+  padding: 8px 16px; font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 6px;
+  cursor: pointer; font-family: inherit;
+  transition: color 0.15s, border-color 0.15s;
+}
+.cancel-btn[hidden] { display: none; }
+.cancel-btn:hover:not(:disabled) { color: #DC2626; border-color: #DC2626; }
+.cancel-btn:disabled { opacity: 0.5; cursor: default; }
+.cancel-btn .material-symbols-outlined { font-size: 16px; }
 
 /* ── Dropzones ── */
 .dropzone {
@@ -1029,6 +1043,10 @@ body.auth-locked .app {
               </div>
             </div>
             <div class="card-footer">
+              <button type="button" class="cancel-btn" id="cancel-btn" hidden>
+                <span class="material-symbols-outlined">close</span>
+                Batalkan
+              </button>
               <button class="run-btn" data-action="paired">
                 <span class="material-symbols-outlined">search</span>
                 Verifikasi
@@ -1899,7 +1917,7 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo) {
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, signal) {
     resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
@@ -1909,11 +1927,12 @@ body.auth-locked .app {
 
     let result = null;
     let failure = null;
+    let cancelled = false;
     try {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
           `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}`,
-        { method: "POST", body: formData },
+        { method: "POST", body: formData, signal },
         (ev) => {
           if (ev.type === "stage") updateProgressStage(resultEl, ev);
           else if (ev.type === "result") result = ev.data;
@@ -1921,9 +1940,15 @@ body.auth-locked .app {
         },
       );
     } catch (err) {
-      failure = `Gagal menghubungi server: ${err.message}`;
+      if (err.name === "AbortError" || signal?.aborted) cancelled = true;
+      else failure = `Gagal menghubungi server: ${err.message}`;
     } finally {
       clearInterval(ticker);
+    }
+
+    if (cancelled) {
+      resultEl.innerHTML = `<p class="muted-text">Verifikasi dibatalkan.</p>`;
+      return;
     }
 
     // The stream carries its own terminal event, so a stream that ends without either one
@@ -1985,9 +2010,18 @@ body.auth-locked .app {
     // Several PDFs run SEQUENTIALLY, each against the same Excel sources (PDF↔tabel,
     // never PDF↔PDF), each rendering into its own titled section. A failure in one PDF
     // shows its error banner in place and the loop moves on to the next.
+    // One controller per run: Batalkan aborts the PDF in flight and stops the loop before the
+    // next one starts. Reports that already finished stay on screen.
+    const controller = new AbortController();
+    const cancelBtn = document.getElementById("cancel-btn");
+    const onCancel = () => { cancelBtn.disabled = true; controller.abort(); };
+    cancelBtn.disabled = false;
+    cancelBtn.hidden = false;
+    cancelBtn.addEventListener("click", onCancel, { once: true });
+
     withDisabledButton(e.currentTarget, async () => {
       resultEl.innerHTML = "";
-      for (let idx = 0; idx < pdfFiles.length; idx++) {
+      for (let idx = 0; idx < pdfFiles.length && !controller.signal.aborted; idx++) {
         const body = document.createElement("div");
         if (pdfFiles.length > 1) {
           const section = document.createElement("div");
@@ -2003,8 +2037,11 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, controller.signal);
       }
+    }).finally(() => {
+      cancelBtn.hidden = true;
+      cancelBtn.removeEventListener("click", onCancel);
     });
   });
 
