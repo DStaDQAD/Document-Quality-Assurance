@@ -11,6 +11,7 @@ from structured_extractor import (
     _filter_narrative,
     _finalize_facts,
     _find_page_number,
+    _filter_narrative,
     _parse_indonesian_number,
     _split_into_page_chunks,
     extract_structured_facts,
@@ -707,6 +708,124 @@ def test_extract_structured_facts_async_produces_same_result_as_sync():
     assert len(facts) == 1
     assert facts[0].claimed_value == pytest.approx(10355.1)
     assert facts[0].page_number == 1
+
+
+# ---------------------------------------------------------------------------
+# A caption names a table; it is never part of a sentence
+# ---------------------------------------------------------------------------
+
+def test_filter_narrative_drops_caption_lines_so_a_split_sentence_survives_them():
+    """M2-Juni-2026 page 4: the reading view interleaves the two columns, so a sentence's tail
+    is separated from its head by three captions. Captions are words with almost no digits, so
+    _classify_line called them narrative, kept them, and they were glued into the claim's quote:
+
+        "Tabel 5. Perkembangan Kredit Berdasarkan Golongan Tabel 6. ... Grafik 4. ... Tabel 7.
+         Kredit Properti (t riliun Rp) lebih tinggi dibandingkan ... sebesar 7,9% (yoy)."
+
+    The extractor read that 7,9% as Kredit Investasi's figure — it is Kredit Modal Kerja's —
+    and reported a false Tidak Sesuai against 20,5%. The table titles already reach the model
+    separately, as the reference metric list.
+    """
+    text = (
+        "[== Halaman 4 ==]\n"
+        "Kredit modal kerja pada Juni 2026 tumbuh sebesar 9,6% (yoy), meningkat dibandingkan\n"
+        "Tabel 5. Perkembangan Kredit Berdasarkan Golongan Debitur (triliun Rp)\n"
+        "Grafik 4. Pertumbuhan Kredit Berdasarkan Jenis Penggunaan\n"
+        "Tabel 7. Kredit Properti (t riliun Rp)\n"
+        "lebih tinggi dibandingkan pertumbuhan pada bulan sebelumnya sebesar 7,9% (yoy).\n"
+    )
+
+    filtered = _filter_narrative(text)
+
+    assert "Tabel 5." not in filtered
+    assert "Grafik 4." not in filtered
+    assert "Tabel 7." not in filtered
+    assert "Kredit modal kerja pada Juni 2026" in filtered
+    assert "sebesar 7,9% (yoy)." in filtered
+
+
+def test_filter_narrative_keeps_a_sentence_that_merely_cites_a_table():
+    """Only a line that IS a caption goes. "(Tabel 8)" inside prose is part of the sentence,
+    and dropping the line would delete the claim it carries."""
+    text = (
+        "[== Halaman 5 ==]\n"
+        "Kredit skala usaha mikro dan kecil tumbuh masing-masing sebesar 1,5% dan 0,1% (Tabel 8).\n"
+    )
+
+    assert "(Tabel 8)" in _filter_narrative(text)
+
+
+def test_filter_narrative_drops_a_table_row_whose_wordy_label_hides_it():
+    """A table row with a long label sits under rule 4's density bar and reaches the model as
+    prose. Measured on M2-Juni-2026: eighteen of them did, among them Tabel 1's own
+    "Tabungan Rupiah Ditarik Sewaktu-waktu 2.586,8 2.619,1 8,3 6,8" — 8 tokens, 50% numeric.
+    Beside the narrative they are a wall of unattributed numbers for the extractor to pick
+    from, and they cost prompt tokens for content the reference tables already carry.
+
+    Prose never ends in three or more bare value cells; this is the same test the vision path
+    already applies in pdf_extraction._strip_tabular_content.
+    """
+    text = (
+        "[== Halaman 1 ==]\n"
+        "Tabungan Rupiah Ditarik Sewaktu-waktu 2.586,8 2.619,1 8,3 6,8\n"
+        "Uang Kartal di Luar Bank Umum dan BPR 1.205,7 1.204,1 16,6 15,9\n"
+        "tumbuh sebesar 15,9% (yoy) dan 6,8% (yoy), lebih rendah dibandingkan bulan sebelumnya.\n"
+    )
+
+    filtered = _filter_narrative(text)
+
+    assert "2.586,8" not in filtered
+    assert "1.205,7" not in filtered
+    assert "tumbuh sebesar 15,9% (yoy) dan 6,8% (yoy)" in filtered
+
+
+def test_filter_narrative_keeps_a_sentence_that_ends_in_two_numbers():
+    """Two is the floor a sentence can legitimately reach ("... pada 2025 dan 2026"); three is
+    what no prose does. The rule must not eat a claim that merely finishes on figures."""
+    text = (
+        "[== Halaman 1 ==]\n"
+        "Pertumbuhan itu lebih rendah dibandingkan capaian pada 2025 dan 2026.\n"
+    )
+
+    assert "2025 dan 2026" in _filter_narrative(text)
+
+
+# ---------------------------------------------------------------------------
+# A claimed number that is nowhere in the document
+# ---------------------------------------------------------------------------
+
+def test_extraction_drops_a_fact_whose_number_is_in_no_part_of_the_text():
+    """M2-Juni-2026: the model returned 7,0% for "Tabungan Rupiah Ditarik Sewaktu-waktu" and
+    the document says 6,8 for June and 8,3 for May — 7,0 appears nowhere in it, in any spacing.
+    The prompt requires the value to be copied verbatim and the anchor to be an exact
+    substring, but _finalize_facts kept such a fact anyway, with no page number, and it became
+    a confident Tidak Sesuai against a report that had said nothing of the kind. A number the
+    document does not contain cannot be checked against the document."""
+    narrative = (
+        "[== Halaman 1 ==]\n"
+        "Tabungan rupiah ditarik sewaktu-waktu tumbuh sebesar 6,8% (yoy) pada Juni 2026.\n"
+    )
+    fact = _fake_fact(claimed_value_raw="7,0", anchor_quote="tumbuh sebesar 7,0% (yoy)")
+
+    facts = extract_structured_facts(narrative, ROW_LABELS, _llm_with_facts([fact]))
+
+    assert facts == []
+
+
+def test_extraction_keeps_a_fact_whose_number_the_pdf_split_with_a_space():
+    """The guard must survive this document's own glyph splitting: page 1 prints "1 6,6%" for
+    16,6%. The anchor cannot be located either way, but the number IS in the text — compared
+    with the spaces taken out — so the claim is real and must be kept."""
+    narrative = (
+        "[== Halaman 1 ==]\n"
+        "Pertumbuhan kartal bulan sebelumnya tercatat sebesar 1 6,6% (yoy) pada Mei 2026.\n"
+    )
+    fact = _fake_fact(claimed_value_raw="16,6", anchor_quote="tercatat sebesar 16,6% (yoy)")
+
+    facts = extract_structured_facts(narrative, ROW_LABELS, _llm_with_facts([fact]))
+
+    assert len(facts) == 1
+    assert facts[0].claimed_value == 16.6
 
 
 # ---------------------------------------------------------------------------

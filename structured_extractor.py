@@ -30,6 +30,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+from pdf_extraction import _trailing_numeric_run
 from table_model import _sig_words
 
 logger = logging.getLogger("fact-checker")
@@ -756,6 +757,10 @@ _APPENDIX_TITLE_LOOKAHEAD = 3
 _FOOTNOTE_RE = re.compile(r'^\*+')
 _LEADING_STARS_RE = re.compile(r'^\*+\s*')
 _HAS_DIGIT_RE = re.compile(r'\d')
+# A line that STARTS with a table or figure caption. Anchored, so prose that merely cites one
+# ("... masing-masing sebesar 1,5% dan 0,1% (Tabel 8).") keeps its claim. Roman-numbered
+# appendix titles are _APPENDIX_TITLE_RE's business — those drop the whole page, not one line.
+_CAPTION_LINE_RE = re.compile(r'^(Tabel|Grafik)\s+\d+\s*\.', re.IGNORECASE)
 
 
 def _classify_line(line: str) -> str:
@@ -806,6 +811,14 @@ def _filter_narrative(full_text: str) -> str:
        9,7% (yoy) ...") is kept; a footnote/disclaimer (e.g. "*Angka sementara" or a long
        acronym-explainer with no dated figure) is dropped either way.
     4. Short lines (< 6 tokens) and numeric-heavy lines (> 55% numbers) are dropped.
+    5. Caption lines ("Tabel 5. ...", "Grafik 4. ...") are dropped. They are words with almost
+       no digits, so rule 4 reads them as prose, and on a two-column page they land BETWEEN a
+       sentence's head and its tail — the quote then carries three captions and the number is
+       attributed to whichever metric the caption named. Skipped rather than counted as a table
+       row, so a page of narrative printed around three captions is not tipped over rule 2.
+    6. Lines ENDING in three or more bare value cells are dropped as table rows, however low
+       their overall density: a wordy label keeps them under rule 4's bar. Also skipped rather
+       than counted, for the same reason as rule 5.
     """
     page_blocks = re.split(r'(?=\[== Halaman \d+ ==\])', full_text)
 
@@ -836,6 +849,22 @@ def _filter_narrative(full_text: str) -> str:
         table_count = 0
 
         for line in content_lines:
+            # A caption names the table beside it; it is never part of a sentence. Dropped
+            # without counting toward rule 2 — a caption IS evidence of a table, but counting
+            # it would tip a page of prose printed around three captions into being skipped.
+            if _CAPTION_LINE_RE.match(line):
+                continue
+            # A line ending in three or more bare value cells is a table row whatever its
+            # overall density — a wordy label ("Tabungan Rupiah Ditarik Sewaktu-waktu 2.586,8
+            # 2.619,1 8,3 6,8" is 50% numeric) keeps it under rule 4's bar. Eighteen of them
+            # reached the extraction model on M2-Juni-2026: a wall of unattributed numbers
+            # printed beside the narrative, and prompt tokens spent on data the reference
+            # tables already carry. Prose never ends that way — the same test the vision path
+            # applies in pdf_extraction._strip_tabular_content. Not counted toward rule 2:
+            # counting would tip a page of prose printed around its own tables into being
+            # dropped whole.
+            if _trailing_numeric_run(line.split()) >= 3:
+                continue
             if _FOOTNOTE_RE.match(line):
                 de_starred = _LEADING_STARS_RE.sub('', line)
                 # Rule 3: keep only if it's a full sentence AND cites a number
@@ -1014,6 +1043,23 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
             page_num = _page_at(normalized, span[0])
             quote = _expand_anchor_to_sentence(normalized, span[0], span[1]) or f.anchor_quote
         else:
+            # The anchor is not in the text. On its own that is survivable — the model may have
+            # re-punctuated it — but when the NUMBER is missing too, the claim is not in this
+            # document at all and cannot honestly be checked against it. On M2-Juni-2026 the
+            # model returned 7,0% for a series the report prints as 6,8 (Jun) and 8,3 (Mei);
+            # 7,0 occurs nowhere in the file, yet the fact was kept and became a confident
+            # Tidak Sesuai.
+            #
+            # Compared with the spaces removed, because this report's own text layer splits
+            # numerals ("1 6,6%" for 16,6%) — a verbatim test would throw away real claims.
+            # Trend claims (is_increasing and friends) carry no number and are never dropped.
+            raw_value = (f.claimed_value_raw or "").strip()
+            if raw_value and raw_value.replace(" ", "") not in normalized.replace(" ", ""):
+                logger.warning(
+                    "Dropping fact for %r: neither its anchor nor its value %r occurs in the "
+                    "narrative", f.operation, raw_value,
+                )
+                continue
             page_num = None
             quote = f.anchor_quote
         facts.append(ExtractedFact(
