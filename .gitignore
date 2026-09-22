@@ -41,3 +41,6 @@ CLAUDE.md
 
 # Personal automation config (contains NIM, mentor email, Telegram chat ID)
 n8n-logbook-magang.json
+
+# Presentation, claim-verification write-ups and screenshots: local working material only
+results/
