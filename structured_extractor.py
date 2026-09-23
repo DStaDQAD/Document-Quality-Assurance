@@ -1121,52 +1121,71 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
 # Public function
 # ---------------------------------------------------------------------------
 
+class ExtractionFailedError(RuntimeError):
+    """Every extraction chunk failed, so the document was never actually read.
+
+    Raised instead of returning no facts: an empty fact list renders as "0 Refuted", which a
+    reader takes for a clean document when the model in fact answered nothing (quota spent,
+    model retired, provider down).
+    """
+
+
+def _raise_if_every_chunk_failed(errors: List[Exception], n_chunks: int) -> None:
+    """One failed chunk is a gap in coverage; all of them failing is a failed document."""
+    if n_chunks and len(errors) == n_chunks:
+        raise ExtractionFailedError(
+            f"Ekstraksi klaim gagal: model LLM tidak memberi jawaban untuk {n_chunks} bagian "
+            f"teks dokumen, jadi tidak ada klaim yang diperiksa. Penyebab: {errors[-1]}"
+        ) from errors[-1]
+
+
 def _invoke_extraction(
     chain,
     payload: dict,
     fallback_llm: Optional[BaseChatModel],
-) -> Optional[_ExtractedFacts]:
+) -> _ExtractedFacts:
     """Invoke the extraction chain with one optional fallback LLM on failure.
 
     Some providers (notably Groq) occasionally reject valid structured-output responses
     with a 400 'Failed to call a function' error when the model outputs a bare JSON array
     instead of the expected wrapper object. If that happens and a fallback_llm is provided,
-    we retry once using the fallback.
+    we retry once using the fallback. The last error is re-raised so the caller can tell a
+    failed chunk from one that genuinely held no facts.
     """
     try:
         return chain.invoke(payload)
     except Exception as primary_err:
         if fallback_llm is None:
             logger.exception("Structured fact extraction failed (no fallback available)")
-            return None
+            raise
         logger.warning("Primary LLM extraction failed (%s), retrying with fallback LLM", primary_err)
         try:
             fallback_chain = _EXTRACTION_PROMPT | fallback_llm.with_structured_output(_ExtractedFacts)
             return fallback_chain.invoke(payload)
         except Exception:
             logger.exception("Fallback LLM extraction also failed")
-            return None
+            raise
 
 
 async def _ainvoke_extraction(
     chain,
     payload: dict,
     fallback_llm: Optional[BaseChatModel],
-) -> Optional[_ExtractedFacts]:
+) -> _ExtractedFacts:
     """Async version of _invoke_extraction — uses ainvoke for non-blocking LLM calls."""
     try:
         return await chain.ainvoke(payload)
     except Exception as primary_err:
         if fallback_llm is None:
             logger.exception("Structured fact extraction failed (no fallback available)")
-            return None
+            raise
         logger.warning("Primary LLM extraction failed (%s), retrying with fallback LLM", primary_err)
         try:
             fallback_chain = _EXTRACTION_PROMPT | fallback_llm.with_structured_output(_ExtractedFacts)
             return await fallback_chain.ainvoke(payload)
         except Exception:
             logger.exception("Fallback LLM extraction also failed")
-            return None
+            raise
 
 
 def extract_structured_facts(
@@ -1195,6 +1214,9 @@ def extract_structured_facts(
 
     Returns:
         List of ExtractedFact objects (may be empty if nothing extractable found).
+
+    Raises:
+        ExtractionFailedError: every chunk's LLM call failed (after the fallback).
     """
     chain = _EXTRACTION_PROMPT | llm.with_structured_output(_ExtractedFacts)
 
@@ -1206,13 +1228,16 @@ def extract_structured_facts(
     logger.info("Processing %d chunk(s) (max %d chars each)", len(chunks), max_chars_per_chunk)
 
     all_raw_facts: List[_ExtractedFact] = []
+    errors: List[Exception] = []
     for i, chunk in enumerate(chunks, 1):
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
         payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
-        result = _invoke_extraction(chain, payload, fallback_llm)
-        if result is not None:
-            all_raw_facts.extend(result.facts)
+        try:
+            all_raw_facts.extend(_invoke_extraction(chain, payload, fallback_llm).facts)
+        except Exception as exc:
+            errors.append(exc)
 
+    _raise_if_every_chunk_failed(errors, len(chunks))
     return _finalize_facts(all_raw_facts, filtered_text)
 
 
@@ -1241,6 +1266,9 @@ async def extract_structured_facts_async(
                        pipeline's wall-clock time, so it is the only one worth
                        reporting at sub-step granularity. Called on the event loop
                        thread; keep it non-blocking (it must not do I/O or await).
+
+    Raises:
+        ExtractionFailedError: every chunk's LLM call failed (after the fallback).
     """
     chain = _EXTRACTION_PROMPT | llm.with_structured_output(_ExtractedFacts)
 
@@ -1257,21 +1285,28 @@ async def extract_structured_facts_async(
     if on_progress is not None:
         on_progress(0, len(chunks))
 
+    errors: List[Exception] = []
+
     async def _process_chunk(i: int, chunk: str) -> List[_ExtractedFact]:
         nonlocal completed
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
         payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
-        result = await _ainvoke_extraction(chain, payload, fallback_llm)
+        try:
+            facts = (await _ainvoke_extraction(chain, payload, fallback_llm)).facts
+        except Exception as exc:
+            errors.append(exc)
+            facts = []
         # Chunks finish out of order; report how many are DONE, not which one, so the
         # count never appears to go backwards.
         completed += 1
         if on_progress is not None:
             on_progress(completed, len(chunks))
-        return result.facts if result is not None else []
+        return facts
 
     chunk_results = await asyncio.gather(
         *[_process_chunk(i, chunk) for i, chunk in enumerate(chunks, 1)]
     )
+    _raise_if_every_chunk_failed(errors, len(chunks))
     all_raw_facts: List[_ExtractedFact] = [f for chunk_facts in chunk_results for f in chunk_facts]
 
     return _finalize_facts(all_raw_facts, filtered_text)

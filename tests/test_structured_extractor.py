@@ -7,6 +7,7 @@ from langchain_core.runnables import RunnableLambda
 
 from structured_extractor import (
     ExtractedFact,
+    ExtractionFailedError,
     PeriodPoint,
     _filter_narrative,
     _finalize_facts,
@@ -694,10 +695,20 @@ def test_extract_structured_facts_falls_back_to_secondary_llm_on_primary_failure
     assert len(facts) == 1
 
 
-def test_extract_structured_facts_returns_empty_when_primary_fails_without_fallback():
-    primary = _llm_raising("primary exploded")
+def test_extract_structured_facts_raises_when_every_chunk_fails():
+    """A model that answers nothing must not look like a document with nothing to check."""
+    primary = _llm_raising("404 model not available")
 
-    assert extract_structured_facts(NARRATIVE, ROW_LABELS, primary) == []
+    with pytest.raises(ExtractionFailedError, match="404 model not available"):
+        extract_structured_facts(NARRATIVE, ROW_LABELS, primary)
+
+
+def test_extract_structured_facts_raises_when_primary_and_fallback_both_fail():
+    primary = _llm_raising("primary exploded")
+    fallback = _llm_raising("fallback exploded")
+
+    with pytest.raises(ExtractionFailedError, match="fallback exploded"):
+        extract_structured_facts(NARRATIVE, ROW_LABELS, primary, fallback_llm=fallback)
 
 
 def test_extract_structured_facts_async_produces_same_result_as_sync():
@@ -876,13 +887,40 @@ def test_extract_async_counts_a_failed_chunk_as_completed():
     llm = _llm_raising("boom")
     calls = []
 
+    with pytest.raises(ExtractionFailedError):
+        asyncio.run(extract_structured_facts_async(
+            NARRATIVE, ROW_LABELS, llm,
+            on_progress=lambda done, total: calls.append((done, total)),
+        ))
+
+    assert calls[-1] == (1, 1)
+
+
+def test_extract_async_raises_when_every_chunk_fails():
+    llm = _llm_raising("429 quota exhausted")
+
+    with pytest.raises(ExtractionFailedError, match="429 quota exhausted"):
+        asyncio.run(extract_structured_facts_async(
+            _TWO_PAGE_NARRATIVE, ROW_LABELS, llm, max_chars_per_chunk=50,
+        ))
+
+
+def test_extract_async_keeps_the_chunks_that_succeeded():
+    """One failed chunk is a gap, not a failed document — the other chunk's facts survive."""
+    def _respond(prompt_value):
+        if "10.200,4" in prompt_value.to_string():  # page 2's figure; the prompt names every month
+            raise RuntimeError("503 overloaded")
+        return SimpleNamespace(facts=[_fake_fact()])
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+
     facts = asyncio.run(extract_structured_facts_async(
-        NARRATIVE, ROW_LABELS, llm,
-        on_progress=lambda done, total: calls.append((done, total)),
+        _TWO_PAGE_NARRATIVE, ROW_LABELS, llm, max_chars_per_chunk=50,
     ))
 
-    assert facts == []
-    assert calls[-1] == (1, 1)
+    assert len(facts) == 1
+    assert facts[0].claimed_value == pytest.approx(10355.1)
 
 
 def test_extract_async_without_on_progress_still_works():

@@ -35,6 +35,15 @@ from langchain_core.messages import HumanMessage
 
 logger = logging.getLogger("fact-checker")
 
+
+class VisionExtractionFailedError(RuntimeError):
+    """Every vision batch failed, so a scanned PDF was never read at all.
+
+    Raised instead of returning blank page markers, which downstream would yield zero claims
+    and render as a document with nothing wrong in it.
+    """
+
+
 # Text-layer result shorter than this is treated as "extraction failed" and triggers the vision fallback.
 MIN_USEFUL_CHARS = 200
 
@@ -591,8 +600,12 @@ async def extract_text_from_pdf_vision_async(
     def _empty_markers(page_nums: List[int]) -> str:
         return "\n".join(f"[== Halaman {n} ==]" for n in page_nums)
 
+    # One entry per batch the model never answered, holding its last error.
+    failures: List[str] = []
+
     async def _extract_batch(idxs: List[int]) -> str:
         page_nums = [i + 1 for i in idxs]
+        last_error: List[Exception] = []
         # Single page: just the image (unchanged behaviour). Multi page: precede each image with
         # its marker so the model can echo them back and keep the pages separable.
         content: list = []
@@ -609,20 +622,35 @@ async def extract_text_from_pdf_vision_async(
         content.append({"type": "text", "text": prompt})
 
         async def _one_call() -> str:
-            response = await vision_llm.ainvoke([HumanMessage(content=content)])
+            try:
+                response = await vision_llm.ainvoke([HumanMessage(content=content)])
+            except Exception as exc:
+                last_error[:] = [exc]
+                raise
             text = response.content if isinstance(response.content, str) else ""
             text = _strip_tabular_content(text)
             return _renumber_markers(text, page_nums)
+
+        def _give_up() -> str:
+            failures.append(str(last_error[0]) if last_error else "tidak ada jawaban")
+            return _empty_markers(page_nums)
 
         return await call_vision_with_retry(
             _one_call,
             semaphore=semaphore,
             max_retries=max_retries,
             label=f"pages {page_nums}",
-            on_give_up=lambda: _empty_markers(page_nums),
+            on_give_up=_give_up,
         )
 
     batch_texts = await asyncio.gather(*[_extract_batch(idxs) for idxs in batches])
+    # A gap per failed batch is tolerable; a scan the model never read at all is not — it
+    # would reach the extractor as blank pages and render as a document with nothing wrong.
+    if batches and len(failures) == len(batches):
+        raise VisionExtractionFailedError(
+            f"Pembacaan halaman PDF (vision) gagal di semua {n_pages} halaman, jadi dokumen "
+            f"tidak terbaca sama sekali. Penyebab: {failures[-1]}"
+        )
     combined = "\n\n".join(t for t in batch_texts if t.strip())
     logger.info("Async vision extraction returned %d chars total", len(combined))
     return combined

@@ -7,6 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from pdf_extraction import (
+    VisionExtractionFailedError,
     _render_pages_to_b64,
     _strip_tabular_content,
     extract_narrative_text,
@@ -252,6 +253,37 @@ def test_vision_async_keeps_one_page_per_call_for_non_gemini_and_adds_markers():
         assert _count_images(call) == 1
     for n in range(1, 4):
         assert f"[== Halaman {n} ==]\nteks tanpa penanda" in result
+
+
+class _FailingLLM:
+    """Vision stub that fails every call with a non-rate-limit error (e.g. a retired model)."""
+    def __init__(self, message="404 model not available", fail_on_call=None):
+        self.calls = []
+        self.message = message
+        self.fail_on_call = fail_on_call  # None = fail every call; n = fail only the n-th
+
+    async def ainvoke(self, messages):
+        self.calls.append(messages[0])
+        if self.fail_on_call is None or len(self.calls) == self.fail_on_call:
+            raise RuntimeError(self.message)
+        return _Resp("teks halaman")
+
+
+def test_vision_async_raises_when_every_batch_fails():
+    """A scan the model never read must not come back as an empty (clean-looking) document."""
+    llm = _FailingLLM()
+    with patch("pdf_extraction._render_pages_to_b64", return_value=["a", "b", "c"]):
+        with pytest.raises(VisionExtractionFailedError, match="404 model not available"):
+            asyncio.run(extract_text_from_pdf_vision_async(b"pdf", llm, dpi=100))
+
+
+def test_vision_async_keeps_pages_when_only_one_batch_fails():
+    llm = _FailingLLM(fail_on_call=2)
+    with patch("pdf_extraction._render_pages_to_b64", return_value=["a", "b", "c"]):
+        result = asyncio.run(extract_text_from_pdf_vision_async(b"pdf", llm, dpi=100))
+
+    assert "[== Halaman 1 ==]\nteks halaman" in result
+    assert "[== Halaman 3 ==]\nteks halaman" in result
 
 
 def test_vision_pages_per_call_env_override(monkeypatch):
