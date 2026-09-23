@@ -87,3 +87,62 @@ def test_verify_paired_endpoint_returns_400_when_pipeline_fails(
     )
 
     assert response.status_code == 400
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_verify_paired_endpoint_reports_the_pages_that_were_not_checked(
+    mock_get_vision_llm, mock_extract_narrative_text, mock_verify_paired, mock_check_typos
+):
+    """Pages the model failed on must reach the reader, or the counts overstate the check."""
+    mock_get_vision_llm.side_effect = RuntimeError("no key configured")
+
+    async def _narrative(pdf_bytes, vision_llm, on_vision_gap=None):
+        on_vision_gap([3], "503 overloaded")
+        return "[== Halaman 1 ==]\nInflasi tumbuh 9,7% (yoy)."
+
+    async def _verify(**kwargs):
+        kwargs["on_extract_gap"]([5, 6], RuntimeError("429 quota exhausted"))
+        return _fact_response(total_facts=1, entailed_count=1)
+
+    mock_extract_narrative_text.side_effect = _narrative
+    mock_verify_paired.side_effect = _verify
+    mock_check_typos.return_value = None
+
+    response = client.post(
+        "/api/verify-paired?run_typo_check=false",
+        files=[
+            ("pdf_file", ("report.pdf", b"%PDF-1.4 fake", "application/pdf")),
+            ("excel_file", ("TABEL1_1.xls", b"xls-bytes", "application/vnd.ms-excel")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert response.json()["coverage_gaps"] == [
+        {"stage": "pdf", "pages": [3], "reason": "503 overloaded"},
+        {"stage": "extract", "pages": [5, 6], "reason": "429 quota exhausted"},
+    ]
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_verify_paired_endpoint_reports_no_gaps_on_a_clean_run(
+    mock_get_vision_llm, mock_extract_narrative_text, mock_verify_paired, mock_check_typos
+):
+    mock_get_vision_llm.side_effect = RuntimeError("no key configured")
+    mock_extract_narrative_text.return_value = "[== Halaman 1 ==]\nInflasi tumbuh 9,7% (yoy)."
+    mock_verify_paired.return_value = _fact_response(total_facts=1, entailed_count=1)
+
+    response = client.post(
+        "/api/verify-paired?run_typo_check=false",
+        files=[
+            ("pdf_file", ("report.pdf", b"%PDF-1.4 fake", "application/pdf")),
+            ("excel_file", ("TABEL1_1.xls", b"xls-bytes", "application/vnd.ms-excel")),
+        ],
+    )
+
+    assert response.json()["coverage_gaps"] == []

@@ -145,6 +145,17 @@ class NumberFormatNotice(BaseModel):
     pages: List[int]
 
 
+class CoverageGap(BaseModel):
+    """Pages the model failed on, so no claim from them is in the result.
+
+    The counts above the results only describe what was read. A gap the reader is not told about
+    makes unread pages look like pages with nothing wrong in them.
+    """
+    stage: Literal["pdf", "extract"]  # "pdf": reading the page image; "extract": finding claims
+    pages: List[int]                  # 1-based; empty when the failed part carried no page marker
+    reason: str                       # the model's own error, shortened
+
+
 class PairedVerificationResponse(BaseModel):
     pdf_filename: str
     # These four are positional parallel arrays, one entry per reference source. Note that in
@@ -173,6 +184,9 @@ class PairedVerificationResponse(BaseModel):
     # Populated in the modes that read the PDF's own tables ("internal"/"both") when those
     # tables mix number conventions — see NumberFormatNotice.
     number_format_notice: Optional[NumberFormatNotice] = None
+    # Parts of the document the model failed on while the rest succeeded — see CoverageGap. A
+    # total failure never lands here: it raises instead.
+    coverage_gaps: List[CoverageGap] = Field(default_factory=list)
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)

@@ -1784,6 +1784,7 @@ async def verify_paired(
     progress_cb: ProgressCb = None,
     pdf_tables: Optional[List[PdfTable]] = None,
     mode: str = "excel",
+    on_extract_gap: Optional[Callable[[List[int], Exception], None]] = None,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -1808,6 +1809,8 @@ async def verify_paired(
         mode:           "excel" | "internal" | "both". Metadata plus two behaviour switches:
                         table-family suggestions are pointless in "internal" mode, and the
                         response echoes the mode back so the UI can caveat LLM-read references.
+        on_extract_gap: Optional (pages, error) callback for each narrative chunk the extraction
+                        model failed on — see extract_structured_facts_async's on_chunk_failed.
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -1955,6 +1958,7 @@ async def verify_paired(
         fallback_llm=extraction_fallback,
         source_labels=source_labels_for_extractor,
         on_progress=_on_chunk_progress,
+        on_chunk_failed=on_extract_gap,
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))

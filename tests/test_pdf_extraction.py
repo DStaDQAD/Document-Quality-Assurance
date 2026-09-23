@@ -149,7 +149,7 @@ def test_extract_narrative_text_falls_back_to_vision_when_pypdf_text_too_short(m
     vision_llm = Mock()
     result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=vision_llm))
 
-    mock_vision.assert_called_once_with(b"%PDF-1.4 fake", vision_llm)
+    mock_vision.assert_called_once_with(b"%PDF-1.4 fake", vision_llm, on_batch_failed=None)
     assert result == mock_vision.return_value
 
 
@@ -181,7 +181,7 @@ def test_extract_narrative_text_falls_back_to_vision_when_most_pages_are_blank(
     vision_llm = Mock()
     result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=vision_llm))
 
-    mock_vision.assert_called_once_with(b"%PDF-1.4 fake", vision_llm)
+    mock_vision.assert_called_once_with(b"%PDF-1.4 fake", vision_llm, on_batch_failed=None)
     assert result == mock_vision.return_value
 
 
@@ -295,3 +295,27 @@ def test_vision_pages_per_call_env_override(monkeypatch):
 
     # Env forces 2 pages/call even for the local provider → 3 calls for 5 pages.
     assert len(llm.calls) == 3
+
+
+def test_vision_async_reports_the_pages_of_a_failed_batch():
+    llm = _FailingLLM(message="503 overloaded", fail_on_call=2)
+    gaps = []
+    with patch("pdf_extraction._render_pages_to_b64", return_value=["a", "b", "c"]):
+        asyncio.run(extract_text_from_pdf_vision_async(
+            b"pdf", llm, dpi=100,
+            on_batch_failed=lambda pages, reason: gaps.append((pages, reason)),
+        ))
+
+    assert gaps == [([2], "503 overloaded")]
+
+
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_extract_narrative_text_passes_the_gap_callback_to_vision(mock_text, mock_vision):
+    mock_text.return_value = ""
+    mock_vision.return_value = "[== Halaman 1 ==]\nteks"
+    on_gap = Mock()
+
+    asyncio.run(extract_narrative_text(b"pdf", Mock(), on_vision_gap=on_gap))
+
+    assert mock_vision.call_args.kwargs["on_batch_failed"] is on_gap

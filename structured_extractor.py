@@ -1249,6 +1249,7 @@ async def extract_structured_facts_async(
     fallback_llm: Optional[BaseChatModel] = None,
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    on_chunk_failed: Optional[Callable[[List[int], Exception], None]] = None,
 ) -> List[ExtractedFact]:
     """Parallel version of extract_structured_facts — all chunks are processed concurrently.
 
@@ -1266,6 +1267,9 @@ async def extract_structured_facts_async(
                        pipeline's wall-clock time, so it is the only one worth
                        reporting at sub-step granularity. Called on the event loop
                        thread; keep it non-blocking (it must not do I/O or await).
+        on_chunk_failed: Optional callback invoked as (pages, error) for each chunk whose LLM
+                       call failed even after the fallback — the pages its claims were never
+                       read from. Same threading contract as on_progress.
 
     Raises:
         ExtractionFailedError: every chunk's LLM call failed (after the fallback).
@@ -1296,6 +1300,8 @@ async def extract_structured_facts_async(
         except Exception as exc:
             errors.append(exc)
             facts = []
+            if on_chunk_failed is not None:
+                on_chunk_failed([int(n) for n in _PAGE_MARKER_PATTERN.findall(chunk)], exc)
         # Chunks finish out of order; report how many are DONE, not which one, so the
         # count never appears to go backwards.
         completed += 1

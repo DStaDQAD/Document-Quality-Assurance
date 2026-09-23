@@ -89,6 +89,7 @@ from pdf_extraction import (
 )
 from schemas import (
     ClaimRequest,
+    CoverageGap,
     DocumentRequest,
     FactVerificationResult,
     NumberFormatNotice,
@@ -106,6 +107,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fact-checker")
 
 _PAGE_MARKER_RE = re.compile(r'\[== Halaman \d+ ==\]')
+
+# A provider's error can carry its whole JSON body; the reader needs the status and the gist.
+_GAP_REASON_MAX_CHARS = 240
 
 app = FastAPI(
     title="Fact-Checker PoC",
@@ -536,11 +540,26 @@ async def _run_paired_pipeline(
     except RuntimeError:
         logger.warning("Vision LLM not available (GOOGLE_API_KEY missing); vision fallback disabled.")
 
+    # Pages the model failed on while the rest of the document succeeded. The stages report them
+    # through callbacks and they ride along on the response, so the counts are never read as
+    # covering pages nobody checked.
+    coverage_gaps: List[CoverageGap] = []
+
+    def _gap_recorder(stage: str) -> Callable[[List[int], Any], None]:
+        def _record(pages: List[int], error: Any) -> None:
+            reason = str(error)
+            if len(reason) > _GAP_REASON_MAX_CHARS:
+                reason = reason[:_GAP_REASON_MAX_CHARS].rstrip() + "…"
+            coverage_gaps.append(CoverageGap(stage=stage, pages=sorted(pages), reason=reason))
+        return _record
+
     # Extract the narrative text once and share it between fact-verification and the
     # typo/grammar check — the vision fallback is an LLM call, so re-extracting per
     # consumer would double its cost and rate-limit exposure for no benefit.
     _emit("pdf", "running", detail=pdf_filename)
-    narrative_text = await extract_narrative_text(pdf_bytes, vision_llm)
+    narrative_text = await extract_narrative_text(
+        pdf_bytes, vision_llm, on_vision_gap=_gap_recorder("pdf")
+    )
     n_pages = len(_PAGE_MARKER_RE.findall(narrative_text))
     n_chars = len(_PAGE_MARKER_RE.sub("", narrative_text).strip())
     _emit("pdf", "done", detail=f"{n_pages} halaman · {n_chars:,} karakter".replace(",", "."))
@@ -608,6 +627,7 @@ async def _run_paired_pipeline(
             progress_cb=_record_and_forward,
             pdf_tables=pdf_tables,
             mode=mode,
+            on_extract_gap=_gap_recorder("extract"),
         ),
         _maybe_typo_check(),
     )
@@ -629,9 +649,11 @@ async def _run_paired_pipeline(
         )
         if number_format_mix is not None else None
     )
-    return fact_result.model_copy(
-        update={"typo_check": typo_result, "number_format_notice": notice}
-    )
+    return fact_result.model_copy(update={
+        "typo_check": typo_result,
+        "number_format_notice": notice,
+        "coverage_gaps": coverage_gaps,
+    })
 
 
 _VERIFICATION_MODES = ("excel", "internal", "both")

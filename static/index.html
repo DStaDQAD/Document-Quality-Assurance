@@ -558,6 +558,9 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 /* Same shape as the conflict strip, amber: a heads-up about how the document is TYPESET,
    not about a claim being wrong. */
 .format-strip { background: #FFFBEB; border-color: #FDE68A; color: #92400E; }
+/* Red: part of the document was never checked, so the counts above undercount it. */
+.gap-strip { background: #FEF2F2; border-color: #FECACA; color: #991B1B; }
+.gap-strip .gap-reason { display: block; margin-top: 4px; font-size: 11px; opacity: 0.8; word-break: break-word; }
 .fact-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .fact-source-chip {
   font-size: 10px; font-weight: 600; color: var(--text-500);
@@ -1584,6 +1587,25 @@ body.auth-locked .app {
       </div>`;
     })() : "";
 
+    // The model failed on part of the document while the rest succeeded. The claims on those
+    // pages are simply absent, so without this the counts read as covering pages nobody checked
+    // — a "0 Tidak Sesuai" that only means "not looked at".
+    const GAP_STAGE = { pdf: "pembacaan halaman", extract: "pencarian klaim" };
+    const gaps = data.coverage_gaps || [];
+    const gapStrip = gaps.length ? (() => {
+      const parts = gaps.map(g => {
+        const where = (g.pages || []).length ? `Hal. ${g.pages.join(", ")}` : "sebagian teks";
+        return `<strong>${escapeHtml(where)}</strong> (${GAP_STAGE[g.stage] || escapeHtml(g.stage)})`;
+      });
+      return `<div class="conflict-strip gap-strip">
+        <span class="material-symbols-outlined">warning</span>
+        <span><strong>Sebagian dokumen tidak ikut diperiksa.</strong> Model AI gagal memproses
+        ${parts.join("; ")}. Klaim di bagian itu tidak ada di hasil ini, jadi jumlah di bawah
+        belum mencakupnya — jalankan ulang pemeriksaan untuk melengkapinya.
+        <span class="gap-reason">Penyebab: ${escapeHtml(gaps[gaps.length - 1].reason)}</span></span>
+      </div>`;
+    })() : "";
+
     const header = `<div class="report-top">
       <div class="donut-wrap">${renderDonutSVG(e, r, i)}</div>
       <div class="report-stats">
@@ -1596,7 +1618,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${conflictStrip}${formatStrip}`;
+    </div>${gapStrip}${conflictStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">

@@ -561,6 +561,7 @@ async def extract_text_from_pdf_vision_async(
     file_bytes: bytes,
     vision_llm: BaseChatModel,
     dpi: int = 150,
+    on_batch_failed: Optional[Callable[[List[int], str], None]] = None,
 ) -> str:
     """Async vision extraction — pages are batched into as few LLM calls as the provider allows.
 
@@ -575,6 +576,10 @@ async def extract_text_from_pdf_vision_async(
     easily blown by image-heavy calls, and Gemini's free tier caps gemini-2.5-flash at 5
     requests/minute. A semaphore caps concurrency per provider and failed calls are retried with
     backoff parsed from the provider's own suggested wait time when a rate-limit error is hit.
+
+    A batch that still fails becomes blank page markers, and `on_batch_failed(pages, reason)` is
+    told which pages those are so the gap can reach the reader. Raises
+    VisionExtractionFailedError when every batch fails.
     """
     logger.info("Rendering PDF pages at %d DPI for vision extraction (async, batched)", dpi)
     b64_pages = await asyncio.to_thread(_render_pages_to_b64, file_bytes, dpi)
@@ -633,6 +638,8 @@ async def extract_text_from_pdf_vision_async(
 
         def _give_up() -> str:
             failures.append(str(last_error[0]) if last_error else "tidak ada jawaban")
+            if on_batch_failed is not None:
+                on_batch_failed(page_nums, failures[-1])
             return _empty_markers(page_nums)
 
         return await call_vision_with_retry(
@@ -656,12 +663,17 @@ async def extract_text_from_pdf_vision_async(
     return combined
 
 
-async def extract_narrative_text(file_bytes: bytes, vision_llm: Optional[BaseChatModel] = None) -> str:
+async def extract_narrative_text(
+    file_bytes: bytes,
+    vision_llm: Optional[BaseChatModel] = None,
+    on_vision_gap: Optional[Callable[[List[int], str], None]] = None,
+) -> str:
     """Extract a PDF's narrative text, falling back to vision extraction when the text layer is too short.
 
     Single entry point for any caller that needs the full narrative text (with page markers) —
     call this once and share the result across multiple downstream consumers instead of extracting
     per-consumer, since the vision fallback is an LLM call with its own cost and rate limits.
+    `on_vision_gap` is handed to the vision fallback as its on_batch_failed.
     """
     text = extract_text_from_pdf(file_bytes)
     content_chars = len(PAGE_MARKER_RE.sub('', text).strip())
@@ -689,7 +701,9 @@ async def extract_narrative_text(file_bytes: bytes, vision_llm: Optional[BaseCha
                 "falling back to vision extraction",
                 content_chars,
             )
-            text = await extract_text_from_pdf_vision_async(file_bytes, vision_llm)
+            text = await extract_text_from_pdf_vision_async(
+                file_bytes, vision_llm, on_batch_failed=on_vision_gap
+            )
     else:
         # Statistical-table rows still leak into the text layer; strip them so the typo checker
         # and structured extractor only see prose. The vision path already runs this per-page

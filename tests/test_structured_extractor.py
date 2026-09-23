@@ -1019,3 +1019,22 @@ def test_detect_mixed_number_formats_ignores_a_stray_figure():
     pages = ["M2 10.355,1 dan 9.387,9 tumbuh", "Satu angka asing 1,204 di sini"]
 
     assert detect_mixed_number_formats(pages) is None
+
+
+def test_extract_async_reports_which_pages_a_failed_chunk_covered():
+    """A gap the reader is never told about looks like pages with nothing wrong in them."""
+    def _respond(prompt_value):
+        if "10.200,4" in prompt_value.to_string():  # page 2's figure
+            raise RuntimeError("503 overloaded")
+        return SimpleNamespace(facts=[_fake_fact()])
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    gaps = []
+
+    asyncio.run(extract_structured_facts_async(
+        _TWO_PAGE_NARRATIVE, ROW_LABELS, llm, max_chars_per_chunk=50,
+        on_chunk_failed=lambda pages, err: gaps.append((pages, str(err))),
+    ))
+
+    assert gaps == [([2], "503 overloaded")]
