@@ -1972,3 +1972,94 @@ def test_only_a_trailing_extra_word_makes_a_row_too_narrow_to_stand_in(label, cl
         claimed_value=1.0, unit="persen_yoy", context_quote="x",
     )
     assert _is_narrower_than_the_claim(fact, [(label, 1.0)]) is narrower
+
+
+# ---------------------------------------------------------------------------
+# Threshold claims over several points, and one bad fact never sinks a report
+# ---------------------------------------------------------------------------
+
+def _two_point_threshold_fact(operation="above_threshold"):
+    return _make_fact(
+        operation=operation, claimed_value=100.0, unit=None,
+        periods=[
+            _make_period(metric_label="Indeks Keyakinan Konsumen (IKK)", year=2026, month="May"),
+            _make_period(metric_label="Indeks Keyakinan Konsumen (IKK)", year=2026, month="Jun"),
+        ],
+    )
+
+
+def _ikk_table(may, jun):
+    return _make_table(title="Tabel 1", unit="Indeks", data={
+        ("Indeks Keyakinan Konsumen (IKK)", 2026, "May"): may,
+        ("Indeks Keyakinan Konsumen (IKK)", 2026, "Jun"): jun,
+    })
+
+
+def test_threshold_claim_over_two_points_is_judged_on_every_point():
+    # The extractor is asked for one point per threshold claim but sometimes gives two
+    # ("IKK Mei dan Juni berada di level optimis"). That used to raise IndexError inside
+    # _build_periods and take the whole report down with it.
+    result = _evaluate_fact(_two_point_threshold_fact(), [_make_source(_ikk_table(120.9, 117.8))])
+
+    assert result.verdict == "Entailed"
+    assert [p.excel_value for p in result.periods] == [120.9, 117.8]
+
+
+def test_threshold_claim_over_two_points_is_refuted_when_any_point_misses():
+    result = _evaluate_fact(_two_point_threshold_fact(), [_make_source(_ikk_table(120.9, 98.0))])
+
+    assert result.verdict == "Refuted"
+    assert "98.0" in result.reasoning
+
+
+@patch("paired_verifier._evaluate_fact")
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_turns_a_failing_fact_into_inconclusive(mock_parse, mock_extract, mock_eval):
+    good = FactVerificationResult(
+        operation="value", metric_label="Total", verdict="Entailed",
+        reasoning="ok", context_quote="quote",
+    )
+    mock_parse.return_value = _make_table(data={("Total", 2026, "Apr"): 10355.1})
+    mock_extract.return_value = [_make_fact(), _make_fact(periods=[_make_period(month="Mar")])]
+    mock_eval.side_effect = [good, IndexError("list index out of range")]
+
+    response = asyncio.run(
+        verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "x" * 250,
+            excel_sources=[(b"xls-bytes", "I.1", "TABEL1_1.xls")],
+            llm=Mock(),
+        )
+    )
+
+    assert response.total_facts == 2
+    assert [r.verdict for r in response.results] == ["Entailed", "Inconclusive"]
+    assert "gagal dinilai" in response.results[1].reasoning
+
+
+def test_an_aggregate_parent_is_not_a_qualification_when_ranking_sources():
+    """SK-Juni-2026 carries two rows named for savings: Tabel 5's 'Total > Tabungan' (17,0% — the
+    share of income saved, which is what "saving to income ratio" means) and Tabel 8's
+    'Tabungan/deposito' (44,5% — the share of respondents naming it an investment). The claim
+    names no section, so _qualification_rank called Tabel 5's row the odd one out and the claim
+    was answered with 44,5 and refuted. A 'Total' parent IS the unqualified series."""
+    split = _make_table(title="Tabel 5", unit="persen", data={
+        ("Total > Konsumsi", 2026, "Jun"): 73.0,
+        ("Total > Tabungan", 2026, "Jun"): 17.0,
+    })
+    investment = _make_table(title="Tabel 8", unit="persen", data={
+        ("Tabungan/deposito", 2026, "Jun"): 44.5,
+        ("Emas/perhiasan", 2026, "Jun"): 36.5,
+    })
+    fact = _make_fact(
+        operation="value", claimed_value=17.0, unit="persen",
+        periods=[_make_period(metric_label="tabungan", year=2026, month="Jun")],
+    )
+
+    result = _evaluate_fact(fact, [
+        _make_source(split, filename="SK.xlsx", sheet="Tabel 5"),
+        _make_source(investment, filename="SK.xlsx", sheet="Tabel 8"),
+    ])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == 17.0

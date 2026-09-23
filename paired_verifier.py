@@ -362,9 +362,23 @@ def _qualification_rank(periods: List[PeriodPoint], resolved: List[Tuple[str, fl
     """
     mismatches = sum(
         1 for p, (label, _value) in zip(periods, resolved)
-        if (QUAL_SEP in (label or "")) != (QUAL_SEP in (p.metric_label or ""))
+        if _is_qualified(label) != _is_qualified(p.metric_label)
     )
     return 1 if mismatches else 0
+
+
+def _is_qualified(label: Optional[str]) -> bool:
+    """Whether a row name names a SECTION of its series rather than the series itself.
+
+    A 'Total' parent does not: 'Total > Tabungan' is the whole table's savings row, which is
+    exactly what a claim naming no section means — the same reading table_model's leaf tier
+    already applies when it prefers an aggregate parent. Counting it as qualified made the two
+    sheets of SK-Juni-2026 that carry a savings row rank the wrong way round, and "saving to
+    income ratio … 17,0%" was answered by Tabel 8's 'Tabungan/deposito' (44,5) and refuted.
+    """
+    if QUAL_SEP not in (label or ""):
+        return False
+    return not BITableData._is_aggregate(label.rsplit(QUAL_SEP, 1)[0])
 
 
 def _coverage_score(
@@ -781,11 +795,17 @@ def _compute_threshold(
     Dimensionless comparison: the metric's value at the period is checked directly against
     the threshold with a strict inequality (a PMI index of exactly 50 is neither expansion
     nor contraction). No unit conversion — the bound is an index/percent level.
+
+    The extractor is asked for exactly one point but sometimes gives several ("IKK Mei dan Juni
+    berada di level optimis"). Every point must then clear the bound, and the one reported as
+    the computed value is the first that fails — or the first point when all pass. Reading only
+    the first point used to leave `_build_periods` one value short, and the IndexError took the
+    whole report down with it.
     """
-    label, value = resolved[0]
-    value = round(value, 4)
+    values = [round(raw, 4) for _, raw in resolved]
+    label, value = resolved[0][0], values[0]
     matched_source = src.label
-    periods = _build_periods(fact.periods, resolved, [value])
+    periods = _build_periods(fact.periods, resolved, values)
     threshold = fact.claimed_value
     if threshold is None:
         return _make_result(
@@ -793,15 +813,25 @@ def _compute_threshold(
             reasoning="Klaim ambang tanpa nilai ambang yang jelas; tidak dapat dinilai.",
         )
     if fact.operation == "above_threshold":
-        ok, arah = value > threshold, "di atas"
+        passes, arah = (lambda v: v > threshold), "di atas"
     else:
-        ok, arah = value < threshold, "di bawah"
+        passes, arah = (lambda v: v < threshold), "di bawah"
+    failing = [i for i, v in enumerate(values) if not passes(v)]
+    ok = not failing
+    if failing:
+        label, value = resolved[failing[0]][0], values[failing[0]]
     verdict = "Entailed" if ok else "Refuted"
+    if len(values) > 1:
+        breakdown = ", ".join(
+            f"{_point_desc(p)}={v}" for p, v in zip(fact.periods, values)
+        )
+    else:
+        breakdown = f"{label} = {value}"
     return _make_result(
         fact, periods, matched_source, threshold, fact.unit, value, fact.unit, None, verdict,
         reasoning=(
             f"Klaim: {label} {arah} ambang {threshold} | "
-            f"Excel [{matched_source}]: {label} = {value} | "
+            f"Excel [{matched_source}]: {breakdown} | "
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
@@ -1671,7 +1701,7 @@ async def _pointer_pass(
                     mini.col_labels.append(q.data_key[1])
 
             patched = _ExcelSource(table=mini, filename=src.filename, sheet=src.sheet)
-            res = _evaluate_fact(facts[fi], [patched])
+            res = _evaluate_fact_safely(facts[fi], [patched])
             if res.verdict == "Inconclusive":
                 continue
             refs = "; ".join(f"{q.desc} → R{r}K{c}" for q, r, c, _v in cells)
@@ -1687,6 +1717,25 @@ async def _pointer_pass(
 # ---------------------------------------------------------------------------
 # Orchestrator
 # ---------------------------------------------------------------------------
+
+def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
+    """_evaluate_fact, with any failure contained to the one claim that caused it.
+
+    Claims arrive in whatever shape the extractor gave them, and a shape the comparison code
+    did not anticipate used to raise straight out of verify_paired: on SK-Juni-2026 a threshold
+    claim carrying two periods ended the whole request with "list index out of range", and the
+    user saw no verdict for any of its seventy claims. One claim the code cannot judge is a
+    claim without a verdict — Inconclusive, with the reason logged — not a failed report.
+    """
+    try:
+        return _evaluate_fact(fact, sources)
+    except Exception as exc:
+        logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
+        return _make_result(
+            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            reasoning=f"Klaim ini gagal dinilai oleh program ({type(exc).__name__}: {exc}).",
+        )
+
 
 def _deduplicate_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
     """Remove duplicate (operation, periods) entries — keep first occurrence."""
@@ -1933,7 +1982,9 @@ async def verify_paired(
 
     # Step 3: Direct comparison (no SQL) — each fact is checked across all sources
     emit("compare", "running", detail=f"{len(facts)} klaim")
-    results: List[FactVerificationResult] = [_evaluate_fact(fact, parsed_sources) for fact in facts]
+    results: List[FactVerificationResult] = [
+        _evaluate_fact_safely(fact, parsed_sources) for fact in facts
+    ]
 
     # Step 3b: tier-4 cell-pointer pass for claims no source could resolve. Vision LLM
     # (Gemini) first — big grid snapshots trip Groq's TPM limits more readily — with the

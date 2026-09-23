@@ -147,6 +147,37 @@ def test_lookup_fuzzy_still_answers_a_leaf_query_that_adds_no_new_subject():
     assert value == 1.0
 
 
+def test_lookup_fuzzy_sees_past_a_footnote_marker_on_a_leaf():
+    """M2-Juni-2026 Tabel 4 marks its 'Lainnya' rows with a footnote: 'Total > Lainnya**'. The
+    narrative says "DPK lainnya meningkat dari 3,5% (yoy) pada Mei 2026 menjadi 12,2% (yoy)", and
+    the table holds exactly 3,5 and 12,2 — yet both claims came back Tidak Cukup Data, because
+    the stars broke the leaf's substring test: 'lainnya**' is not inside 'dpk lainnya'. With the
+    stars removed the same lookup resolves at once. A footnote marker is cosmetic; it must not
+    decide whether a row exists."""
+    table = _make_temporal([
+        "Giro > Lainnya**",
+        "Tabungan > Lainnya**",
+        "Simpanan Berjangka > Lainnya**",
+        "Total > Lainnya**",
+    ])
+
+    matched, value = table.lookup_fuzzy("DPK Lainnya", 2026, "Jun")
+
+    # The aggregate parent is what a bare claim means — not giro's or tabungan's share.
+    assert matched == "Total > Lainnya**", "and the label shown keeps its marker"
+    assert value == 4.0
+
+
+def test_lookup_fuzzy_footnote_markers_do_not_merge_distinct_rows():
+    """Removing the stars must not blur what the markers sit beside: a claim naming one section
+    still resolves to that section, not to whichever 'Lainnya' comes first."""
+    table = _make_temporal(["Giro > Lainnya**", "Tabungan > Lainnya**", "Total > Lainnya**"])
+
+    matched, _ = table.lookup_fuzzy("tabungan lainnya", 2026, "Jun")
+
+    assert matched == "Tabungan > Lainnya**"
+
+
 def test_lookup_fuzzy_rejects_a_leaf_match_on_a_single_shared_word():
     # 'Lainnya' shares one word out of three with 'tingkat pendidikan lainnya'.
     table = _make_temporal(["Lainnya", "Tabungan/deposito"])
@@ -399,3 +430,150 @@ def test_a_claim_naming_two_members_of_a_family_takes_neither():
     table._data[("Tabungan Lainnya (Rupiah dan Valas) > Rupiah", 2026, "Jul")] = 7.0
     table._data[("Simpanan Berjangka (Rupiah dan Valas) > Rupiah", 2026, "Jul")] = 1.0
     assert table.lookup_fuzzy("tabungan lainnya rupiah", 2026, "Jul")[1] == 7.0
+
+
+# Tabel 5 of 'Tabel Series SK Juni 2026.xlsx', in sheet order: one Konsumsi / Cicilan / Tabungan
+# block per expenditure group, the groups told apart only by the figures in their names.
+_SK_TABEL_5 = [
+    "Total > Konsumsi", "Total > Tabungan",
+    "Rp 1 - 2 juta > Konsumsi", "Rp 1 - 2 juta > Tabungan",
+    "Rp 2,1 - 3 juta > Konsumsi", "Rp 2,1 - 3 juta > Tabungan",
+    "Rp 3,1 - 4 juta > Konsumsi", "Rp 3,1 - 4 juta > Tabungan",
+    "Rp 4,1 - 5 juta > Konsumsi", "Rp 4,1 - 5 juta > Tabungan",
+    "> Rp 5 juta > Konsumsi", "> Rp 5 juta > Tabungan",
+]
+
+
+def test_lookup_fuzzy_tells_expenditure_groups_apart_by_their_figures():
+    """SK-Juni-2026: "Proporsi konsumsi … meningkat pada kelompok pengeluaran Rp2,1-3 juta
+    (75,2%), Rp4,1-5 juta (71,8%), dan >Rp5 juta (70,9%)". All three claims came back Tidak
+    Sesuai against 74,6 — the 'Rp 1 - 2 juta' row — because the leaf 'Konsumsi' matched every
+    group equally and the figures that separate them are not significant words. The first group
+    in the sheet won the tie, every time."""
+    table = _make_temporal(_SK_TABEL_5)
+
+    assert table.lookup_fuzzy("Konsumsi > Rp2,1 - 3 juta", 2026, "Jun")[0] == "Rp 2,1 - 3 juta > Konsumsi"
+    assert table.lookup_fuzzy("Konsumsi > Rp4,1 - 5 juta", 2026, "Jun")[0] == "Rp 4,1 - 5 juta > Konsumsi"
+    assert table.lookup_fuzzy("Konsumsi > > Rp5 juta", 2026, "Jun")[0] == "> Rp 5 juta > Konsumsi"
+    assert table.lookup_fuzzy("Tabungan > Rp2,1-3 juta", 2026, "Jun")[0] == "Rp 2,1 - 3 juta > Tabungan"
+
+
+def test_lookup_fuzzy_finds_nothing_for_a_group_the_table_does_not_break_out():
+    """The report groups ages as ">41 tahun"; the sheet only has 41-50, 51-60 and >60. No row is
+    that group, so the honest answer is no data — not the 41-50 row, and not the parent."""
+    table = _make_temporal([
+        "Indeks Ketersediaan Lapangan Kerja (IKLK)",
+        "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia 20-30 th",
+        "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia 41-50 th",
+        "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia 51-60 th",
+        "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia >60 th",
+    ])
+
+    assert table.lookup_fuzzy(
+        "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia >41 th", 2026, "Jun"
+    ) == (None, None)
+
+
+def test_figures_that_are_not_group_bounds_do_not_block_a_match():
+    from table_model import numbers_agree
+
+    # A footnote marker on the row, and a year or a series code in the claim, say nothing about
+    # which row is meant.
+    assert numbers_agree("Uang Primer (M0) adjusted 2026", "Uang Prim er Adjusted 1)")
+    assert numbers_agree("Giro Bank Umum di BI Adjusted", "Giro Bank Umum di BI Adjusted 2)")
+    assert numbers_agree("M2", "Uang Beredar Luas (M2)")
+    # A group bound the claim never states rules the row out.
+    assert not numbers_agree("Konsumsi > Rp2,1 - 3 juta", "Rp 1 - 2 juta > Konsumsi")
+    assert not numbers_agree("Usia >41 th", "Usia 41-50 th")
+    # Spacing and separator style inside a figure do not matter.
+    assert numbers_agree("Rp2 ,1-3 juta", "Rp 2,1 - 3 juta")
+
+
+def test_a_group_row_of_a_different_series_does_not_answer_a_qualified_claim():
+    """SK-Juni-2026 Tabel 2 breaks every index down by the same expenditure groups. "porsi
+    pendapatan yang ditabung > Pengeluaran Rp2,1-3 juta" (15,6%) matched the IKK group row on
+    its group half alone and was reported Tidak Sesuai against an index of 112,4. The series
+    half of a qualified claim has to be accounted for too."""
+    table = _make_temporal([
+        "Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp1 - 2 juta",
+        "Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp2,1 - 3 juta",
+        "Indeks Kondisi Ekonomi (IKE) > Pengeluaran Rp2,1 - 3 juta",
+    ])
+
+    assert table.lookup_fuzzy(
+        "porsi pendapatan yang ditabung > Pengeluaran Rp2,1-3 juta", 2026, "Jun"
+    ) == (None, None)
+    # The series the row does belong to still resolves, by name or by abbreviation.
+    assert table.lookup_fuzzy(
+        "Indeks Kondisi Ekonomi (IKE) > Pengeluaran Rp2,1-3 juta", 2026, "Jun"
+    )[0] == "Indeks Kondisi Ekonomi (IKE) > Pengeluaran Rp2,1 - 3 juta"
+    assert table.lookup_fuzzy("IKK > Pengeluaran Rp2,1-3 juta", 2026, "Jun")[0] == (
+        "Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp2,1 - 3 juta"
+    )
+
+
+def test_a_short_row_is_read_with_its_table_title():
+    """M2-Juli-2026 Tabel 8 is captioned 'Kredit UMKM' and its rows are bare: 'Investasi' holds
+    14,2. "ekspansi kredit investasi UMKM sebesar 14,2% (yoy)" could not reach it — one word out
+    of four is under the label-in-query floor — so the claim was answered by Tabel 6's
+    economy-wide 'Kredit Investasi (KI)' row (23,1) and refuted. The words a row leaves to its
+    caption are still accounted for."""
+    umkm = TableData(
+        title="Tabel 8. Kredit UMKM (triliun Rp) (%, yoy)", unit="%, yoy",
+        row_labels=["Mikro", "Modal Kerja", "Investasi", "Total UMKM"],
+    )
+    umkm._data[("Investasi", 2026, "Jul")] = 14.2
+    umkm._data[("Total UMKM", 2026, "Jul")] = 1.6
+
+    assert umkm.lookup_fuzzy("ekspansi kredit investasi UMKM", 2026, "Jul") == ("Investasi", 14.2)
+
+
+def test_a_title_does_not_license_a_row_about_something_else():
+    # The guard the floor exists for: the report carries no interest-rate table, and a DPK
+    # balance must not answer a claim about a rate just because both say 'simpanan berjangka'.
+    dpk = TableData(
+        title="Lampiran 3. Tabel Dana Pihak Ketiga di Perbankan", unit="%, yoy",
+        row_labels=["Total Jenis Simpanan > Simpanan Berjangka"],
+    )
+    dpk._data[("Total Jenis Simpanan > Simpanan Berjangka", 2026, "Jul")] = 6.3
+
+    assert dpk.lookup_fuzzy(
+        "suku bunga simpanan berjangka tenor 1 bulan", 2026, "Jul"
+    ) == (None, None)
+
+
+def test_the_survey_report_ratio_names_reach_their_indonesian_rows():
+    """SK-Juni-2026 states the household-income split in English — "average propensity to consume
+    ratio … 73,0%" — while Tabel 5 names the same rows 'Konsumsi', 'Cicilan pinjaman' and
+    'Tabungan'. The two share no word, so seven claims came back Tidak Cukup Data against a sheet
+    holding exactly 73,0, 10,0 and 17,0."""
+    table = TableData(
+        title="Tabel 5. Table 5.", unit="persen",
+        row_labels=["Total > Konsumsi", "Total > Cicilan pinjaman", "Total > Tabungan",
+                    "Rp 1 - 2 juta > Konsumsi", "Rp 1 - 2 juta > Tabungan"],
+    )
+    for label, value in (("Total > Konsumsi", 73.0), ("Total > Cicilan pinjaman", 10.0),
+                         ("Total > Tabungan", 17.0), ("Rp 1 - 2 juta > Konsumsi", 74.6),
+                         ("Rp 1 - 2 juta > Tabungan", 17.2)):
+        table._data[(label, 2026, "Jun")] = value
+
+    assert table.lookup_fuzzy("average propensity to consume ratio", 2026, "Jun") == (
+        "Total > Konsumsi", 73.0)
+    assert table.lookup_fuzzy("debt installment to income ratio", 2026, "Jun") == (
+        "Total > Cicilan pinjaman", 10.0)
+    assert table.lookup_fuzzy("saving to income ratio", 2026, "Jun") == (
+        "Total > Tabungan", 17.0)
+    # The claim naming a group still gets that group, not the aggregate.
+    assert table.lookup_fuzzy("saving to income ratio > Rp1 - 2 juta", 2026, "Jun")[0] == (
+        "Rp 1 - 2 juta > Tabungan")
+
+
+def test_a_sheet_that_holds_an_english_ratio_row_counts_as_discussing_it():
+    """Resolving the row is not enough: paired_verifier drops a source whose coverage of the
+    claim's scope words is zero, and 'average propensity to consume ratio' shares none with
+    Tabel 5 until the term is read as the row name it stands for."""
+    table = TableData(title="Tabel 5. Table 5.", unit="persen",
+                      row_labels=["Total > Konsumsi", "Total > Tabungan"])
+
+    assert table.query_coverage("average propensity to consume ratio", "Total > Konsumsi") == 1.0
+    assert table.query_coverage("saving to income ratio", "Total > Tabungan") == 1.0

@@ -459,6 +459,48 @@ def detect_number_format(text: str) -> str:
     return "id"
 
 
+@dataclass(frozen=True)
+class NumberFormatMix:
+    """A document whose pages do not agree on how to write a number.
+
+    `dominant` / `minority` are the two conventions ("en" / "id"); `pages` are the 1-based page
+    numbers carrying the minority one.
+    """
+    dominant: str
+    minority: str
+    pages: List[int]
+
+
+def detect_mixed_number_formats(pages: List[str]) -> Optional[NumberFormatMix]:
+    """Which pages are typeset in the OTHER convention, or None when the document is consistent.
+
+    Parsing does not need this — `_decimal_separator` reads every numeral on its own terms, which
+    is what makes sample_data/M2-Juli-2026.pdf ('10,432.0' in Tabel 1, '1.713,2' in Tabel 7) come
+    out right. A READER does: the same printed string means different numbers under the two
+    conventions, so someone checking a claim against the report's own tables has to know which
+    pages switch.
+
+    The same floor as detect_number_format, applied to the minority side: below
+    _FORMAT_MIN_EVIDENCE matches the odd spelling is a typo or a stray English caption, not a
+    second convention, and saying so would be a false alarm on every otherwise clean report.
+    """
+    per_page = [
+        (len(_EN_GROUPING_RE.findall(text)), len(_ID_GROUPING_RE.findall(text)))
+        for text in pages
+    ]
+    total_en = sum(en for en, _ in per_page)
+    total_id = sum(id_ for _, id_ in per_page)
+    if min(total_en, total_id) < _FORMAT_MIN_EVIDENCE:
+        return None
+    dominant, minority = ("en", "id") if total_en >= total_id else ("id", "en")
+    index = 0 if minority == "en" else 1
+    return NumberFormatMix(
+        dominant=dominant,
+        minority=minority,
+        pages=[i + 1 for i, counts in enumerate(per_page) if counts[index]],
+    )
+
+
 def parse_number(raw: str, number_format: str = "id") -> Optional[float]:
     """Parse a printed number to float under the given convention ('id' or 'en').
 

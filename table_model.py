@@ -44,8 +44,75 @@ def _canon(text: str) -> str:
     Punctuation itself is KEPT — deleting it would let "tabungan lainnya rupiah" read as a
     substring of "Tabungan Lainnya (Rupiah dan Valas)", so a query for the Rupiah sub-row
     would bind to its parent's combined total instead.
+
+    The one exception is a footnote marker: stars ending a word ("Lainnya**", "Saham **").
+    They say "see the note below", never what a row IS, yet they sat inside every substring
+    test — M2-Juni-2026 Tabel 4 prints 'Total > Lainnya**', and "DPK lainnya … 3,5% … 12,2%"
+    came back Tidak Cukup Data twice against a table holding exactly 3,5 and 12,2, because
+    'lainnya**' is not inside 'dpk lainnya'. Stripped AFTER the spacing around punctuation is
+    collapsed, so "Saham **" and "Saham**" canonicalise alike.
     """
-    return re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", text.lower().strip()))
+    collapsed = re.sub(r"\s*([^\w\s])\s*", r"\1", re.sub(r"\s+", " ", text.lower().strip()))
+    return re.sub(r"(?<=\w)\*+(?!\w)", "", collapsed)
+
+
+# A footnote marker printed after a row name: 'Uang Primer Adjusted 1)', 'Giro … Adjusted 2)'.
+# A parenthesised figure such as '(2)' is left alone — only the bare 'N)' form is a marker.
+_FOOTNOTE_RE = re.compile(r"(?<![\w(])\d{1,2}\)")
+# A figure standing on its own. Digits glued to a letter on the left are part of a series code
+# ('M2', 'M0'), not a figure; 'Rp' is split off first so 'Rp2,1' still yields 2,1.
+_FIGURE_RE = re.compile(r"(?<![a-z\d.,])\d+(?:[.,]\d+)?")
+_YEAR_RE = re.compile(r"(?:19|20)\d\d")
+
+
+def _figures(text: str) -> set:
+    """The figures a label states — the bounds that tell one breakdown group from another."""
+    t = re.sub(r"(\d)\s*([.,])\s*(\d)", r"\1\2\3", text.lower())   # 'Rp2 ,1' -> 'rp2,1'
+    t = _FOOTNOTE_RE.sub(" ", t)
+    t = re.sub(r"rp(?=\d)", "rp ", t)
+    return {
+        f.replace(",", ".") for f in _FIGURE_RE.findall(t)
+        if not _YEAR_RE.fullmatch(f)
+    }
+
+
+def numbers_agree(query: str, label: str) -> bool:
+    """False when `label` states a figure the query does not — it then names a different group.
+
+    Survey tables break a series down into groups whose names differ ONLY in their figures:
+    'Rp 1 - 2 juta > Konsumsi', 'Rp 2,1 - 3 juta > Konsumsi', 'Usia 41-50 th'. Digits are not
+    significant words, so every word-based tier saw those rows as identical, and a claim about
+    the Rp2,1-3 juta group was answered by whichever group came first in the sheet — a
+    confident Tidak Sesuai on SK-Juni-2026, three times over.
+
+    One-directional on purpose: a claim that states no figure ("konsumsi") is not asking about
+    a group, and the word tiers already decide those. Years and footnote markers are not group
+    bounds and are ignored on both sides.
+    """
+    wanted = _figures(query)
+    if not wanted:
+        return True
+    return _figures(label) <= wanted
+
+
+# Report terminology whose ROW is named in another language. BI's consumer survey states the
+# household-income split in English ("average propensity to consume ratio", 73,0%) while Tabel 5
+# of its own workbook names those rows 'Konsumsi', 'Cicilan pinjaman' and 'Tabungan'. The two
+# share no word at all, so no amount of fuzzy matching bridges them — the pairing has to be
+# stated. Kept to whole phrases: 'konsumsi' alone is an ordinary word and must not be rewritten.
+_REPORT_TERMS = {
+    "average propensity to consume ratio": "konsumsi",
+    "debt installment to income ratio": "cicilan pinjaman",
+    "saving to income ratio": "tabungan",
+}
+_REPORT_TERMS_RE = re.compile(
+    "|".join(re.escape(phrase) for phrase in _REPORT_TERMS), re.IGNORECASE
+)
+
+
+def _expand_report_terms(query: str) -> str:
+    """Rewrite a report's English term as the row name its table actually uses."""
+    return _REPORT_TERMS_RE.sub(lambda m: _REPORT_TERMS[m.group(0).lower()], query)
 
 
 def _label_words(text: str) -> set:
@@ -330,7 +397,9 @@ class TableData:
         question, however well its row name reads.
         """
         q_words = {
-            w for w in _sig_words(query.lower().replace("dana pihak ketiga", "dpk"))
+            w for w in _sig_words(
+                _expand_report_terms(query).lower().replace("dana pihak ketiga", "dpk")
+            )
             if w not in self._TITLE_STOP_WORDS and not w.isdigit()
         }
         if not q_words:
@@ -408,6 +477,9 @@ class TableData:
         All comparisons run on _canon forms so cosmetic spacing/punctuation differences
         between narrative wording and sheet wording do not defeat containment.
         """
+        # A term the report writes in English is compared under the row name its own table uses
+        # (see _REPORT_TERMS) — every tier below, and the two guards, then see one vocabulary.
+        query = _expand_report_terms(query)
         q_canon = _canon(query)
         q_tight = _tight(query)
         q_words = _sig_words(query)
@@ -416,6 +488,10 @@ class TableData:
         leaf_siblings: Dict[str, List[str]] = {}  # leaf -> parents it appeared under
         tier_tight_q_in_l, tier_tight_words = [], []
         for label in labels:
+            # Every tier below compares words; a row stating a group bound the claim does not
+            # is a different group however well its words match (see numbers_agree).
+            if not numbers_agree(query, label):
+                continue
             l_canon = _canon(label)
             l_tight = _tight(label)
             if l_canon == q_canon:
@@ -550,14 +626,45 @@ class TableData:
         }
         if not q_words:
             return True
-        covered = q_words & _label_words(label)
-        leftover = q_words - covered - _label_words(self.title)
+        # Counted against the caption as well as the row, because a table says once at the top
+        # what its rows would otherwise repeat: M2-Juli-2026 Tabel 8 is captioned 'Kredit UMKM'
+        # and names its rows 'Mikro', 'Investasi', 'Total UMKM'. Scoring "ekspansi kredit
+        # investasi UMKM" against the bare row left it one word in four — under the floor — so
+        # the claim was answered by the economy-wide Kredit Investasi row of another table
+        # (23,1 against the 14,2 Tabel 8 prints) and refuted.
+        covered = q_words & (_label_words(label) | _label_words(self.title))
+        leftover = q_words - covered
         if not leftover:
             return True
         return len(covered) >= self._LABEL_IN_QUERY_MIN_COVERAGE * len(q_words)
 
+    def _qualifier_kept(self, query: str, label: str) -> bool:
+        """Both halves of a qualified query ('Series > Group') must survive in the match.
+
+        See _group_kept for the group half. The series half matters as much: survey sheets
+        break every index down by the SAME groups, so "porsi pendapatan yang ditabung >
+        Pengeluaran Rp2,1-3 juta" matched 'Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp2,1 -
+        3 juta' on its group alone and a 15,6% share was refuted against an index of 112,4. At
+        least one significant word of the series has to be known to the row or the table title.
+        """
+        # Same rewrite the tiers run on, so the series half of "saving to income ratio > Rp1 - 2
+        # juta" is read as 'tabungan' here too (see _REPORT_TERMS).
+        query = _expand_report_terms(query)
+        if not self._group_kept(query, label):
+            return False
+        if QUAL_SEP not in query:
+            return True
+        series_words = {
+            w for w in _sig_words(query.rsplit(QUAL_SEP, 1)[0])
+            if w not in self._TITLE_STOP_WORDS and w not in self._PERIOD_WORDS
+        }
+        if not series_words:
+            return True
+        known = _label_words(label) | _label_words(self.title)
+        return any(w in known or any(_same_root(w, k) for k in known) for w in series_words)
+
     @staticmethod
-    def _qualifier_kept(query: str, label: str) -> bool:
+    def _group_kept(query: str, label: str) -> bool:
         """False when an explicitly qualified query resolved to a label that drops its
         qualifier entirely.
 

@@ -552,3 +552,58 @@ def test_pointer_column_guard_accepts_a_column_with_no_legible_header():
     # there would switch it off entirely.
     grid = [["something"], [None, None], ["Metric", 1.0, 2.0]]
     assert pointer_column_matches(grid, row=2, col=1, year=2025, month="Apr") is True
+
+
+def test_pointer_implausible_when_the_row_is_a_different_group():
+    # SK-Juni-2026 Tabel 3. Asked for "IKLK > Usia >41 th" — a group the sheet does not carry —
+    # the model pointed at IKK's 'Usia 41-50 th' row, which shares the word 'usia', and 114,1
+    # was reported Tidak Sesuai against "berada pada level pesimis".
+    grid = [
+        ["A.", "Indeks Keyakinan Konsumen (IKK)", 120.0],
+        ["- ", "Usia 41-50 th", 114.1],
+        ["- ", "Usia >60 th", 110.0],
+    ]
+    metric = "Indeks Ketersediaan Lapangan Kerja (IKLK) > Usia >41 th"
+    assert pointer_is_plausible(grid, 1, metric) is False
+    # The row whose figures the metric does state is still accepted.
+    assert pointer_is_plausible(grid, 2, "Indeks Keyakinan Konsumen (IKK) > Usia >60 th") is True
+
+
+# SK-Juni-2026: a group row names only its group; the series it belongs to is the section row
+# above it, and in Tabel 5 it is the other way round.
+_SK_TABEL_2_GRID = [
+    ["A.", "Indeks Keyakinan Konsumen (IKK)", 118.0],
+    ["- ", "Pengeluaran Rp1 - 2 juta", 110.0],
+    ["- ", "Pengeluaran Rp2,1 - 3 juta", 116.6],
+]
+_SK_TABEL_5_GRID = [
+    ["B.", "Rp 1 - 2 juta", None],
+    ["- ", "Konsumsi", 74.6],
+    ["C.", "Rp 2,1 - 3 juta", None],
+    ["- ", "Konsumsi", 75.2],
+]
+
+
+def test_pointer_implausible_when_the_row_belongs_to_a_different_series():
+    metric = "proporsi konsumsi terhadap pendapatan > Pengeluaran Rp2,1-3 juta"
+    assert pointer_is_plausible(_SK_TABEL_2_GRID, 2, metric) is False
+    assert pointer_is_plausible(
+        _SK_TABEL_2_GRID, 2, "Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp2,1-3 juta"
+    ) is True
+
+
+def test_pointer_reads_the_group_from_the_section_row_above():
+    metric = "proporsi konsumsi terhadap pendapatan > Pengeluaran Rp2,1-3 juta"
+    # 'Konsumsi' of the Rp 1 - 2 juta section is a different group, though the row says nothing.
+    assert pointer_is_plausible(_SK_TABEL_5_GRID, 1, metric) is False
+    assert pointer_is_plausible(_SK_TABEL_5_GRID, 3, metric) is True
+
+
+def test_pointer_without_bullets_is_not_judged_by_the_row_above():
+    # No bullets: the row above is a sibling group, not a heading, and its figures must not
+    # count against the pointed row.
+    grid = [
+        ["IKK Usia 20-30 th", 120.0],
+        ["IKK Usia 31-40 th", 118.0],
+    ]
+    assert pointer_is_plausible(grid, 1, "Indeks Keyakinan Konsumen (IKK) > Usia 31-40 th") is True

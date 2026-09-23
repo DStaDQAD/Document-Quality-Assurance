@@ -58,7 +58,12 @@ from pdf_extraction import (
 )
 from statistics import median
 
-from structured_extractor import detect_number_format, parse_number
+from structured_extractor import (
+    NumberFormatMix,
+    detect_mixed_number_formats,
+    detect_number_format,
+    parse_number,
+)
 from table_model import QUAL_SEP
 from table_parser_generic import (
     _MONTH_ABBREVS,
@@ -779,6 +784,27 @@ def _document_number_format(pdf_bytes: bytes) -> str:
         logger.info("Numbers in this document are typeset in the English convention "
                     "(1,234.5); parsing its tables accordingly.")
     return number_format
+
+
+def detect_number_format_mix(pdf_bytes: bytes) -> Optional[NumberFormatMix]:
+    """Which of this PDF's pages are typeset in the other number convention, or None.
+
+    Reads the text layer the tables live in, not the filtered narrative — the switch this
+    reports is a property of the printed TABLES (see detect_mixed_number_formats). A PDF whose
+    text layer cannot be read is a scan: no evidence either way, so nothing is reported.
+    """
+    try:
+        pages = _extract_pages_raw(pdf_bytes)
+    except Exception:
+        logger.exception("Could not read the text layer to look for mixed number formats")
+        return None
+    mix = detect_mixed_number_formats(pages)
+    if mix is not None:
+        logger.info(
+            "This document writes numbers two ways: mostly %s, but page(s) %s carry %s.",
+            mix.dominant, ", ".join(str(p) for p in mix.pages), mix.minority,
+        )
+    return mix
 
 
 def _line_row(line: str, number_format: str = "id") -> Optional[Tuple[str, List[float]]]:

@@ -80,7 +80,7 @@ from llm_provider import get_llm, get_vision_llm
 from perf_log import StageTimer, log_perf
 from orchestrator import verify_document
 from paired_verifier import verify_paired
-from pdf_table_extraction import PdfTable, extract_tables_from_pdf
+from pdf_table_extraction import PdfTable, detect_number_format_mix, extract_tables_from_pdf
 from pdf_extraction import (
     MIN_USEFUL_CHARS,
     extract_narrative_text,
@@ -91,6 +91,7 @@ from schemas import (
     ClaimRequest,
     DocumentRequest,
     FactVerificationResult,
+    NumberFormatNotice,
     PairedVerificationResponse,
     TableDataResponse,
     TableListResponse,
@@ -548,6 +549,7 @@ async def _run_paired_pipeline(
     # rather than gathered with the narrative pass: both share the vision provider's semaphore
     # and rate-limit budget, so overlapping them buys little and makes progress illegible.
     pdf_tables: List[PdfTable] = []
+    number_format_mix = None
     if mode in ("internal", "both"):
         _emit("tables", "running")
 
@@ -570,6 +572,10 @@ async def _run_paired_pipeline(
         # stage with a detail that names each one's parser (see its "tables" done event).
         if not pdf_tables:
             _emit("tables", "done", detail="Tidak ada tabel terbaca di dalam PDF")
+
+        # Cheap (one text-layer read, no LLM) and only meaningful for the tables just read, so
+        # it rides along with them rather than running for every document.
+        number_format_mix = await asyncio.to_thread(detect_number_format_mix, pdf_bytes)
 
     # Prefer Gemini for the typo/grammar escalation call when available - it judges
     # domain jargon (e.g. "kartal", "inflasi") more reliably than the Groq text model,
@@ -615,7 +621,17 @@ async def _run_paired_pipeline(
         timer=timer,
         usage_metadata=usage_handler.usage_metadata,
     )
-    return fact_result.model_copy(update={"typo_check": typo_result})
+    notice = (
+        NumberFormatNotice(
+            dominant=number_format_mix.dominant,
+            minority=number_format_mix.minority,
+            pages=number_format_mix.pages,
+        )
+        if number_format_mix is not None else None
+    )
+    return fact_result.model_copy(
+        update={"typo_check": typo_result, "number_format_notice": notice}
+    )
 
 
 _VERIFICATION_MODES = ("excel", "internal", "both")

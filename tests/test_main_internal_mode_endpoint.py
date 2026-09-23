@@ -226,3 +226,74 @@ def test_typo_check_runs_by_default(mock_vision, mock_narrative, mock_verify, mo
     assert response.status_code == 200
     mock_typos.assert_called_once()
     assert response.json()["typo_check"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Mixed number conventions — reported to the reader, never fixed silently
+# ---------------------------------------------------------------------------
+
+@patch("main.detect_number_format_mix")
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_tables_from_pdf")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_internal_mode_reports_a_document_that_mixes_number_conventions(
+    mock_vision, mock_narrative, mock_tables, mock_verify, mock_typos, mock_mix
+):
+    from structured_extractor import NumberFormatMix
+
+    mock_vision.return_value = Mock()
+    mock_narrative.return_value = "[== Halaman 1 ==]\nM2 tumbuh 8,3% (yoy)."
+    mock_tables.return_value = [Mock()]
+    mock_verify.return_value = _fact_response(mode="internal")
+    mock_typos.return_value = _typo_response()
+    mock_mix.return_value = NumberFormatMix(dominant="en", minority="id", pages=[1, 2, 4])
+
+    response = client.post("/api/verify-paired?mode=internal", files=_PDF_ONLY)
+
+    assert response.status_code == 200
+    notice = response.json()["number_format_notice"]
+    assert notice == {"dominant": "en", "minority": "id", "pages": [1, 2, 4]}
+
+
+@patch("main.detect_number_format_mix")
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_tables_from_pdf")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_a_consistent_document_carries_no_number_format_notice(
+    mock_vision, mock_narrative, mock_tables, mock_verify, mock_typos, mock_mix
+):
+    mock_vision.return_value = Mock()
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_tables.return_value = [Mock()]
+    mock_verify.return_value = _fact_response(mode="internal")
+    mock_typos.return_value = _typo_response()
+    mock_mix.return_value = None
+
+    response = client.post("/api/verify-paired?mode=internal", files=_PDF_ONLY)
+
+    assert response.json()["number_format_notice"] is None
+
+
+@patch("main.detect_number_format_mix")
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_excel_mode_never_looks_for_mixed_number_conventions(
+    mock_vision, mock_narrative, mock_verify, mock_typos, mock_mix
+):
+    # The notice is about the tables printed INSIDE the PDF; excel mode reads none of them.
+    mock_vision.return_value = Mock()
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired", files=_PDF_AND_EXCEL)
+
+    assert response.status_code == 200
+    mock_mix.assert_not_called()
+    assert response.json()["number_format_notice"] is None

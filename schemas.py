@@ -132,6 +132,19 @@ class TableSuggestion(BaseModel):
     metrics: List[str]    # the inconclusive metric labels that point at this family
 
 
+class NumberFormatNotice(BaseModel):
+    """Set when the PDF's own tables do not agree on how a number is written.
+
+    Not an error and not a verdict: every numeral is parsed under its own convention either way
+    (see structured_extractor._decimal_separator). It is told to the reader because the same
+    printed string — '10.0' — means ten in one convention and a hundred in the other, so anyone
+    checking a claim by eye against those tables needs to know which pages switch.
+    """
+    dominant: Literal["en", "id"]
+    minority: Literal["en", "id"]
+    pages: List[int]
+
+
 class PairedVerificationResponse(BaseModel):
     pdf_filename: str
     # These four are positional parallel arrays, one entry per reference source. Note that in
@@ -157,6 +170,9 @@ class PairedVerificationResponse(BaseModel):
     inconclusive_count: int
     results: List[FactVerificationResult]
     typo_check: Optional[TypoCheckResponse] = None
+    # Populated in the modes that read the PDF's own tables ("internal"/"both") when those
+    # tables mix number conventions — see NumberFormatNotice.
+    number_format_notice: Optional[NumberFormatNotice] = None
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)

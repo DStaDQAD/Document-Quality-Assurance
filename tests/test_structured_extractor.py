@@ -939,3 +939,45 @@ def test_a_lone_three_digit_group_is_the_one_case_the_convention_decides():
 def test_detect_number_format(text, expected):
     from structured_extractor import detect_number_format
     assert detect_number_format(text) == expected
+
+
+# ---------------------------------------------------------------------------
+# detect_mixed_number_formats — a document that writes numbers two ways
+# ---------------------------------------------------------------------------
+
+def test_detect_mixed_number_formats_names_the_odd_pages_out():
+    """sample_data/M2-Juli-2026.pdf types Tabel 1 as '10,432.0' and Tabel 7 as '1.713,2'.
+    Parsing copes (every numeral decides its own separator), but a reader comparing the report
+    against its own tables should be told, because the two spellings mean different numbers to
+    the eye."""
+    from structured_extractor import detect_mixed_number_formats
+
+    pages = [
+        "Tabel 1  10,432.0  10,371.1  1,204.1  5,937.5",     # English
+        "Prose with no grouped figures at all.",
+        "Tabel 7  1.713,2  1.658,4  2.396,5",                # Indonesian
+    ]
+
+    mix = detect_mixed_number_formats(pages)
+
+    assert mix is not None
+    assert (mix.dominant, mix.minority) == ("en", "id")
+    assert mix.pages == [3]
+
+
+def test_detect_mixed_number_formats_is_silent_on_a_consistent_document():
+    from structured_extractor import detect_mixed_number_formats
+
+    pages = ["M2 10.355,1 dan 9.387,9", "Kredit 8.606,6 serta 1.204,1"]
+
+    assert detect_mixed_number_formats(pages) is None
+
+
+def test_detect_mixed_number_formats_ignores_a_stray_figure():
+    """One odd-looking token is a typo or an English caption, not a second convention — the same
+    floor detect_number_format uses before it overrides the Indonesian default."""
+    from structured_extractor import detect_mixed_number_formats
+
+    pages = ["M2 10.355,1 dan 9.387,9 tumbuh", "Satu angka asing 1,204 di sini"]
+
+    assert detect_mixed_number_formats(pages) is None

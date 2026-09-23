@@ -27,6 +27,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+from table_model import QUAL_SEP, numbers_agree
 from table_parser_generic import (
     _bare_period_token,
     _is_empty,
@@ -651,6 +652,42 @@ def _sig_words(text: str) -> set:
     return {w for w in re.findall(r"\w+", text.lower()) if len(w) > 2}
 
 
+def _row_text(grid_row: List) -> str:
+    return " ".join(v.strip() for v in grid_row if isinstance(v, str) and v.strip())
+
+
+def _row_marker(grid_row: List) -> Optional[str]:
+    """The first text cell of a row — the '- ' / 'A.' bullet in BI survey sheets."""
+    return next((v.strip() for v in grid_row if isinstance(v, str) and v.strip()), None)
+
+
+# A row bullet: '-', '•', or an outline number such as 'A.', 'B1.', '3.'.
+_BULLET_RE = re.compile(r"^(?:[-–•*·]+|[A-Za-z]{1,2}\d{0,2}\.|\d{1,2}\.)$")
+
+
+def _section_row(grid: List[List], row: int) -> Optional[int]:
+    """Index of the section heading `row` sits under, or None when there is none to find.
+
+    BI survey sheets list a section's members under one heading, every member carrying the same
+    bullet ('- ') and the heading a different one ('A.', 'B1.'). Walking up past the rows that
+    share the pointed row's bullet lands on that heading. A row without a bullet has no such
+    structure to read — the row above it is as likely a sibling group as a heading — so none is
+    returned rather than judging the row by its neighbour's figures.
+    """
+    marker = _row_marker(grid[row])
+    if marker is None or not _BULLET_RE.match(marker):
+        return None
+    r = row - 1
+    while r >= 0:
+        if _row_marker(grid[r]) is None:
+            r -= 1
+            continue
+        if _row_marker(grid[r]) != marker:
+            return r
+        r -= 1
+    return None
+
+
 def pointer_is_plausible(
     grid: List[List], row: int, metric_label: str, table_title: str = ""
 ) -> bool:
@@ -664,6 +701,34 @@ def pointer_is_plausible(
     shared word (those degrade to Inconclusive, which is safe, not to a wrong verdict).
     Metrics with no significant word of their own (e.g. 'M2') are not guarded.
     """
+    # A shared word is not enough when the row names a different GROUP: asked for "IKLK > Usia
+    # >41 th", the model pointed at IKK's 'Usia 41-50 th' row, which shares 'usia'. The figures
+    # in the row name have to be ones the metric states (see table_model.numbers_agree), and so
+    # do those of the section row the row sits under — in a sheet nested group-first, that is
+    # where the group is written.
+    if 0 <= row < len(grid):
+        section = _section_row(grid, row)
+        row_text = _row_text(grid[row])
+        section_text = _row_text(grid[section]) if section is not None else ""
+        if not numbers_agree(metric_label, f"{section_text} {row_text}"):
+            logger.info(
+                "Cell pointer rejected: row %d (%r under %r) names a different group than %r",
+                row, row_text, section_text, metric_label,
+            )
+            return False
+        # A qualified metric names a series AND a group. A group row names only the group, so
+        # the series has to be found in the row, its section or the title — otherwise the
+        # pointer landed on the same group of a different index.
+        if QUAL_SEP in metric_label:
+            series_words = _sig_words(metric_label.rsplit(QUAL_SEP, 1)[0])
+            known = (_sig_words(row_text) | _sig_words(section_text)
+                     | _sig_words(table_title or ""))
+            if series_words and not series_words & known:
+                logger.info(
+                    "Cell pointer rejected: row %d (%r under %r) belongs to a different series "
+                    "than %r", row, row_text, section_text, metric_label,
+                )
+                return False
     metric_words = _sig_words(metric_label)
     if not metric_words:
         return True
