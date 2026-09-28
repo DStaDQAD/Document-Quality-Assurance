@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 from pdf_extraction import (
     VISION_RENDER_MAX_PX,
     call_vision_with_retry,
+    pdfium_exclusive,
     plan_vision_concurrency,
     vision_provider_flags,
 )
@@ -190,6 +191,7 @@ def _compact(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
+@pdfium_exclusive
 def _caption_xs(pdf_bytes: bytes) -> Dict[int, List[Tuple[float, float]]]:
     """1-based page -> [(left x, top y)] of every 'Grafik N'/'Gambar N' spelled in the text layer.
 
@@ -281,9 +283,9 @@ def _ink_box(page, box: Tuple[float, float, float, float]) -> Tuple[float, float
 
     left, bottom, right, top = box
     width, height = page.get_size()
-    image = page.render(
-        scale=1.0, crop=(left, bottom, width - right, height - top)
-    ).to_pil().convert("L")
+    probe = page.render(scale=1.0, crop=(left, bottom, width - right, height - top))
+    image = probe.to_pil().convert("L")
+    probe.close()
     ink = np.asarray(image) < _PAPER_LUMA
     rows = ink.any(axis=1)
     if not rows.any():
@@ -309,6 +311,7 @@ def _ink_box(page, box: Tuple[float, float, float, float]) -> Tuple[float, float
     )
 
 
+@pdfium_exclusive
 def _render_regions(
     pdf_bytes: bytes, regions: Dict[int, List[Tuple[float, float, float, float]]], max_px: int
 ) -> List[Tuple[int, str]]:
@@ -336,6 +339,7 @@ def _render_regions(
                     )
                     buffer = io.BytesIO()
                     bitmap.to_pil().save(buffer, format="PNG")
+                    bitmap.close()
                     out.append((page_number, base64.b64encode(buffer.getvalue()).decode("ascii")))
             finally:
                 page.close()

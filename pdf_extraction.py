@@ -24,10 +24,12 @@ reconstructs word/number boundaries reliably on the same files.
 
 import asyncio
 import base64
+import functools
 import io
 import logging
 import os
 import re
+import threading
 from typing import Any, Awaitable, Callable, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
@@ -98,6 +100,25 @@ FORMAT OUTPUT:
 """
 
 
+# PDFium is not thread-safe, and pypdfium2 says so: two threads inside it at once can abort the
+# whole process. Nothing overlapped until the chart pass started running beside the table pass
+# (each offloads its PDF work with asyncio.to_thread); on Render the first SK-Juni-2026 run with
+# both died right there, with no traceback. Every function that touches PDFium therefore holds
+# this one lock for its whole body. Reentrant, so one such function may call another. The
+# vision calls — the slow part — stay outside it and still run in parallel.
+_PDFIUM_LOCK = threading.RLock()
+
+
+def pdfium_exclusive(fn):
+    """Run `fn` holding the process-wide PDFium lock (see _PDFIUM_LOCK)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _PDFIUM_LOCK:
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+@pdfium_exclusive
 def _extract_pages_raw(file_bytes: bytes) -> List[str]:
     """Return the raw text of each page via pypdfium2 (PDFium's text layer).
 
@@ -136,6 +157,7 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     return "\n\n".join(parts)
 
 
+@pdfium_exclusive
 def _count_total_pages(file_bytes: bytes) -> int:
     """Total page count, used to detect PDFs where most pages have no text layer at all.
 
@@ -153,6 +175,7 @@ def _count_total_pages(file_bytes: bytes) -> int:
         doc.close()
 
 
+@pdfium_exclusive
 def extract_text_from_pdf_vision(
     file_bytes: bytes,
     vision_llm: BaseChatModel,
@@ -187,17 +210,21 @@ def extract_text_from_pdf_vision(
     scale = dpi / 72  # PDF coordinate space is 72 pt/inch
 
     image_parts = []
-    for i in range(len(doc)):
-        page = doc[i]
-        bitmap = page.render(scale=scale, rotation=0)
-        pil_image = bitmap.to_pil()
-        buf = io.BytesIO()
-        pil_image.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        image_parts.append({
-            "type": "image_url",
-            "image_url": {"url": f"data:image/png;base64,{b64}"},
-        })
+    try:
+        for i in range(len(doc)):
+            page = doc[i]
+            bitmap = page.render(scale=scale, rotation=0)
+            buf = io.BytesIO()
+            bitmap.to_pil().save(buf, format="PNG")
+            bitmap.close()
+            page.close()
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            image_parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:image/png;base64,{b64}"},
+            })
+    finally:
+        doc.close()   # see _render_pages_to_b64: PDFium holds decoded images until closed
 
     logger.info("Rendered %d pages, sending to vision LLM", len(image_parts))
 
@@ -417,6 +444,7 @@ def render_scale(
     return min(dpi_scale, max_px / longest)
 
 
+@pdfium_exclusive
 def _render_pages_to_b64(
     file_bytes: bytes,
     dpi: int,
@@ -441,19 +469,31 @@ def _render_pages_to_b64(
             "pypdfium2 and Pillow are required for vision-based PDF extraction. "
             "Install them with: pip install pypdfium2 Pillow"
         )
+    # Every page, bitmap and the document are closed as soon as they are done with. Left to the
+    # garbage collector, PDFium keeps each page's decoded images alive: SK-Juni-2026 carries a
+    # 2480x2595 background picture on every page, and rendering seven of its pages held ~170 MB
+    # after returning — enough to crash Render's 512 MB instance mid-request.
     doc = pdfium.PdfDocument(file_bytes)
     result = []
-    for i in range(len(doc)):
-        if pages is not None and i not in pages:
-            result.append(None)
-            continue
-        page = doc[i]
-        scale = render_scale(page.get_width(), page.get_height(), dpi, max_px)
-        bitmap = page.render(scale=scale, rotation=0)
-        pil_image = bitmap.to_pil()
-        buf = io.BytesIO()
-        pil_image.save(buf, format="PNG")
-        result.append(base64.b64encode(buf.getvalue()).decode())
+    try:
+        for i in range(len(doc)):
+            if pages is not None and i not in pages:
+                result.append(None)
+                continue
+            page = doc[i]
+            try:
+                scale = render_scale(page.get_width(), page.get_height(), dpi, max_px)
+                bitmap = page.render(scale=scale, rotation=0)
+                try:
+                    buf = io.BytesIO()
+                    bitmap.to_pil().save(buf, format="PNG")
+                finally:
+                    bitmap.close()
+            finally:
+                page.close()
+            result.append(base64.b64encode(buf.getvalue()).decode())
+    finally:
+        doc.close()
     return result
 
 

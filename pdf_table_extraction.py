@@ -52,6 +52,7 @@ from pydantic import BaseModel, Field
 from pdf_extraction import (
     _extract_pages_raw,
     call_vision_with_retry,
+    pdfium_exclusive,
     plan_vision_concurrency,
     render_pages_to_b64,
     vision_provider_flags,
@@ -1105,6 +1106,7 @@ def _line_periods(line: str) -> Optional[List[str]]:
 _LINE_TOLERANCE = 3.0
 
 
+@pdfium_exclusive
 def _page_lines(pdf_bytes: bytes) -> Dict[int, Tuple[List[Tuple[float, str]], List[Tuple[float, str]]]]:
     """Per page, two views of the same glyphs: (reading-order lines, visual lines).
 
@@ -1699,6 +1701,7 @@ def _cut_rows(image, strip_px: int = _TABLE_STRIP_PX) -> list:
     return [image.crop((0, a, image.width, b)) for a, b in zip(cuts, cuts[1:])]
 
 
+@pdfium_exclusive
 def _table_images(pdf_bytes: bytes, pages: set) -> Dict[int, _TableImage]:
     """0-based page index -> that page's table picture, for the pages that are one.
 
@@ -1742,7 +1745,9 @@ def _table_images(pdf_bytes: bytes, pages: set) -> Dict[int, _TableImage]:
                             if _CAPTION_RE.match(line.strip())]
                 if len(captions) > 1:
                     continue
-                image = candidates[0].get_bitmap(render=False).to_pil().convert("RGB")
+                bitmap = candidates[0].get_bitmap(render=False)
+                image = bitmap.to_pil().convert("RGB")
+                bitmap.close()
             except Exception:
                 logger.exception("Could not read the table picture on page %d", index + 1)
                 continue
