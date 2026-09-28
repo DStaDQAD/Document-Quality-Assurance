@@ -83,7 +83,7 @@ _TABLE_PAGES_PER_CALL = int(os.getenv("PDF_TABLE_PAGES_PER_CALL", "1"))
 
 # Bump when the prompt, the assembly logic or the verification pass changes: it is part of the
 # cache key, so stale transcriptions from a previous version can never be served.
-_PROMPT_VERSION = "3"
+_PROMPT_VERSION = "4"
 
 _MAX_CACHE_ENTRIES = 8
 
@@ -171,6 +171,11 @@ ATURAN YANG TIDAK BOLEH DILANGGAR:
    yang sama dan label baris yang sama. JANGAN menggabungkan keduanya dalam satu tabel — dua
    kolom untuk bulan yang sama tetapi satuan berbeda tidak bisa dibedakan setelahnya.
    Bila ada blok ketiga dengan satuan lain ("% (mtm)"), keluarkan sebagai entri ketiga.
+8. PITA JUDUL SEKSI BUKAN TABEL BARU. Tabel survei BI membagi satu tabel menjadi beberapa seksi
+   dengan pita judul (mis. "A. Indeks Keyakinan Konsumen (IKK)", "B1. Indeks Penghasilan Saat
+   Ini (IPSI)", "1. Jakarta") yang diikuti baris-baris berlabel sama di setiap seksi. Tulis pita
+   itu sebagai SATU BARIS di dalam tabel yang sama: sel pertama berisi teks pita persis seperti
+   tercetak, sel-sel lainnya kosong (""). JANGAN mengeluarkannya sebagai entri tabel terpisah.
 
 YANG DIABAIKAN:
 - Paragraf narasi dan kalimat biasa.
@@ -358,6 +363,188 @@ def _align_header_to_body(header_rows: List[List], body_rows: List[List]) -> Lis
     return [[None] + r for r in header_rows]
 
 
+# The enumeration or bullet a BI survey table prints in front of a label: 'A.', 'B1.', '1.', '-'.
+_ENUM_PREFIX_RE = re.compile(r'^\s*(?:[\-–—•·*]+|(?:[A-Za-z]\d{0,2}|\d{1,2})[.)])\s*')
+
+
+def _strip_enumeration(label: str) -> str:
+    return _ENUM_PREFIX_RE.sub("", label).strip()
+
+
+def _qualify_under_section_bands(rows: List[List], number_format: str = "id") -> List[List]:
+    """Name each repeated row after the section band it sits under: 'Band > Row'.
+
+    A BI survey appendix splits one table into sections with a BAND — a row that names the
+    section and holds no value of its own — and then repeats the same row names under every
+    band. Tabel 2 of the Survei Konsumen prints 'Pengeluaran Rp1 - 2 juta' … '>Rp5 juta' nine
+    times, once under each index (A. IKK, B. IKE, …, C3. IEKU); Tabel 6 prints the same six
+    index rows under each of eighteen cities. Measured on SK-Juni-2026: _drop_ambiguous_rows
+    threw away every one of those rows, so the appendix answered almost nothing.
+
+    This is _qualify_repeated_rows' idea for the other way a section is printed: there the
+    section is a unique row WITH values (the native route), here it is a band WITHOUT them. The
+    result has the shape the workbook of the same survey parses to ('Indeks Keyakinan Konsumen
+    (IKK) > Pengeluaran Rp1 - 2 juta'), so the label matching built for that workbook applies.
+
+    Only a label that repeats is qualified, and only when a band stands above it. A unique row
+    keeps its own name — Tabel 1 prints IKK, IKE and IEK under the band "A. Indeks Keyakinan
+    Konsumen (IKK)", and 'IKK > IKE' would make the headline IKE row look like a breakdown. A
+    repeat with no band above it is left for _drop_ambiguous_rows. Band rows themselves are
+    removed: they carry nothing to look up. A table without bands comes back untouched.
+    """
+    def is_band(row: List) -> bool:
+        if not row or not str(row[0] or "").strip():
+            return False
+        return not any(isinstance(_coerce_cell(c, number_format), (int, float))
+                       for c in row[1:])
+
+    bands = {i for i, row in enumerate(rows) if is_band(row)}
+    if not bands or len(bands) == len(rows):
+        return rows
+
+    leaves = Counter(
+        _norm_label(_strip_enumeration(str(row[0] or "")))
+        for i, row in enumerate(rows) if i not in bands and row
+    )
+    out: List[List] = []
+    section: Optional[str] = None
+    for i, row in enumerate(rows):
+        if i in bands:
+            section = _strip_enumeration(str(row[0])) or section
+            continue
+        if not row:
+            out.append(row)
+            continue
+        leaf = _strip_enumeration(str(row[0] or "")) or str(row[0] or "")
+        if leaves[_norm_label(leaf)] > 1 and section:
+            leaf = f"{section}{QUAL_SEP}{leaf}"
+        out.append([leaf] + list(row[1:]))
+    return out
+
+
+# A column that summarises the others instead of dating a value: "Perubahan (Jun-Mei)",
+# "Selisih", or a bare month range "(Jun-Mei)".
+_SUMMARY_COL_RE = re.compile(
+    r'perubahan|selisih|^\(?\s*[a-z]{3,5}\s*[-–]\s*[a-z]{3,5}\s*\)?$', re.IGNORECASE
+)
+
+
+def _drop_summary_columns(table: _PdfTableOut, number_format: str = "id") -> _PdfTableOut:
+    """Trim the trailing 'Perubahan (Jun-Mei)' column off a period-headed transcription.
+
+    Every Survei Konsumen appendix table ends with a change column after its thirty months.
+    Its header is not a period, so the period row names one column fewer than the body holds,
+    and _is_usable drops the whole table as one whose header cannot be placed over its values —
+    which it would be right to do for any OTHER unnamed column. The change is also not a value
+    of any one month, so there is nothing to keep.
+
+    Deliberately narrow: only TRAILING non-period cells of the period row are candidates, and
+    only when some header cell out there says it is a summary column. The M2 snippet columns
+    ("Mar'26", "Apr'26*") are period tokens and never reach the test. Body rows are trimmed only
+    where their width says they carry the column; a row of any other width is left for the
+    existing guards to judge.
+    """
+    if not table.header_rows:
+        return table
+    period_row = [str(c or "").strip() for c in table.header_rows[-1]]
+    if sum(1 for c in period_row if _is_period_token(c)) < 2:
+        return table
+    trailing = 0
+    while trailing < len(period_row) and not _is_period_token(period_row[-1 - trailing]):
+        trailing += 1
+    if not trailing:
+        return table
+    tail_cells = period_row[len(period_row) - trailing:] + [
+        str(r[-1] or "").strip() for r in table.header_rows[:-1] if r
+    ]
+    if not any(_SUMMARY_COL_RE.search(c) for c in tail_cells if c):
+        return table
+
+    width = len(period_row)
+    kept_width = width - trailing
+    # The header may omit the cell over the label column (see _align_header_to_body).
+    label_offset = 1 if _is_period_token(period_row[0]) else 0
+    header_rows = [
+        ["" if isinstance(c, str) and _SUMMARY_COL_RE.search(c) else c for c in r[:kept_width]]
+        if r is not table.header_rows[-1] else list(r[:kept_width])
+        for r in table.header_rows
+    ]
+    checksum = _change_checksum(period_row, trailing, tail_cells)
+    rows = []
+    shifted = 0
+    for r in table.rows:
+        if len(r) != width + label_offset:
+            rows.append(list(r))
+            continue
+        if checksum is not None and not _row_passes_checksum(
+                r, checksum, label_offset, number_format):
+            shifted += 1
+            continue
+        rows.append(list(r[:kept_width + label_offset]))
+    logger.info("Dropping %d summary column(s) (%s) from '%s'.", trailing,
+                ", ".join(c for c in tail_cells if c), (table.caption or "")[:40])
+    if shifted:
+        logger.info(
+            "Dropping %d row(s) of '%s' whose change column disagrees with their own last two "
+            "months — the row was read shifted or misread.", shifted, (table.caption or "")[:40],
+        )
+    return table.model_copy(update={"header_rows": header_rows, "rows": rows})
+
+
+# 'Jun-Mei' out of a change column's header: the column holds the first month minus the second.
+_MONTH_RANGE_RE = re.compile(r'([A-Za-z]{3,5})\s*[-–]\s*([A-Za-z]{3,5})')
+
+# How far a printed change may sit from the difference of the two printed values it summarises.
+# Both values and the change are rounded to one decimal from unrounded figures, so the printed
+# difference can be off by up to 0.1 on its own.
+_CHECKSUM_SLACK = 0.11
+
+
+def _change_checksum(
+    period_row: List[str], trailing: int, tail_cells: List[str]
+) -> Optional[Tuple[int, int, int]]:
+    """(column of the later month, column of the earlier month, change column), or None.
+
+    Only a change column that names its two months ('Perubahan (Jun-Mei)') qualifies, and only
+    when both months are in the period row. Each is taken at its RIGHTMOST occurrence: a table of
+    thirty months names 'Jun' three times and the change is about the latest.
+    """
+    for cell in tail_cells:
+        match = _MONTH_RANGE_RE.search(cell or "")
+        if not match:
+            continue
+        later, earlier = (_bare_period_token(match.group(1)), _bare_period_token(match.group(2)))
+        if later is None or earlier is None:
+            continue
+        cols = {}
+        for index, cell_text in enumerate(period_row[:len(period_row) - trailing]):
+            token = _bare_period_token(cell_text)
+            if token in (later, earlier):
+                cols[token] = index
+        if later in cols and earlier in cols:
+            return cols[later], cols[earlier], len(period_row) - trailing
+    return None
+
+
+def _row_passes_checksum(
+    row: List, checksum: Tuple[int, int, int], label_offset: int, number_format: str = "id"
+) -> bool:
+    """False only when all three cells are numbers and the printed change contradicts them.
+
+    Measured on SK-Juni-2026's appendix: when the model loses its place in a long row it skips
+    or doubles one cell and every later month shifts by one column. The row stays exactly as
+    wide as it should, so no width guard sees it — but its last two months no longer differ by
+    the printed change. The recent months are the ones a report quotes, so they are the ones
+    worth protecting. A row with any of the three cells blank or unreadable is let through.
+    """
+    later, earlier, change = (c + label_offset for c in checksum)
+    values = [_coerce_cell(row[c], number_format) if c < len(row) else None
+              for c in (later, earlier, change)]
+    if not all(isinstance(v, (int, float)) for v in values):
+        return True
+    return abs((values[0] - values[1]) - values[2]) <= _CHECKSUM_SLACK
+
+
 def _assemble_grid(table: _PdfTableOut, number_format: str = "id") -> List[List]:
     """Lay a transcribed table out as a grid the existing Excel parsers already understand.
 
@@ -368,7 +555,7 @@ def _assemble_grid(table: _PdfTableOut, number_format: str = "id") -> List[List]
     """
     # A repeated row label cannot be resolved in a flat grid — see _drop_ambiguous_rows. Applied
     # here too so the vision route and the native route treat a nested appendix the same way.
-    rows = table.rows
+    rows = _qualify_under_section_bands(table.rows, number_format)
     ambiguous = _drop_ambiguous_rows([str(r[0]) if r else "" for r in rows])
     if ambiguous:
         rows = [r for i, r in enumerate(rows) if i not in ambiguous]
@@ -1397,6 +1584,311 @@ def _cache_put(key: str, tables: List[PdfTable]) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+def _to_pdf_tables(
+    outs: List[_PdfTableOut], page_number: int, number_format: str = "id"
+) -> List[PdfTable]:
+    """The model's transcriptions of one page, guarded and assembled into PdfTables."""
+    tables: List[PdfTable] = []
+    for caption_index, out in enumerate(outs):
+        out = _drop_summary_columns(out, number_format)
+        if not _is_usable(out, page_number, number_format):
+            continue
+        caption = (out.caption or "").strip()
+        unit = (out.unit or "").strip().strip("()") or _unit_from_caption(caption)
+        grid = _assemble_grid(out, number_format)
+        # A snippet table prints levels and growth under one caption; each half is its
+        # own table, exactly as on the text-layer route (see _split_grid_unit_blocks).
+        annotation_text = " ".join(
+            [out.unit or ""] + [str(c) for r in out.header_rows for c in r if c]
+        )
+        parts = (_split_grid_unit_blocks(grid, caption, unit, annotation_text)
+                 or [(caption, unit, grid)])
+        if len(parts) > 1:
+            logger.info(
+                "Page %d, %s: splitting the transcribed table into a level half and a "
+                "'%%, yoy' half.", page_number, caption[:40],
+            )
+        for part_caption, part_unit, part_grid in parts:
+            tables.append(PdfTable(
+                page_number=page_number,
+                caption=part_caption,
+                unit=part_unit,
+                grid=part_grid,
+                index_on_page=len(tables),
+                caption_index=caption_index,
+            ))
+    return tables
+
+
+# ---------------------------------------------------------------------------
+# Tables printed as a picture
+#
+# The Survei Konsumen appendix embeds each table as ONE image (1634 px wide for thirty monthly
+# columns). Rendering the whole page to the tile budget shrinks it to ~60% of that, where its
+# digits are ~6 px tall, and the transcription came back 18-22 cells wide for a 32-cell row —
+# not one of its seven tables was usable. The picture itself is sharp: sent at its own
+# resolution a 12-row table came back with every one of its 240 cells right. A 60-row table
+# still drifted (the model loses its place in a long, uniform grid), so a tall picture is cut
+# into strips of about twenty rows, and every strip after the first is told the columns the
+# first one read.
+# ---------------------------------------------------------------------------
+
+# Share of the page an embedded picture must cover to be taken for a table. Below: a logo or
+# a chart marker. Above: a scanned page, which the page render already handles.
+_TABLE_IMAGE_MIN_FRAC = 0.05
+_TABLE_IMAGE_MAX_FRAC = 0.85
+# Strip height in the picture's own pixels (~20 rows of a BI appendix at ~220 DPI).
+_TABLE_STRIP_PX = int(os.getenv("PDF_TABLE_STRIP_PX", "450"))
+# A pixel darker than this is ink; strips are cut at the row with the least of it.
+_INK_LUMA = 128
+
+
+class _StripRows(BaseModel):
+    rows: List[List[str]] = Field(
+        default_factory=list,
+        description="Baris data pada potongan ini, dari atas ke bawah. Sel pertama label baris.",
+    )
+
+
+_TABLE_IMAGE_NOTE = """
+CATATAN: gambar ini adalah SATU tabel yang dipotong dari halaman, tanpa judulnya. Keluarkan
+tepat satu entri tabel.{more}
+"""
+
+_TABLE_STRIP_PROMPT = """\
+Gambar berikut adalah POTONGAN LANJUTAN dari satu tabel statistik Bank Indonesia. Header tabel
+ada di potongan pertama dan tidak terlihat di sini. Header itu, seperti tercetak:
+{header}
+
+Salin SETIAP baris yang terlihat, dari atas ke bawah, masing-masing tepat {width} sel: sel
+pertama label baris, lalu satu sel untuk setiap kolom data, berurutan dari kiri ke kanan.
+
+ATURAN YANG TIDAK BOLEH DILANGGAR:
+1. Salin angka PERSIS seperti tercetak (koma desimal Indonesia tetap koma, tanda minus tetap).
+2. JANGAN menghitung, membulatkan, atau menebak. Sel kosong ditulis "" (string kosong).
+3. Pita judul seksi (mis. "B. Indeks Kondisi Ekonomi (IKE)", "2. Bandung") ditulis sebagai satu
+   baris: sel pertama teks pita persis seperti tercetak, sel lainnya kosong.
+4. JANGAN menyalin ulang baris header. Abaikan catatan kaki dan teks di luar tabel.
+"""
+
+
+@dataclass
+class _TableImage:
+    """One page's table picture, cut into strips (base64 PNG, top to bottom)."""
+    strips: List[str]
+    caption: str    # the page's table caption from the text layer, "" when it has none
+
+
+def _cut_rows(image, strip_px: int = _TABLE_STRIP_PX) -> list:
+    """Cut a tall table picture into strips, each cut on the least-inked pixel row near its mark.
+
+    The least-inked row is a gap between two table rows, so no row is split across strips. A
+    picture short enough to be read whole comes back as one strip.
+    """
+    import numpy as np
+
+    if image.height <= strip_px * 1.5:
+        return [image]
+    ink = (np.asarray(image.convert("L")) < _INK_LUMA).sum(axis=1)
+    cuts = [0]
+    while image.height - cuts[-1] > strip_px * 1.5:
+        mark = cuts[-1] + strip_px
+        lo, hi = mark - strip_px // 4, mark + strip_px // 4
+        cuts.append(lo + int(np.argmin(ink[lo:hi])))
+    cuts.append(image.height)
+    return [image.crop((0, a, image.width, b)) for a, b in zip(cuts, cuts[1:])]
+
+
+def _table_images(pdf_bytes: bytes, pages: set) -> Dict[int, _TableImage]:
+    """0-based page index -> that page's table picture, for the pages that are one.
+
+    A page qualifies when exactly one embedded picture lies inside it and covers a table-sized
+    share of it (see the _TABLE_IMAGE_* bounds), and it prints at most one table caption. Any
+    doubt — two pictures, two captions, a picture that will not decode — leaves the page to the
+    page render, which is what every page got before this existed.
+    """
+    import base64
+    import io
+
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+
+    found: Dict[int, _TableImage] = {}
+    try:
+        doc = pdfium.PdfDocument(pdf_bytes)
+    except Exception:
+        return found
+    try:
+        for index in sorted(pages):
+            if index >= len(doc):
+                continue
+            page = doc[index]
+            try:
+                width, height = page.get_size()
+                candidates = []
+                for obj in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE], max_depth=3):
+                    left, bottom, right, top = obj.get_bounds()
+                    if left < -1 or bottom < -1 or right > width + 1 or top > height + 1:
+                        continue    # bleeds off the page: background art
+                    share = (right - left) * (top - bottom) / (width * height)
+                    if _TABLE_IMAGE_MIN_FRAC <= share <= _TABLE_IMAGE_MAX_FRAC:
+                        candidates.append(obj)
+                if len(candidates) != 1:
+                    continue
+                textpage = page.get_textpage()
+                text = textpage.get_text_range()
+                textpage.close()
+                captions = [line.strip() for line in text.splitlines()
+                            if _CAPTION_RE.match(line.strip())]
+                if len(captions) > 1:
+                    continue
+                image = candidates[0].get_bitmap(render=False).to_pil().convert("RGB")
+            except Exception:
+                logger.exception("Could not read the table picture on page %d", index + 1)
+                continue
+            finally:
+                page.close()
+            strips = []
+            for strip in _cut_rows(image):
+                buffer = io.BytesIO()
+                strip.save(buffer, format="PNG")
+                strips.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
+            found[index] = _TableImage(strips=strips, caption=captions[0] if captions else "")
+    finally:
+        doc.close()
+    return found
+
+
+def _merge_one_table(outs: List[_PdfTableOut]) -> Optional[_PdfTableOut]:
+    """The single table a table picture holds, even when the model split it at its bands.
+
+    Asked for one table, the model still sometimes returns one entry per section, titled with
+    the band ("A. Indeks Keyakinan Konsumen (IKK)"). Those are put back together in order, each
+    title restored as the band row it was, so _qualify_under_section_bands can still name the
+    rows under it.
+    """
+    outs = [o for o in outs if o.rows]
+    if not outs:
+        return None
+    rows: List[List[str]] = list(outs[0].rows)
+    first_caption = (outs[0].caption or "").strip()
+    if len(outs) > 1 and first_caption and not _CAPTION_RE.match(first_caption):
+        rows.insert(0, [first_caption])
+    for out in outs[1:]:
+        caption = (out.caption or "").strip()
+        if caption and not _CAPTION_RE.match(caption):
+            rows.append([caption])
+        rows.extend(out.rows)
+    return outs[0].model_copy(update={"rows": rows})
+
+
+def _is_header_echo(row: List[str], header_rows: List[List[str]]) -> bool:
+    """A strip row that is a copy of the header, or reads as one (mostly period tokens)."""
+    cells = [str(c or "").strip() for c in row]
+    if any(cells == [str(c or "").strip() for c in h] for h in header_rows):
+        return True
+    filled = [c for c in cells[1:] if c]
+    return bool(filled) and sum(_is_period_token(c) for c in filled) / len(filled) > 0.5
+
+
+async def _transcribe_table_image(
+    page_number: int,
+    picture: _TableImage,
+    vision_llm: BaseChatModel,
+    semaphore: asyncio.Semaphore,
+    max_retries: int,
+    number_format: str,
+) -> List[PdfTable]:
+    """Transcribe one table picture: its first strip with the header, then the rest against it."""
+    def image_part(b64: str) -> dict:
+        return {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}}
+
+    more = (" Ini BAGIAN ATAS tabel; baris-baris berikutnya dikirim terpisah."
+            if len(picture.strips) > 1 else "")
+    head_llm = vision_llm.with_structured_output(_PageTables)
+
+    async def _head():
+        return await head_llm.ainvoke([HumanMessage(content=[
+            image_part(picture.strips[0]),
+            {"type": "text", "text": _TABLE_VISION_PROMPT + _TABLE_IMAGE_NOTE.format(more=more)},
+        ])])
+
+    head = await call_vision_with_retry(
+        _head, semaphore=semaphore, max_retries=max_retries,
+        label=f"table picture, page {page_number}", on_give_up=lambda: None,
+    )
+    table = _merge_one_table(head.tables) if head is not None else None
+    if table is None or not table.header_rows:
+        return []
+
+    if len(picture.strips) > 1:
+        width = Counter(len(r) for r in table.rows).most_common(1)[0][0]
+        prompt = _TABLE_STRIP_PROMPT.format(
+            header="\n".join(" | ".join(str(c or "") for c in r) for r in table.header_rows),
+            width=width,
+        )
+        strip_llm = vision_llm.with_structured_output(_StripRows)
+
+        async def _strip(b64: str):
+            return await strip_llm.ainvoke([HumanMessage(content=[
+                image_part(b64), {"type": "text", "text": prompt},
+            ])])
+
+        results = await asyncio.gather(*[
+            call_vision_with_retry(
+                lambda b64=b64: _strip(b64), semaphore=semaphore, max_retries=max_retries,
+                label=f"table picture, page {page_number}, strip {n + 2}",
+                on_give_up=lambda: None,
+            )
+            for n, b64 in enumerate(picture.strips[1:])
+        ])
+        rows = list(table.rows)
+        for n, result in enumerate(results):
+            if result is None:
+                # The rows below a lost strip would be filed under whichever section band came
+                # last BEFORE the gap — the wrong one, if the gap held a band. Stop here.
+                logger.warning(
+                    "Page %d: strip %d of the table picture was not read; keeping the %d row(s) "
+                    "above it only.", page_number, n + 2, len(rows),
+                )
+                break
+            rows.extend(r for r in result.rows if not _is_header_echo(r, table.header_rows))
+        table = table.model_copy(update={"rows": rows})
+
+    if picture.caption:
+        table = table.model_copy(update={"caption": picture.caption})
+    table = _drop_off_width_rows(table, page_number, number_format)
+    return _to_pdf_tables([table], page_number, number_format)
+
+
+def _drop_off_width_rows(
+    table: _PdfTableOut, page_number: int, number_format: str = "id"
+) -> _PdfTableOut:
+    """Drop the data rows of a picture's transcription that are not as wide as the others.
+
+    A picture has no text layer to check a row against (see _verify_against_text_layer), and a
+    row one cell too wide or too narrow is exactly what a lost place looks like: measured on
+    SK-Juni-2026 Tabel 2, a 33-cell row labelled 'Pengeluaran Rp2,1 - 3 juta' carried the
+    values of the IKLK 'Rp4,1 - 5 juta' row. Laid under the header, such a row files every
+    value under the neighbouring month. Section bands carry no values and are kept whatever
+    their width — they only name the rows below them.
+    """
+    def has_value(row: List) -> bool:
+        return any(isinstance(_coerce_cell(c, number_format), (int, float)) for c in row[1:])
+
+    widths = Counter(len(r) for r in table.rows if has_value(r))
+    if not widths:
+        return table
+    width = widths.most_common(1)[0][0]
+    rows = [r for r in table.rows if not has_value(r) or len(r) == width]
+    if len(rows) != len(table.rows):
+        logger.info(
+            "Page %d: dropping %d row(s) of the table picture that are not %d cells wide.",
+            page_number, len(table.rows) - len(rows), width,
+        )
+    return table.model_copy(update={"rows": rows})
+
+
 async def extract_tables_from_pdf(
     pdf_bytes: bytes,
     vision_llm: Optional[BaseChatModel],
@@ -1478,17 +1970,26 @@ async def extract_tables_from_pdf(
     todo = [i for i in range(n_pages) if (i + 1) not in answered] if n_pages else None
     if todo is not None and not todo:
         return in_page_order(native)
+    # A page whose table is one embedded picture is read off that picture, not off a render of
+    # the page — see _table_images.
+    pictures: Dict[int, _TableImage] = {}
+    if todo is not None:
+        pictures = await asyncio.to_thread(_table_images, pdf_bytes, set(todo))
+        if pictures:
+            logger.info("Reading %d table picture(s) at their own resolution: page(s) %s",
+                        len(pictures), ", ".join(str(i + 1) for i in sorted(pictures)))
+        todo = [i for i in todo if i not in pictures]
     logger.info(
         "Rendering %s at %d DPI for table transcription",
         f"{len(todo)} page(s)" if todo is not None else "every page", dpi,
     )
     b64_pages = await asyncio.to_thread(
         render_pages_to_b64, pdf_bytes, dpi, set(todo) if todo is not None else None
-    )
+    ) if todo is None or todo else []
     if todo is None:
         # The native reader could not even count the pages; fall back to whatever rendered.
         todo = [i for i in range(len(b64_pages)) if (i + 1) not in answered]
-    if not todo:
+    if not todo and not pictures:
         return in_page_order(native)
 
     is_groq, is_gemini = vision_provider_flags(vision_llm)
@@ -1503,7 +2004,9 @@ async def extract_tables_from_pdf(
         todo[i:i + _TABLE_PAGES_PER_CALL]
         for i in range(0, len(todo), _TABLE_PAGES_PER_CALL)
     ]
-    semaphore, max_retries = plan_vision_concurrency(is_groq, is_gemini, len(batches))
+    semaphore, max_retries = plan_vision_concurrency(
+        is_groq, is_gemini, len(batches) + len(pictures)
+    )
     structured = vision_llm.with_structured_output(_PageTables)
     logger.info(
         "Transcribing tables from %d page(s) in %d vision call(s)", len(todo), len(batches)
@@ -1530,36 +2033,7 @@ async def extract_tables_from_pdf(
             # batching, the model is not asked to attribute tables to pages, so they are all
             # credited to the batch's FIRST page — approximate on purpose; page_number is
             # display/provenance metadata, never used to resolve a value.
-            page_number = page_nums[0]
-            tables: List[PdfTable] = []
-            for caption_index, out in enumerate(result.tables):
-                if not _is_usable(out, page_number, number_format):
-                    continue
-                caption = (out.caption or "").strip()
-                unit = (out.unit or "").strip().strip("()") or _unit_from_caption(caption)
-                grid = _assemble_grid(out, number_format)
-                # A snippet table prints levels and growth under one caption; each half is its
-                # own table, exactly as on the text-layer route (see _split_grid_unit_blocks).
-                annotation_text = " ".join(
-                    [out.unit or ""] + [str(c) for r in out.header_rows for c in r if c]
-                )
-                parts = (_split_grid_unit_blocks(grid, caption, unit, annotation_text)
-                         or [(caption, unit, grid)])
-                if len(parts) > 1:
-                    logger.info(
-                        "Page %d, %s: splitting the transcribed table into a level half and a "
-                        "'%%, yoy' half.", page_number, caption[:40],
-                    )
-                for part_caption, part_unit, part_grid in parts:
-                    tables.append(PdfTable(
-                        page_number=page_number,
-                        caption=part_caption,
-                        unit=part_unit,
-                        grid=part_grid,
-                        index_on_page=len(tables),
-                        caption_index=caption_index,
-                    ))
-            return tables
+            return _to_pdf_tables(result.tables, page_nums[0], number_format)
 
         tables = await call_vision_with_retry(
             _one_call,
@@ -1568,14 +2042,27 @@ async def extract_tables_from_pdf(
             label=f"table transcription, pages {page_nums}",
             on_give_up=list,
         )
+        await _settled()
+        return tables
+
+    async def _settled() -> None:
         nonlocal done
         async with lock:
             done += 1
             if on_progress is not None:
-                on_progress(done, len(batches))
+                on_progress(done, len(batches) + len(pictures))
+
+    async def _picture(index: int) -> List[PdfTable]:
+        tables = await _transcribe_table_image(
+            index + 1, pictures[index], vision_llm, semaphore, max_retries, number_format
+        )
+        await _settled()
         return tables
 
-    per_batch = await asyncio.gather(*[_transcribe(idxs) for idxs in batches])
+    per_batch = await asyncio.gather(
+        *[_transcribe(idxs) for idxs in batches],
+        *[_picture(index) for index in sorted(pictures)],
+    )
     transcribed = [t for batch in per_batch for t in batch]
 
     # The model has now read the layout. Wherever the file states the numbers itself, they
