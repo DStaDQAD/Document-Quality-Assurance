@@ -529,7 +529,15 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
    colour, because a conflicted claim can be Entailed against its best source. */
 .fact-card.has-conflict { box-shadow: inset 0 0 0 1px #C4B5FD, 0 1px 5px rgba(11,31,58,0.05); }
 .badge.Conflict { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #5B21B6; }
-.badge.Chart { background: linear-gradient(135deg, #E0F2FE, #BAE6FD); color: #075985; }
+.chart-title { font-size: 13px; color: var(--text-500); }
+.chart-note { margin: 0 0 12px; font-size: 12px; }
+.chart-counts { font-size: 12px; color: var(--text-500); }
+.chart-issues { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.chart-issue { border: 1px solid var(--border, #E2E8F0); border-radius: 8px; padding: 8px 10px; background: white; }
+.chart-issue-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.chart-issue-label { font-size: 12px; font-weight: 600; color: var(--text-900); }
+.chart-issue-values { font-size: 12px; color: var(--text-900); }
+.chart-issue-why { font-size: 11px; color: var(--text-500); line-height: 1.5; margin-top: 3px; }
 .conflict-strip {
   display: flex; align-items: flex-start; gap: 8px;
   font-size: 12px; line-height: 1.6; border-radius: var(--r);
@@ -1603,15 +1611,6 @@ body.auth-locked .app {
     // numbers than _verify_against_text_layer's threshold never gets verified, so Tabel 1 of the
     // M2 report — two value columns — was labelled "read by AI" on a perfectly readable page.
     // A caution that fires on the wrong thing costs more than it is worth.
-    const charts = data.results.filter((it) => it.checked_item === "chart").length;
-    const chartUnread = data.chart_pages_unread || [];
-    const chartStrip = chartUnread.length ? `<div class="conflict-strip gap-strip">
-      <span class="material-symbols-outlined">warning</span>
-      <span><strong>Grafik di Hal. ${escapeHtml(chartUnread.join(", "))} tidak terbaca.</strong>
-      Model AI gagal membaca label angkanya, jadi grafik itu tidak ikut diperiksa — jalankan
-      ulang pemeriksaan untuk melengkapinya.</span>
-    </div>` : "";
-
     const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
       <span class="material-symbols-outlined">rule</span>
       <span><strong>${conflicts} klaim</strong> punya lebih dari satu sumber pembanding yang
@@ -1672,7 +1671,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${gapStrip}${chartStrip}${conflictStrip}${formatStrip}`;
+    </div>${gapStrip}${conflictStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
@@ -1681,7 +1680,6 @@ body.auth-locked .app {
       <button class="filter-btn" data-filter="Entailed">Sesuai (<span class="filter-count">${e}</span>)</button>
       <button class="filter-btn" data-filter="Inconclusive">Tidak Cukup Data (<span class="filter-count">${i}</span>)</button>
       ${conflicts > 0 ? `<button class="filter-btn" data-filter="conflict">Sumber Bertentangan (<span class="filter-count">${conflicts}</span>)</button>` : ""}
-      ${charts > 0 ? `<button class="filter-btn" data-filter="chart">Angka Grafik (<span class="filter-count">${charts}</span>)</button>` : ""}
     </div>`;
 
     const uniqueSources = [...new Set(data.results.map((it) => it.matched_excel_source).filter(Boolean))];
@@ -1770,10 +1768,6 @@ body.auth-locked .app {
           const conflictBadge = conflict
             ? `<span class="badge Conflict">${CONFLICT_LABEL[conflict] || "Sumber berbeda"}</span>`
             : "";
-          // A number printed on one of the report's charts, checked against the tables — the
-          // quote names the chart ("Grafik 2 · …").
-          const isChart = item.checked_item === "chart";
-          const chartBadge = isChart ? `<span class="badge Chart">Grafik</span>` : "";
           const sourceValues = item.source_values || [];
           const sourceChips = sourceValues.length > 1
             ? `<div class="fact-sources">${sourceValues.map((sv, n) => {
@@ -1800,11 +1794,10 @@ body.auth-locked .app {
 
           const hidden = defaultFilter !== "all" && verdict !== defaultFilter ? " hidden-fact" : "";
           const searchText = escapeHtml(`${item.metric_label} ${item.context_quote || ""}`.toLowerCase());
-          return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-chart="${isChart ? 1 : 0}" data-search="${searchText}">
+          return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-search="${searchText}">
             <div class="fact-card-top">
               <span class="badge ${badgeCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span>
               ${conflictBadge}
-              ${chartBadge}
               <span class="source-badge">${escapeHtml(opLabel)}</span>
               <span class="fact-metric">${escapeHtml(item.metric_label)}</span>
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
@@ -1823,6 +1816,13 @@ body.auth-locked .app {
     const typoIssueCount = typoCheck ? typoCheck.total_issues : 0;
     const hasTypoIssues = typoIssueCount > 0;
 
+    // Charts are judged one card per chart, on a tab of their own (check_charts). The tab only
+    // exists when the rule was on — an empty one would read as "every chart checked, all fine".
+    const chartChecks = data.chart_checks || [];
+    const chartUnread = data.chart_pages_unread || [];
+    const hasChartTab = chartChecks.length > 0 || chartUnread.length > 0;
+    const chartsWithIssues = chartChecks.filter((c) => c.verdict !== "Entailed").length;
+
     const subtabs = `<div class="report-subtabs">
       <button class="report-subtab-btn active" data-report-tab="fact">
         <span class="material-symbols-outlined">fact_check</span>
@@ -1832,6 +1832,10 @@ body.auth-locked .app {
         <span class="material-symbols-outlined">spellcheck</span>
         Cek Ejaan &amp; Tata Bahasa <span class="subtab-count">${typoIssueCount}</span>
       </button>
+      ${hasChartTab ? `<button class="report-subtab-btn${chartsWithIssues ? ' has-issues' : ''}" data-report-tab="chart">
+        <span class="material-symbols-outlined">bar_chart</span>
+        Cek Grafik <span class="subtab-count">${chartChecks.length}</span>
+      </button>` : ""}
     </div>`;
 
     const factPanel = `<div class="report-tab-panel active" data-report-panel="fact">
@@ -1843,7 +1847,83 @@ body.auth-locked .app {
       ${renderTypoSection(typoCheck)}
     </div>`;
 
-    return `<div class="paired-report">${header}${subtabs}${factPanel}${typoPanel}</div>`;
+    const chartPanel = hasChartTab ? `<div class="report-tab-panel" data-report-panel="chart">
+      ${renderChartSection(chartChecks, chartUnread)}
+    </div>` : "";
+
+    return `<div class="paired-report">${header}${subtabs}${factPanel}${typoPanel}${chartPanel}</div>`;
+  }
+
+  // One card per chart. The card's verdict is the one most of its labels got (the backend breaks
+  // a tie toward the worse one); only the labels that did not match are listed, the rest counted.
+  function renderChartSection(chartChecks, unreadPages) {
+    const n = (v) => chartChecks.filter((c) => c.verdict === v).length;
+    const chips = `<div class="typo-stat-chips">
+      <span class="typo-chip">${chartChecks.length} grafik</span>
+      <span class="typo-chip">Sesuai: ${n("Entailed")}</span>
+      <span class="typo-chip">Tidak Sesuai: ${n("Refuted")}</span>
+      <span class="typo-chip">Tidak Cukup Data: ${n("Inconclusive")}</span>
+    </div>`;
+    const unread = unreadPages.length ? `<div class="conflict-strip gap-strip">
+      <span class="material-symbols-outlined">warning</span>
+      <span><strong>Grafik di Hal. ${escapeHtml(unreadPages.join(", "))} tidak terbaca.</strong>
+      Model AI gagal membaca label angkanya, jadi grafik itu tidak ikut diperiksa — jalankan
+      ulang pemeriksaan untuk melengkapinya.</span>
+    </div>` : "";
+    const note = `<p class="muted-text chart-note">Angka yang tercetak pada setiap grafik dibaca AI
+      lalu dicocokkan dengan tabel. Status grafik mengikuti status sebagian besar labelnya.</p>`;
+
+    const cards = !chartChecks.length
+      ? "<p class='muted-text'>Tidak ada grafik yang terbaca.</p>"
+      : chartChecks.map((c) => {
+          const ok = c.entailed_count;
+          const counts = [
+            c.refuted_count ? `${c.refuted_count} tidak sesuai` : "",
+            c.inconclusive_count ? `${c.inconclusive_count} tidak cukup data` : "",
+          ].filter(Boolean).join(" · ");
+          const issues = (c.issues || []).map((it) => {
+            const p = (it.periods || [])[0] || {};
+            const when = [p.month, p.year].filter(Boolean).join(" ");
+            const label = it.periods && it.periods.length ? it.periods[0].metric_label : it.metric_label;
+            const table = it.computed_value !== null && it.computed_value !== undefined
+              ? fmtValueText(it.computed_value, "") : "—";
+            // The engine's first reasoning line for a plain mismatch only repeats the two numbers
+            // shown above; say which table they came from instead. A reason worth reading (a
+            // label matching another line of the chart, an unplaced series) starts otherwise.
+            const first = (it.reasoning || "").split(" | ")[0];
+            const source = it.matched_excel_source ? `Dibandingkan dengan ${it.matched_excel_source}.` : "";
+            const why = first.startsWith("PDF:") ? source : first;
+            return `<li class="chart-issue ${escapeHtml(it.verdict)}">
+              <div class="chart-issue-top">
+                <span class="badge ${escapeHtml(it.verdict)}">${escapeHtml(VERDICT_LABEL[it.verdict] || it.verdict)}</span>
+                <span class="chart-issue-label">${escapeHtml(label)}</span>
+                ${when ? `<span class="fact-period">${escapeHtml(when)}</span>` : ""}
+              </div>
+              <div class="chart-issue-values">
+                <span class="fact-val-label">Grafik:</span> ${escapeHtml(fmtValueText(it.claimed_value, ""))}
+                <span class="fact-arrow">&#8594;</span>
+                <span class="fact-val-label">Tabel:</span> ${escapeHtml(table)}
+              </div>
+              <div class="chart-issue-why">${escapeHtml(why)}</div>
+            </li>`;
+          }).join("");
+          return `<div class="fact-card ${escapeHtml(c.verdict)}">
+            <div class="fact-card-top">
+              <span class="badge ${escapeHtml(c.verdict)}">${escapeHtml(VERDICT_LABEL[c.verdict] || c.verdict)}</span>
+              <span class="fact-metric">${escapeHtml(c.caption)}</span>
+              <span class="chart-title">${escapeHtml(c.title)}</span>
+              <span class="page-badge">Hal.&nbsp;${c.page_number}</span>
+            </div>
+            <div class="fact-comparison">
+              <span class="fact-val ${c.verdict === "Entailed" ? "ok" : ""}">${ok} dari ${c.label_count}</span>
+              <span class="fact-val-label">label cocok dengan tabel</span>
+              ${counts ? `<span class="chart-counts">· ${escapeHtml(counts)}</span>` : ""}
+            </div>
+            ${issues ? `<ul class="chart-issues">${issues}</ul>` : ""}
+          </div>`;
+        }).join("");
+
+    return `${chips}${unread}${note}<div class="fact-cards">${cards}</div>`;
   }
 
   const TYPO_CATEGORY_LABEL = { ejaan: "Ejaan", tidak_baku: "Tidak Baku", grammar: "Tata Bahasa" };
@@ -1899,7 +1979,7 @@ body.auth-locked .app {
     // its number is what clicking it would show.
     function applyFilters() {
       const q = currentSearch.trim().toLowerCase();
-      const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0, chart: 0 };
+      const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0 };
       let visible = 0;
       resultEl.querySelectorAll(".fact-card").forEach((card) => {
         const matchesOthers = (!currentSource || card.dataset.source === currentSource)
@@ -1909,14 +1989,13 @@ body.auth-locked .app {
           counts.all++;
           counts[card.dataset.verdict] = (counts[card.dataset.verdict] || 0) + 1;
           if (card.dataset.conflict === "1") counts.conflict++;
-          if (card.dataset.chart === "1") counts.chart++;
         }
-        // "conflict" and "chart" are filters over separate axes from the verdicts, so they can't
-        // just compare against data-verdict like the other chips do.
+        // "conflict" is a filter over a separate axis from the verdicts, so it can't just
+        // compare against data-verdict like the other chips do.
         const matchesVerdict = currentVerdict === "all"
-          || (currentVerdict === "conflict" ? card.dataset.conflict === "1"
-              : currentVerdict === "chart" ? card.dataset.chart === "1"
-              : card.dataset.verdict === currentVerdict);
+          || (currentVerdict === "conflict"
+                ? card.dataset.conflict === "1"
+                : card.dataset.verdict === currentVerdict);
         const show = matchesVerdict && matchesOthers;
         card.classList.toggle("hidden-fact", !show);
         if (show) visible++;

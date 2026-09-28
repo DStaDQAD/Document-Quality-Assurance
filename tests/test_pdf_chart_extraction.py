@@ -194,3 +194,22 @@ def test_every_chart_of_the_survey_report_gets_its_own_box():
 @pytest.mark.skipif(not _SK.exists(), reason="SK-Juni-2026 sample not present")
 def test_the_report_period_is_the_month_the_text_names_most():
     assert report_period(_SK.read_bytes()) == "Juni 2026"
+
+
+def test_a_chart_reported_twice_for_one_region_is_one_reading():
+    llm = _llm(_PageCharts(charts=[
+        _chart([_point()]),
+        _chart([_point(), _point(value="113,0", period="5")], caption="", title=""),
+    ]))
+    patches = _patched_regions([3])
+    for p in patches:
+        p.start()
+    try:
+        readings = asyncio.run(extract_charts_from_pdf(b"%PDF-fake", llm))
+    finally:
+        for p in patches:
+            p.stop()
+
+    [reading] = readings
+    assert reading.caption == "Grafik 2"
+    assert [(p.month, p.value) for p in reading.points] == [("Jun", 108.9), ("May", 113.0)]

@@ -114,6 +114,25 @@ class FactVerificationResult(BaseModel):
     checked_item: Literal["narrative", "chart"] = "narrative"
 
 
+class ChartCheck(BaseModel):
+    """One chart of the report, its printed labels checked against the tables, summarised.
+
+    A chart is judged as a whole: `verdict` is the verdict most of its labels got, a tie going
+    to the worse one (Tidak Sesuai, then Tidak Cukup Data) so a split chart is never shown green.
+    Only the labels that did not come back Sesuai are carried, in `issues`; the others are
+    counted.
+    """
+    page_number: int
+    caption: str                      # "Grafik 2"
+    title: str                        # "IKK per Kelompok Pengeluaran"
+    verdict: Literal["Entailed", "Refuted", "Inconclusive"]
+    label_count: int
+    entailed_count: int
+    refuted_count: int
+    inconclusive_count: int
+    issues: List[FactVerificationResult] = Field(default_factory=list)
+
+
 class TypoIssue(BaseModel):
     word: str
     start: int
@@ -199,8 +218,11 @@ class PairedVerificationResponse(BaseModel):
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)
-    # How many chart labels were checked (a subset of total_facts, marked checked_item="chart"),
-    # and the pages whose charts were located but came back unread.
+    # The report's charts, one entry per chart (check_charts). Kept apart from `results` and from
+    # the counts above, which cover the narrative's claims only. chart_label_count is the number
+    # of printed labels behind them; chart_pages_unread the pages whose charts were located but
+    # came back unread.
+    chart_checks: List[ChartCheck] = Field(default_factory=list)
     chart_label_count: int = 0
     chart_pages_unread: List[int] = Field(default_factory=list)
 

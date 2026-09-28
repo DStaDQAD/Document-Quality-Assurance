@@ -21,6 +21,7 @@ from paired_verifier import (
     _evaluate_fact,
     _ExcelSource,
     check_chart_labels,
+    summarize_chart,
     verify_paired,
 )
 from pdf_chart_extraction import ChartPoint, ChartReading
@@ -216,8 +217,11 @@ def test_verify_paired_appends_the_chart_checks_and_keeps_them_out_of_the_extrac
             chart_pages_unread=[5],
         ))
 
-    assert [r.checked_item for r in response.results] == ["narrative", "chart", "chart"]
-    assert response.total_facts == 3 and response.entailed_count == 3
+    # The claims and the charts are reported apart: the counts are the narrative's alone.
+    assert [r.checked_item for r in response.results] == ["narrative"]
+    assert response.total_facts == 1 and response.entailed_count == 1
+    [chart] = response.chart_checks
+    assert (chart.caption, chart.verdict, chart.label_count, chart.issues) == ("Grafik 2", "Entailed", 2, [])
     assert response.chart_label_count == 2
     assert response.chart_pages_unread == [5]
     assert "chart" in response.excel_parsers
@@ -256,3 +260,25 @@ def test_a_label_filed_under_the_wrong_line_of_the_chart_is_left_for_a_person():
 
     assert [r.verdict for r in results] == ["Inconclusive", "Inconclusive", "Refuted"]
     assert "Durable Goods" in results[0].reasoning and "tertukar" in results[0].reasoning
+
+
+
+def _summary(*values):
+    """Grafik 2 with one label per value; 108.9 matches the table, 118.9 does not, 100.0 is a
+    series no table carries."""
+    points = [_pt("Rp9 - 10 juta" if v == 100.0 else "Rp1 - 2 juta", "Jun", v) for v in values]
+    reading = _grafik2(*points)
+    return summarize_chart(reading, check_chart_labels([reading], [_appendix()]))
+
+
+def test_a_chart_takes_the_verdict_most_of_its_labels_got():
+    chart = _summary(108.9, 108.9, 118.9)
+    assert chart.verdict == "Entailed"
+    assert (chart.entailed_count, chart.refuted_count) == (2, 1)
+    # Only the label that failed is carried, for the reader to see.
+    assert [r.claimed_value for r in chart.issues] == [118.9]
+
+
+def test_a_tied_chart_takes_the_worse_verdict():
+    assert _summary(108.9, 118.9).verdict == "Refuted"
+    assert _summary(108.9, 100.0).verdict == "Inconclusive"

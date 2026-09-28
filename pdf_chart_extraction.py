@@ -50,7 +50,7 @@ from table_parser_generic import _MONTH_ABBREVS, _bare_period_token
 logger = logging.getLogger("fact-checker")
 
 # Bump when the prompt or the region logic changes: it is part of the cache key.
-_PROMPT_VERSION = "2"
+_PROMPT_VERSION = "3"
 _MAX_CACHE_ENTRIES = 8
 
 # A chart caption, matched on the line with every space removed: the text layer spells it
@@ -404,6 +404,30 @@ def _indicator(out: _ChartOut) -> str:
     return match.group(1).strip() if match else ""
 
 
+def _one_chart(charts: List[_ChartOut]) -> _ChartOut:
+    """The one chart a region holds, even when the model reported it more than once.
+
+    Every region is cropped around a single caption, so a second entry is the same chart again:
+    on SK-Juni-2026 Grafik 7 came back twice, once without its caption, and showed up as two
+    cards. Names come from the first entry that has them; labels are pooled, a repeat of the
+    same series, period and value counted once.
+    """
+    charts = list(charts)
+    if len(charts) <= 1:
+        return charts[0] if charts else _ChartOut()
+    pick = lambda field: next((getattr(c, field) for c in charts if getattr(c, field).strip()), "")
+    points, seen = [], set()
+    for chart in charts:
+        for point in chart.points:
+            key = (point.series.strip(), point.year.strip(), point.period.strip(),
+                   point.value.strip(), point.kind)
+            if key not in seen:
+                seen.add(key)
+                points.append(point)
+    return _ChartOut(caption=pick("caption"), title=pick("title"),
+                     indicator=pick("indicator"), unit=pick("unit"), points=points)
+
+
 def _to_reading(out: _ChartOut, page_number: int, number_format: str,
                 fallback: Tuple[Optional[int], Optional[str]]) -> Optional[ChartReading]:
     """A ChartReading from one transcribed chart, keeping only the points it can place."""
@@ -527,9 +551,8 @@ async def extract_charts_from_pdf(
                 logger.info("Chart labels on page %d did not parse; asking once more.",
                             page_number)
                 result = await structured.ainvoke(message)
-            readings = [_to_reading(c, page_number, number_format, fallback)
-                        for c in result.charts]
-            return [r for r in readings if r is not None]
+            reading = _to_reading(_one_chart(result.charts), page_number, number_format, fallback)
+            return [reading] if reading is not None else []
 
         started = time.monotonic()
         readings = await call_vision_with_retry(

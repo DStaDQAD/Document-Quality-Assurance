@@ -48,6 +48,7 @@ from table_parser_generic import (
 )
 from table_parser_llm import parse_grid_with_llm, parse_table_with_llm
 from schemas import (
+    ChartCheck,
     FactVerificationResult,
     PairedVerificationResponse,
     PeriodResult,
@@ -2161,22 +2162,57 @@ def check_chart_labels(
     """
     if row_names is None:
         row_names = _chart_row_names(readings, table_sources)
+    return [check for reading in readings
+            for check in _check_reading(reading, table_sources, row_names)]
+
+
+def _check_reading(
+    reading: ChartReading,
+    table_sources: List[_ExcelSource],
+    row_names: Dict[Tuple[str, str], str],
+) -> List[Tuple[ExtractedFact, FactVerificationResult]]:
+    """check_chart_labels for one chart."""
     placed = set(row_names.values())
     checks: List[Tuple[ExtractedFact, FactVerificationResult]] = []
-    for reading in readings:
-        for fact in chart_label_facts(reading, row_names):
-            if fact.periods[0].metric_label in placed:
-                result = _settle_chart_placement(
-                    fact, _evaluate_fact_safely(fact, table_sources), table_sources
-                )
-                result = _settle_chart_series(fact, result, reading, row_names, table_sources)
-            else:
-                result = _inconclusive_result(fact, None, (
-                    f"Seri grafik '{fact.periods[0].metric_label}' tidak dapat dipastikan "
-                    f"padanannya di tabel mana pun."
-                ))
-            checks.append((fact, result.model_copy(update={"checked_item": "chart"})))
+    for fact in chart_label_facts(reading, row_names):
+        if fact.periods[0].metric_label in placed:
+            result = _settle_chart_placement(
+                fact, _evaluate_fact_safely(fact, table_sources), table_sources
+            )
+            result = _settle_chart_series(fact, result, reading, row_names, table_sources)
+        else:
+            result = _inconclusive_result(fact, None, (
+                f"Seri grafik '{fact.periods[0].metric_label}' tidak dapat dipastikan "
+                f"padanannya di tabel mana pun."
+            ))
+        checks.append((fact, result.model_copy(update={"checked_item": "chart"})))
     return checks
+
+
+# Which verdict a split chart takes: the worse one, so one wrong label is never outvoted into a
+# green card by a tie.
+_VERDICT_SEVERITY = {"Refuted": 2, "Inconclusive": 1, "Entailed": 0}
+
+
+def summarize_chart(
+    reading: ChartReading, checks: List[Tuple[ExtractedFact, FactVerificationResult]]
+) -> ChartCheck:
+    """One chart's label checks as a single ChartCheck — see schemas.ChartCheck for the rule."""
+    counts = {verdict: 0 for verdict in _VERDICT_SEVERITY}
+    for _, result in checks:
+        counts[result.verdict] += 1
+    verdict = max(counts, key=lambda v: (counts[v], _VERDICT_SEVERITY[v]))
+    return ChartCheck(
+        page_number=reading.page_number,
+        caption=reading.caption,
+        title=reading.title,
+        verdict=verdict,
+        label_count=len(checks),
+        entailed_count=counts["Entailed"],
+        refuted_count=counts["Refuted"],
+        inconclusive_count=counts["Inconclusive"],
+        issues=[result for _, result in checks if result.verdict != "Entailed"],
+    )
 
 
 async def verify_paired(
@@ -2352,8 +2388,10 @@ async def verify_paired(
     for reading in (chart_readings or []):
         parsed_sources.append(_chart_source(reading, pdf_filename, row_names, table_sources))
         excel_parsers.append("chart")
-    chart_checks = check_chart_labels(chart_readings or [], table_sources, row_names)
-    chart_facts = [fact for fact, _ in chart_checks]
+    per_chart = [(reading, _check_reading(reading, table_sources, row_names))
+                 for reading in (chart_readings or [])]
+    chart_checks = [summarize_chart(reading, checks) for reading, checks in per_chart if checks]
+    chart_facts = [fact for _, checks in per_chart for fact, _ in checks]
 
     # Step 2: Extract structured facts.
     logger.info("Running structured fact extraction (combined row labels from %d source(s))", len(parsed_sources))
@@ -2415,8 +2453,6 @@ async def verify_paired(
             llm=vision_llm or llm,
             fallback_llm=llm if vision_llm is not None else None,
         )
-    # The chart labels were settled up front (check_chart_labels) and skip the pointer pass.
-    results = results + [result for _, result in chart_checks]
 
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
@@ -2425,8 +2461,9 @@ async def verify_paired(
     compare_detail = (
         f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"
     )
-    if chart_facts:
-        compare_detail += f" · termasuk {len(chart_facts)} label grafik"
+    if chart_checks:
+        n_ok = sum(1 for c in chart_checks if c.verdict == "Entailed")
+        compare_detail += f" · grafik: {n_ok} dari {len(chart_checks)} sesuai"
     if n_pointer:
         compare_detail += f" · {n_pointer} via sel AI"
     if conflicts:
@@ -2452,6 +2489,7 @@ async def verify_paired(
         table_suggestions=(
             [] if mode in ("internal", "none") else _build_table_suggestions(results)
         ),
+        chart_checks=chart_checks,
         chart_label_count=len(chart_facts),
         chart_pages_unread=sorted(chart_pages_unread or []),
     )
