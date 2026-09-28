@@ -568,6 +568,27 @@ def test_the_survey_report_ratio_names_reach_their_indonesian_rows():
         "Rp 1 - 2 juta > Tabungan")
 
 
+def test_an_age_group_written_out_in_full_reaches_the_abbreviated_row():
+    """SK-Juni-2026's narrative says "responden usia 20-30 tahun (124,3)" while Tabel 3 of its
+    workbook heads the row 'Usia 20-30 th'. Only the unit word differs, yet the claim came back
+    Tidak Cukup Data against a sheet holding exactly 124,3."""
+    table = TableData(
+        title="Tabel 3. Table 3.", unit="",
+        row_labels=["Indeks Keyakinan Konsumen (IKK) > Usia 20-30 th",
+                    "Indeks Keyakinan Konsumen (IKK) > Usia 31-40 th",
+                    "Indeks Keyakinan Konsumen (IKK) > Usia >60 th"],
+    )
+    for label, value in zip(table.row_labels, (124.3, 120.5, 102.8)):
+        table._data[(label, 2026, "Jun")] = value
+
+    assert table.lookup_fuzzy(
+        "Indeks Keyakinan Konsumen (IKK) > Usia 20-30 tahun", 2026, "Jun"
+    ) == ("Indeks Keyakinan Konsumen (IKK) > Usia 20-30 th", 124.3)
+    assert table.lookup_fuzzy(
+        "Indeks Keyakinan Konsumen (IKK) > Usia >60 tahun", 2026, "Jun"
+    ) == ("Indeks Keyakinan Konsumen (IKK) > Usia >60 th", 102.8)
+
+
 def test_a_sheet_that_holds_an_english_ratio_row_counts_as_discussing_it():
     """Resolving the row is not enough: paired_verifier drops a source whose coverage of the
     claim's scope words is zero, and 'average propensity to consume ratio' shares none with

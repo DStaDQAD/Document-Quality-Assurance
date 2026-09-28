@@ -110,9 +110,15 @@ _REPORT_TERMS_RE = re.compile(
 )
 
 
+# An age bound written out in full: "usia 20-30 tahun" in the prose, 'Usia 20-30 th' in the sheet.
+# Only right after a figure, so a "tahun" that is not an age unit is left alone.
+_AGE_UNIT_RE = re.compile(r"(?<=\d)\s*tahun\b", re.IGNORECASE)
+
+
 def _expand_report_terms(query: str) -> str:
-    """Rewrite a report's English term as the row name its table actually uses."""
-    return _REPORT_TERMS_RE.sub(lambda m: _REPORT_TERMS[m.group(0).lower()], query)
+    """Rewrite a report's wording as the row name its table actually uses."""
+    query = _REPORT_TERMS_RE.sub(lambda m: _REPORT_TERMS[m.group(0).lower()], query)
+    return _AGE_UNIT_RE.sub(" th", query)
 
 
 def _label_words(text: str) -> set:
