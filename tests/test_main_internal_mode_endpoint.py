@@ -297,3 +297,59 @@ def test_excel_mode_never_looks_for_mixed_number_conventions(
     assert response.status_code == 200
     mock_mix.assert_not_called()
     assert response.json()["number_format_notice"] is None
+
+
+# ---------------------------------------------------------------------------
+# check_charts
+# ---------------------------------------------------------------------------
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_charts_from_pdf")
+@patch("main.extract_tables_from_pdf")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_the_chart_pass_runs_only_when_asked_and_its_readings_reach_the_verifier(
+    mock_vision, mock_narrative, mock_tables, mock_charts, mock_verify, mock_typos
+):
+    mock_vision.return_value = Mock()
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_tables.return_value = [Mock()]
+    reading = Mock(points=[Mock(), Mock()])
+    mock_charts.return_value = [reading]
+    mock_verify.return_value = _fact_response(mode="internal")
+    mock_typos.return_value = _typo_response()
+
+    client.post("/api/verify-paired?mode=internal", files=_PDF_ONLY)
+    mock_charts.assert_not_called()
+    assert mock_verify.call_args.kwargs["chart_readings"] == []
+
+    response = client.post("/api/verify-paired-stream?mode=internal&check_charts=true",
+                           files=_PDF_ONLY)
+    mock_charts.assert_called_once()
+    assert mock_verify.call_args.kwargs["chart_readings"] == [reading]
+    events = _read_events(response)
+    chart_done = [e for e in events if e.get("stage") == "charts" and e["status"] == "done"]
+    assert chart_done and "2 label" in chart_done[0]["detail"]
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_charts_from_pdf")
+@patch("main.extract_tables_from_pdf")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_the_chart_pass_is_skipped_and_said_so_without_a_vision_model(
+    mock_vision, mock_narrative, mock_tables, mock_charts, mock_verify, mock_typos
+):
+    mock_vision.side_effect = RuntimeError("no key configured")
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_tables.return_value = [Mock()]
+    mock_verify.return_value = _fact_response(mode="internal")
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired-stream?mode=internal&check_charts=true",
+                           files=_PDF_ONLY)
+    mock_charts.assert_not_called()
+    chart_done = [e for e in _read_events(response) if e.get("stage") == "charts"]
+    assert chart_done and "Dilewati" in chart_done[-1]["detail"]

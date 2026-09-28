@@ -81,6 +81,7 @@ from llm_provider import get_llm, get_vision_llm
 from perf_log import StageTimer, log_perf
 from orchestrator import verify_document
 from paired_verifier import verify_paired
+from pdf_chart_extraction import ChartReading, extract_charts_from_pdf
 from pdf_table_extraction import PdfTable, detect_number_format_mix, extract_tables_from_pdf
 from pdf_extraction import (
     MIN_USEFUL_CHARS,
@@ -532,6 +533,7 @@ async def _run_paired_pipeline(
     mode: str = "excel",
     run_typo_check: bool = True,
     reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
+    check_charts: bool = False,
 ) -> PairedVerificationResponse:
     """Run the full verification and return the merged fact + typo response.
 
@@ -546,6 +548,8 @@ async def _run_paired_pipeline(
     transcribed out of the PDF itself), "both", or "none" (neither). `reference_pdfs` are the
     other PDFs of the run, (bytes, filename) each: their tables are added to any mode as a
     fallback. `run_typo_check=False` skips the spelling/grammar pass and leaves typo_check null.
+    `check_charts=True` also reads the labels printed on the PDF's charts and checks each one
+    against the tables (see pdf_chart_extraction); it needs a vision model.
     """
     # Observe every stage event for timing, then forward to the real sink (if any). This
     # single recording callback is passed to both this function's _emit and verify_paired's
@@ -597,6 +601,22 @@ async def _run_paired_pipeline(
     n_chars = len(_PAGE_MARKER_RE.sub("", narrative_text).strip())
     _emit("pdf", "done", detail=f"{n_pages} halaman · {n_chars:,} karakter".replace(",", "."))
 
+    # The charts are read alongside the tables rather than after them: each chart is a small,
+    # separate call, and the table pass spends most of its time on a few long appendix pages.
+    chart_readings: List[ChartReading] = []
+    chart_pages_unread: List[int] = []
+    chart_task: Optional[asyncio.Task] = None
+    if check_charts and vision_llm is not None:
+        _emit("charts", "running")
+
+        def _on_chart_progress(done: int, total: int) -> None:
+            _emit("charts", "running", current=done, total=total, detail=f"{total} grafik")
+
+        chart_task = asyncio.create_task(extract_charts_from_pdf(
+            pdf_bytes, vision_llm, on_progress=_on_chart_progress,
+            on_unread=chart_pages_unread.extend,
+        ))
+
     # Transcribe the PDF's own tables when they are part of the reference pool. Sequential
     # rather than gathered with the narrative pass: both share the vision provider's semaphore
     # and rate-limit budget, so overlapping them buys little and makes progress illegible.
@@ -626,6 +646,16 @@ async def _run_paired_pipeline(
         # Cheap (one text-layer read, no LLM) and only meaningful for the tables just read, so
         # it rides along with them rather than running for every document.
         number_format_mix = await asyncio.to_thread(detect_number_format_mix, pdf_bytes)
+
+    if chart_task is not None:
+        chart_readings = await chart_task
+        n_labels = sum(len(r.points) for r in chart_readings)
+        detail = f"{len(chart_readings)} grafik · {n_labels} label angka"
+        if chart_pages_unread:
+            detail += f" · gagal dibaca di hal. {', '.join(map(str, chart_pages_unread))}"
+        _emit("charts", "done", detail=detail)
+    elif check_charts:
+        _emit("charts", "done", detail="Dilewati: model vision tidak tersedia")
 
     # The other PDFs' tables, read the same way (and from the same cache) as this one's own.
     reference_tables: List[Tuple[str, List[PdfTable]]] = []
@@ -673,6 +703,8 @@ async def _run_paired_pipeline(
             mode=mode,
             on_extract_gap=_gap_recorder("extract"),
             reference_tables=reference_tables,
+            chart_readings=chart_readings,
+            chart_pages_unread=chart_pages_unread,
         ),
         _maybe_typo_check(),
     )
@@ -748,6 +780,7 @@ async def verify_paired_endpoint(
     reference_pdf: List[UploadFile] = File(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
+    check_charts: bool = False,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF report against a pool of reference tables.
 
@@ -766,6 +799,9 @@ async def verify_paired_endpoint(
 
     run_typo_check: set false to skip the spelling/grammar pass (typo_check comes back null).
 
+    check_charts: set true to also read the numbers printed on the PDF's charts and check each
+    against the tables; those results carry checked_item="chart".
+
     Returns the whole response in one shot. For live progress during the (typically 40s+)
     run, use /api/verify-paired-stream instead — same inputs, same final payload.
     """
@@ -777,7 +813,7 @@ async def verify_paired_endpoint(
     try:
         return await _run_paired_pipeline(
             pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check,
-            reference_pdfs=references,
+            reference_pdfs=references, check_charts=check_charts,
         )
     except Exception as exc:
         logger.exception("Paired verification failed")
@@ -794,6 +830,7 @@ async def verify_paired_stream_endpoint(
     reference_pdf: List[UploadFile] = File(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
+    check_charts: bool = False,
 ) -> StreamingResponse:
     """Same as /api/verify-paired, but streams progress while the pipeline runs.
 
@@ -822,6 +859,7 @@ async def verify_paired_stream_endpoint(
                 return await _run_paired_pipeline(
                     pdf_bytes, pdf_name, excel_sources, emit=queue.put_nowait,
                     mode=mode, run_typo_check=run_typo_check, reference_pdfs=references,
+                    check_charts=check_charts,
                 )
             finally:
                 # Unblocks the drain loop below on success AND on failure; the exception

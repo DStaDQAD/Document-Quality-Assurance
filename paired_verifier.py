@@ -37,6 +37,7 @@ from cell_pointer import (
     resolve_pointers_multi,
 )
 from excel_parser_bi import BITableData, parse_bi_table
+from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _sig_words, label_match_score
 from table_parser_generic import (
@@ -124,6 +125,10 @@ _SUBSET_PHRASE_RE = re.compile(
 # no unit conversion — so they stay out of _LEVEL_OPS.
 _THRESHOLD_OPS = {"above_threshold", "below_threshold"}
 
+# Source origins that answer a claim only when the primary sources (the report's own tables and
+# the uploaded Excel) cannot — see _evaluate_fact.
+_FALLBACK_ORIGINS = ("pdf_other", "chart")
+
 # Row labels advertised to the fact extractor per source (see _source_desc). Internal mode can
 # add a dozen sources at once, and every label is printed into every extraction chunk's prompt.
 _MAX_LABELS_PER_SOURCE = 60
@@ -149,8 +154,9 @@ class _ExcelSource:
     # against this source can only be resolved by the cell-pointer pass.
     pointer_only: bool = False
     # "excel" for an uploaded workbook sheet, "pdf" for a table transcribed from the report
-    # itself, "pdf_other" for a table from another PDF uploaded in the same run. Branched on
-    # for labelling a conflict, and to keep "pdf_other" a fallback (see _evaluate_fact).
+    # itself, "pdf_other" for a table from another PDF uploaded in the same run, "chart" for the
+    # labels printed on one of the report's charts. Branched on for labelling a conflict, and to
+    # keep "pdf_other" and "chart" fallbacks (see _evaluate_fact).
     origin: str = "excel"
 
     @property
@@ -1164,10 +1170,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     candidates.sort(key=lambda c: (-c.coverage, c.qualification, -c.score))
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
-    # the user chose decide whenever they can answer at all. Stable, so each group keeps the
-    # ranking above.
-    primary = [c for c in candidates if c.src.origin != "pdf_other"]
-    fallback = [c for c in candidates if c.src.origin == "pdf_other"]
+    # the user chose decide whenever they can answer at all. So is a chart — its labels are read
+    # off a drawing, and it only prints a few of the months a table holds. Stable, so each group
+    # keeps the ranking above.
+    primary = [c for c in candidates if c.src.origin not in _FALLBACK_ORIGINS]
+    fallback = [c for c in candidates if c.src.origin in _FALLBACK_ORIGINS]
     candidates = primary + fallback
     # Every candidate is computed once — plain arithmetic over values already looked up. The
     # results are reused for the source comparison, so this costs no more than before.
@@ -1441,7 +1448,9 @@ def _attach_source_comparison(
             differs = head.verdict != other.verdict
         if differs:
             conflicting = other
-            if "pdf_other" in (head.origin, other.origin):
+            if "chart" in (head.origin, other.origin):
+                conflict = "chart"
+            elif "pdf_other" in (head.origin, other.origin):
                 conflict = "cross_pdf"
             elif head.origin == other.origin == "pdf":
                 conflict = "internal"
@@ -1462,6 +1471,7 @@ def _attach_source_comparison(
         "internal": "dua tabel di dalam PDF saling bertentangan",
         "cross": "tabel di PDF dan sumber Excel tidak sinkron",
         "cross_pdf": "tabel di PDF lain memuat angka berbeda (bisa jadi angka revisi)",
+        "chart": "angka yang tercetak di grafik berbeda dengan tabel",
     }[conflict]
     note = f" | KONFLIK SUMBER: {_fmt(head)} vs {_fmt(conflicting)} — {explanation}"
     return result.model_copy(update={
@@ -1836,6 +1846,292 @@ def _pdf_table_source(
     return source, parser_used
 
 
+# ---------------------------------------------------------------------------
+# Charts — each printed data label is checked like a claim, against the tables
+# ---------------------------------------------------------------------------
+
+# How a month is written back to an Indonesian reader.
+_MONTH_ID = {"May": "Mei", "Aug": "Agu", "Oct": "Okt", "Dec": "Des"}
+
+
+def _shift_period(year: int, token: str, step: int) -> Optional[Tuple[int, str]]:
+    """The calendar period `step` months (or quarters) away, or None for an unknown token."""
+    if token in _QUARTER_ORDINAL:
+        index = year * 4 + _QUARTER_ORDINAL[token] - 1 + step
+        return index // 4, f"Q{index % 4 + 1}"
+    if token in _MONTH_ABBREVS:
+        index = year * 12 + _MONTH_ABBREVS.index(token) + step
+        return index // 12, _MONTH_ABBREVS[index % 12]
+    return None
+
+
+# Words a chart title or axis adds that a table row does not repeat: Grafik 19 is "Rasio
+# Konsumsi per Kelompok Pengeluaran", its table row just 'Rp 1 - 2 juta > Konsumsi'.
+_CHART_FILLER_WORDS = frozenset({"indeks", "rasio", "perkembangan", "komposisi"})
+# The numbering a workbook puts in front of a section ('5. Medan', 'B1.'), which no chart prints.
+_ENUMERATION_RE = re.compile(r"^\s*(?:[A-Za-z]\d{0,2}|\d{1,2})[.)]\s+")
+# Words a table row adds to say WHICH breakdown a group belongs to: 'Pengeluaran Rp1 - 2 juta',
+# 'Usia 20-30 th' for a chart's 'Rp1 - 2 juta' and '20 - 30 tahun'.
+_DIMENSION_WORDS = frozenset({"pengeluaran", "usia", "kelompok", "pendidikan", "tingkat"})
+# A qualifier a table puts above rows that a chart never names: 'Total > Konsumsi'.
+_UNNAMED_PARTS = frozenset({"total", "jumlah"})
+
+
+def _label_tokens(text: str) -> Tuple[frozenset, Tuple[str, ...]]:
+    """(words, figures in order) of a label. 'tahun' is read as the tables' 'th', and '>' is a
+    figure: '> 60 tahun' and '51 - 60 tahun' share every word and must still differ."""
+    text = _ENUMERATION_RE.sub("", text)
+    text = re.sub(r"\btahun\b", "th", text.lower())
+    tokens = re.findall(r"[a-z]+|\d+|>", text)
+    words = frozenset(t for t in tokens if t.isalpha() and t not in _CHART_FILLER_WORDS)
+    figures = tuple(t for t in tokens if not t.isalpha())
+    return words, figures
+
+
+def _part_fit(query: str, row_part: str) -> Optional[int]:
+    """How many words the row part has beyond the query part, or None when it is not the same
+    thing: every query word must be there, the figures must be the same, in order, and the row
+    may add only what names the SAME thing — its abbreviation or a parenthetical in brackets,
+    or the dimension word ('Pengeluaran', 'Usia'). A chart naming only the abbreviation ('IKK')
+    is identified by it, whatever else the row spells out.
+
+    Without the last rule the row that fit with fewest words to spare won even when it was a
+    different index: SK-Juni-2026's appendix lost its 'IKLK > Usia 41-50 th' row, and Grafik
+    8's IKLK labels were checked against 'Indeks Ekspektasi Ketersediaan Lapangan Kerja
+    (IEKLK) > …' — two false mismatches of 24 and 28 points."""
+    query_words, query_figures = _label_tokens(query)
+    row_words, row_figures = _label_tokens(row_part)
+    if not query_words and not query_figures:
+        return None
+    if query_figures != row_figures or not query_words <= row_words:
+        return None
+    extra = row_words - query_words
+    bracketed = frozenset().union(*(
+        _label_tokens(inner)[0] for inner in re.findall(r"\(([^()]*)\)", row_part)
+    ))
+    names_by_abbreviation = bool(query_words) and query_words <= bracketed
+    if not names_by_abbreviation and extra - bracketed - _DIMENSION_WORDS:
+        return None
+    return len(extra)
+
+
+def _chart_row_fit(parts: List[str], row_label: str) -> Optional[int]:
+    """How loosely a row label fits a chart's (indicator, series), or None when it does not.
+
+    Each named part must fit a different level of the row label, in either order — the map puts
+    the city under the index ('IKK', 'Medan') where Tabel 6 files the index under the city.
+    Every level of the row must be accounted for, except an aggregate qualifier ('Total').
+    """
+    import itertools
+
+    row_parts = [p.strip() for p in row_label.split(QUAL_SEP)]
+    best: Optional[int] = None
+    for placing in itertools.permutations(range(len(row_parts)), len(parts)):
+        fits = [_part_fit(q, row_parts[i]) for q, i in zip(parts, placing)]
+        if any(f is None for f in fits):
+            continue
+        rest = [row_parts[i] for i in range(len(row_parts)) if i not in placing]
+        if any(_label_tokens(r)[0] - _UNNAMED_PARTS or _label_tokens(r)[1] for r in rest):
+            continue
+        score = sum(fits)
+        best = score if best is None else min(best, score)
+    return best
+
+
+def _chart_row_names(
+    readings: List[ChartReading], sources: List[_ExcelSource]
+) -> Dict[Tuple[str, str], str]:
+    """(indicator, series) -> the row name the tables use for it, where exactly one fits best.
+
+    The generic label matcher answers a narrative claim, whose metric the extractor already named
+    after a row it was shown. A chart's names are its own — 'IKK' and 'Rp1 - 2 juta' for the row
+    'Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp1 - 2 juta' — and that matcher, rightly
+    strict, finds nothing for them. So they are placed here, deterministically: the row that
+    fits with the fewest words to spare, and only when no other row name ties it. A chart
+    series with no such row stays under its own name and comes back Tidak Cukup Data.
+    """
+    labels = list(dict.fromkeys(
+        label for src in sources if src.origin != "chart" for label in src.table.row_labels
+    ))
+    names: Dict[Tuple[str, str], str] = {}
+    for reading in readings:
+        for point in reading.points:
+            key = (reading.indicator, point.series)
+            if key in names:
+                continue
+            parts = [p for p in (reading.indicator, point.series) if p.strip()]
+            if len(parts) == 2 and parts[0].strip().lower() == parts[1].strip().lower():
+                parts = parts[:1]
+            fits = [(fit, label) for label in labels
+                    if (fit := _chart_row_fit(parts, label)) is not None]
+            if not fits:
+                continue
+            best = min(fit for fit, _ in fits)
+            winners = {label for fit, label in fits if fit == best}
+            if len(winners) == 1:
+                names[key] = winners.pop()
+    return names
+
+
+def _chart_source(
+    reading: ChartReading,
+    filename: str,
+    row_names: Optional[Dict[Tuple[str, str], str]] = None,
+    table_sources: Optional[List[_ExcelSource]] = None,
+) -> _ExcelSource:
+    """A chart's level labels as a sparse source, keyed by the tables' own row names where
+    _chart_row_names found them — so a narrative claim resolves against the chart exactly as it
+    does against the table, and the two can be compared.
+
+    Two labels the model placed on the same series and period with different numbers cannot
+    both be right, and nothing says which is — so neither is kept.
+
+    The unit is the one the tables give those rows, when they agree on one: the axis says
+    "Indeks" where the appendix declares nothing, and _units_comparable would otherwise keep a
+    chart that contradicts its table from ever being reported.
+    """
+    row_names = row_names or {}
+    data: Dict[Tuple, float] = {}
+    clashing: set = set()
+    for point in reading.points:
+        if point.kind != "level":
+            continue
+        label = row_names.get((reading.indicator, point.series)) or reading.metric_label(point.series)
+        key = (label, point.year, point.month)
+        if key in data and abs(data[key] - point.value) > MATCH_TOLERANCE:
+            clashing.add(key)
+        data.setdefault(key, point.value)
+    for key in clashing:
+        del data[key]
+    labels = list(dict.fromkeys(key[0] for key in data))
+    row_units = {src.table.unit for src in (table_sources or []) if src.origin != "chart"
+                 for label in labels if label in src.table.row_labels}
+    table = BITableData(
+        title=" ".join(p for p in (reading.caption, reading.title) if p),
+        unit=row_units.pop() if len(row_units) == 1 else reading.unit,
+        row_labels=labels,
+    )
+    table._data.update(data)
+    return _ExcelSource(table=table, filename=filename, sheet=reading.label, origin="chart")
+
+
+def chart_label_facts(
+    reading: ChartReading, row_names: Optional[Dict[Tuple[str, str], str]] = None
+) -> List[ExtractedFact]:
+    """One checkable fact per printed label: the value it shows, for the series and period it
+    sits on. A change label ('Δ -8,9' on a map) is the difference from the period before.
+    Named after the tables' row wherever _chart_row_names placed the series."""
+    row_names = row_names or {}
+    facts: List[ExtractedFact] = []
+    for point in reading.points:
+        label = row_names.get((reading.indicator, point.series)) or reading.metric_label(point.series)
+        when = f"{_MONTH_ID.get(point.month, point.month)} {point.year}"
+        quote = (f"{reading.caption} · {reading.title}: "
+                 f"{point.series or reading.indicator}, {when} = {point.raw}")
+        if point.kind == "change":
+            previous = _shift_period(point.year, point.month, -1)
+            if previous is None:
+                continue
+            facts.append(ExtractedFact(
+                operation="diff",
+                periods=[PeriodPoint(label, *previous), PeriodPoint(label, point.year, point.month)],
+                claimed_value=point.value, unit=reading.unit or None,
+                context_quote=quote + " (perubahan dari bulan sebelumnya)",
+                page_number=reading.page_number,
+            ))
+        else:
+            facts.append(ExtractedFact(
+                operation="value",
+                periods=[PeriodPoint(label, point.year, point.month)],
+                claimed_value=point.value, unit=reading.unit or None,
+                context_quote=quote, page_number=reading.page_number,
+            ))
+    return facts
+
+
+def _settle_chart_placement(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """Check a chart label's NUMBER when the model misplaced it by one bar or point.
+
+    The number on a chart is read reliably; WHICH bar or point it belongs to is the model's
+    judgement, and it is the part it gets wrong. Measured on SK-Juni-2026 against its workbook:
+    the bar charts label only the last two of each group's three bars, and the model put the
+    two labels on bars one and two (or one and three) in 59 of 233 labels — each off by exactly
+    one month, every number itself right. Reported as mismatches, those are 59 false alarms
+    about a report with no error in it.
+
+    So a label that misses its own period but equals the SAME row one period either side is
+    counted as matching the table, and the reasoning says exactly that, naming both periods.
+    What this gives up, deliberately: a chart that was not updated and shows every value one
+    month late reads the same way, and is not caught. A wrong number, a number from another
+    group or series, and a number from further away still are.
+    """
+    if result.verdict != "Refuted" or fact.operation != "value" or not result.periods:
+        return result
+    source = next((s for s in sources if s.label == result.matched_excel_source), None)
+    point = fact.periods[0]
+    if source is None or point.year is None or point.month is None:
+        return result
+    row = result.periods[0].metric_label
+    for step in (-1, 1):
+        shifted = _shift_period(point.year, point.month, step)
+        if shifted is None:
+            continue
+        value = source.table.lookup(row, *shifted)
+        if value is None or abs(value - fact.claimed_value) > MATCH_TOLERANCE:
+            continue
+        read_at = f"{_MONTH_ID.get(point.month, point.month)} {point.year}"
+        matched_at = f"{_MONTH_ID.get(shifted[1], shifted[1])} {shifted[0]}"
+        return result.model_copy(update={
+            "verdict": "Entailed",
+            "computed_value": round(value, 4),
+            "delta": round(abs(value - fact.claimed_value), 4),
+            "periods": [result.periods[0].model_copy(update={
+                "year": shifted[0], "month": shifted[1], "excel_value": value,
+            })],
+            "reasoning": (
+                f"Angka grafik {fact.claimed_value} sama dengan nilai tabel "
+                f"[{source.label}] ({row}) untuk {matched_at}. Model membaca label ini pada "
+                f"posisi {read_at}; letak label pada gambar tidak dapat dipastikan, jadi yang "
+                f"diverifikasi adalah angkanya. (Grafik yang belum diperbarui satu bulan tidak "
+                f"tertangkap dengan cara ini.)"
+            ),
+        })
+    return result
+
+
+def check_chart_labels(
+    readings: List[ChartReading],
+    table_sources: List[_ExcelSource],
+    row_names: Optional[Dict[Tuple[str, str], str]] = None,
+) -> List[Tuple[ExtractedFact, FactVerificationResult]]:
+    """Every printed chart label, checked against the tables: (fact, result) per label.
+
+    Against the tables only — never against a chart, its own included — and only once
+    _chart_row_names has placed the label's series on a table row. An unplaced series is not
+    handed to the generic fuzzy matcher nor to the AI cell pointer: a chart's own naming is
+    exactly what those guess wrong, so it comes back Tidak Cukup Data instead.
+    """
+    if row_names is None:
+        row_names = _chart_row_names(readings, table_sources)
+    placed = set(row_names.values())
+    checks: List[Tuple[ExtractedFact, FactVerificationResult]] = []
+    for reading in readings:
+        for fact in chart_label_facts(reading, row_names):
+            if fact.periods[0].metric_label in placed:
+                result = _settle_chart_placement(
+                    fact, _evaluate_fact_safely(fact, table_sources), table_sources
+                )
+            else:
+                result = _inconclusive_result(fact, None, (
+                    f"Seri grafik '{fact.periods[0].metric_label}' tidak dapat dipastikan "
+                    f"padanannya di tabel mana pun."
+                ))
+            checks.append((fact, result.model_copy(update={"checked_item": "chart"})))
+    return checks
+
+
 async def verify_paired(
     narrative_text: str,
     excel_sources: List[Tuple[bytes, str, str]],
@@ -1847,6 +2143,8 @@ async def verify_paired(
     mode: str = "excel",
     on_extract_gap: Optional[Callable[[List[int], Exception], None]] = None,
     reference_tables: Optional[List[Tuple[str, List[PdfTable]]]] = None,
+    chart_readings: Optional[List[ChartReading]] = None,
+    chart_pages_unread: Optional[List[int]] = None,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -1877,6 +2175,11 @@ async def verify_paired(
         reference_tables: (filename, tables) per OTHER PDF uploaded in the same run. A fallback
                         only: they answer a claim the report's own tables and the Excel cannot,
                         and otherwise can only raise a "cross_pdf" conflict (see _evaluate_fact).
+        chart_readings: Labels read off the report's own charts (pdf_chart_extraction). Each
+                        label is checked against the tables like a claim (checked_item="chart"),
+                        and each chart is a fallback source for the narrative — it answers only
+                        what no table can, and otherwise can raise a "chart" conflict.
+        chart_pages_unread: Pages whose charts were located but not read; echoed back.
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -1994,6 +2297,17 @@ async def verify_paired(
                 all_row_labels.append(label)
                 seen_labels.add(label)
 
+    # Step 1d: the report's charts. Added AFTER the extractor's label lists are built: a chart's
+    # labels are the model's own composition ('IKK > Rp1 - 2 juta'), and offering them as row
+    # names would steer how the narrative's claims get named.
+    table_sources = list(parsed_sources)
+    row_names = _chart_row_names(chart_readings or [], table_sources)
+    for reading in (chart_readings or []):
+        parsed_sources.append(_chart_source(reading, pdf_filename, row_names, table_sources))
+        excel_parsers.append("chart")
+    chart_checks = check_chart_labels(chart_readings or [], table_sources, row_names)
+    chart_facts = [fact for fact, _ in chart_checks]
+
     # Step 2: Extract structured facts.
     logger.info("Running structured fact extraction (combined row labels from %d source(s))", len(parsed_sources))
     extraction_primary = vision_llm if vision_llm is not None else llm
@@ -2019,7 +2333,7 @@ async def verify_paired(
     excel_sheets = [src.sheet for src in parsed_sources]
     excel_units = [src.table.unit for src in parsed_sources]
 
-    if not facts:
+    if not facts and not chart_facts:
         emit("compare", "done", detail="Tidak ada klaim untuk dibandingkan")
         return PairedVerificationResponse(
             pdf_filename=pdf_filename,
@@ -2040,7 +2354,6 @@ async def verify_paired(
     results: List[FactVerificationResult] = [
         _evaluate_fact_safely(fact, parsed_sources) for fact in facts
     ]
-
     # Step 3b: tier-4 cell-pointer pass for claims no source could resolve. Vision LLM
     # (Gemini) first — big grid snapshots trip Groq's TPM limits more readily — with the
     # text LLM as fallback; any failure keeps the original Inconclusive results.
@@ -2051,10 +2364,12 @@ async def verify_paired(
     if n_unresolved and any(s.grid for s in parsed_sources):
         emit("compare", "running", detail=f"penunjukan sel AI: {n_unresolved} klaim")
         results, n_pointer = await _pointer_pass(
-            facts, results, parsed_sources,
+            facts, results, table_sources,
             llm=vision_llm or llm,
             fallback_llm=llm if vision_llm is not None else None,
         )
+    # The chart labels were settled up front (check_chart_labels) and skip the pointer pass.
+    results = results + [result for _, result in chart_checks]
 
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
@@ -2063,6 +2378,8 @@ async def verify_paired(
     compare_detail = (
         f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"
     )
+    if chart_facts:
+        compare_detail += f" · termasuk {len(chart_facts)} label grafik"
     if n_pointer:
         compare_detail += f" · {n_pointer} via sel AI"
     if conflicts:
@@ -2088,4 +2405,6 @@ async def verify_paired(
         table_suggestions=(
             [] if mode in ("internal", "none") else _build_table_suggestions(results)
         ),
+        chart_label_count=len(chart_facts),
+        chart_pages_unread=sorted(chart_pages_unread or []),
     )

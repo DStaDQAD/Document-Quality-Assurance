@@ -66,8 +66,9 @@ class PeriodResult(BaseModel):
 class SourceValue(BaseModel):
     """What ONE reference source says about a claim, when more than one could answer it."""
     source: str                       # "filename / sheet" — the source's display label
-    # "pdf" is a table in the report being checked; "pdf_other" a table in ANOTHER uploaded PDF.
-    origin: Literal["excel", "pdf", "pdf_other"] = "excel"
+    # "pdf" is a table in the report being checked; "pdf_other" a table in ANOTHER uploaded PDF;
+    # "chart" the labels printed on one of the report's own charts.
+    origin: Literal["excel", "pdf", "pdf_other", "chart"] = "excel"
     matched_label: Optional[str] = None   # the row label this source resolved the claim against
     computed_value: Optional[float] = None
     computed_unit: Optional[str] = None
@@ -104,9 +105,13 @@ class FactVerificationResult(BaseModel):
     #                internally inconsistent, regardless of whether the claim itself is right)
     #   "cross"    — a table in the PDF and an uploaded Excel sheet disagree (out of sync)
     #   "cross_pdf" — a table in ANOTHER uploaded PDF disagrees (often a revised figure)
+    #   "chart"    — a chart in the report prints a different number for the same series
     # Deliberately NOT a fourth `verdict` value: a conflict is orthogonal to whether the claim
     # matches its best source, and entailed+refuted+inconclusive must keep summing to total_facts.
-    source_conflict: Optional[Literal["internal", "cross", "cross_pdf"]] = None
+    source_conflict: Optional[Literal["internal", "cross", "cross_pdf", "chart"]] = None
+    # What was checked: a sentence of the report ("narrative") or a data label printed on one of
+    # its charts ("chart" — context_quote then names the chart, e.g. "Grafik 2 · …").
+    checked_item: Literal["narrative", "chart"] = "narrative"
 
 
 class TypoIssue(BaseModel):
@@ -194,6 +199,10 @@ class PairedVerificationResponse(BaseModel):
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)
+    # How many chart labels were checked (a subset of total_facts, marked checked_item="chart"),
+    # and the pages whose charts were located but came back unread.
+    chart_label_count: int = 0
+    chart_pages_unread: List[int] = Field(default_factory=list)
 
 
 class TableListResponse(BaseModel):

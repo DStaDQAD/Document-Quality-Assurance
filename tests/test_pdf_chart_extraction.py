@@ -1,0 +1,196 @@
+"""Reading the data labels printed on a report's charts (pdf_chart_extraction).
+
+The model's output is strings only; what is pinned here is what code does with them — which
+labels become placed points and which are dropped — plus the region finding that decides what
+the model is shown at all. No test calls a real model.
+"""
+
+import asyncio
+from pathlib import Path
+from unittest.mock import AsyncMock, Mock, patch
+
+import pytest
+
+from pdf_chart_extraction import (
+    ChartReading,
+    _ChartOut,
+    _ChartPointOut,
+    _CHART_CACHE,
+    _PageCharts,
+    _period_token,
+    _to_reading,
+    chart_regions,
+    extract_charts_from_pdf,
+    report_period,
+)
+
+_SK = Path(__file__).resolve().parent.parent / "sample_data" / "SK-Juni-2026.pdf"
+_FALLBACK = (2026, "Jun")
+
+
+@pytest.fixture(autouse=True)
+def _clear_cache():
+    _CHART_CACHE.clear()
+    yield
+    _CHART_CACHE.clear()
+
+
+def _chart(points, **overrides):
+    base = dict(caption="Grafik 2", title="IKK per Kelompok Pengeluaran", indicator="IKK",
+                unit="(Indeks)", points=points)
+    base.update(overrides)
+    return _ChartOut(**base)
+
+
+def _point(series="Rp1 - 2 juta", year="2026", period="6", value="108,9", kind="level"):
+    return _ChartPointOut(series=series, year=year, period=period, value=value, kind=kind)
+
+
+# ---------------------------------------------------------------------------
+# From strings to placed points
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("raw,token", [
+    ("6", "Jun"), ("12", "Dec"), ("Jun", "Jun"), ("Juni", "Jun"), ("Mei", "May"), ("13", None),
+])
+def test_period_token_reads_axis_month_numbers_and_names(raw, token):
+    assert _period_token(raw) == token
+
+
+def test_a_labelled_bar_becomes_a_placed_point():
+    reading = _to_reading(_chart([_point()]), 2, "id", _FALLBACK)
+
+    point = reading.points[0]
+    assert (point.series, point.year, point.month, point.value, point.raw) == (
+        "Rp1 - 2 juta", 2026, "Jun", 108.9, "108,9")
+    assert reading.unit == "Indeks"
+    assert reading.metric_label(point.series) == "IKK > Rp1 - 2 juta"
+
+
+def test_unlabelled_bars_are_listed_only_to_place_the_labelled_ones():
+    reading = _to_reading(_chart([_point(period="4", value=""), _point(period="5", value="113,0")]),
+                          2, "id", _FALLBACK)
+    assert [(p.month, p.value) for p in reading.points] == [("May", 113.0)]
+
+
+def test_a_ditto_mark_for_a_series_name_drops_the_label():
+    reading = _to_reading(_chart([_point(series='"', value="101,6"), _point()]), 3, "id", _FALLBACK)
+    assert [p.series for p in reading.points] == ["Rp1 - 2 juta"]
+
+
+def test_a_map_label_takes_the_report_period_and_a_change_label_its_kind():
+    reading = _to_reading(_chart(
+        [_point(series="MEDAN", year="", period="", value="90,5"),
+         _point(series="MEDAN", year="", period="", value="(Δ -8,9)", kind="change")],
+        caption="Gambar 1", indicator="Indeks Keyakinan Konsumen (IKK)",
+    ), 14, "id", _FALLBACK)
+
+    assert [(p.year, p.month, p.value, p.kind) for p in reading.points] == [
+        (2026, "Jun", 90.5, "level"), (2026, "Jun", -8.9, "change")]
+
+
+def test_a_breakdown_chart_takes_its_indicator_from_the_title():
+    reading = _to_reading(_chart(
+        [_point()], indicator="", title="Indeks Ekspektasi Penghasilan per Kelompok Pengeluaran",
+    ), 5, "id", _FALLBACK)
+    assert reading.indicator == "Indeks Ekspektasi Penghasilan"
+
+
+def test_a_trend_chart_keeps_its_series_as_the_indicators():
+    reading = _to_reading(_chart(
+        [_point(series="Indeks Keyakinan Konsumen (IKK)", value="117,8")],
+        indicator="", title="Perkembangan Indeks Keyakinan Konsumen",
+    ), 1, "id", _FALLBACK)
+    assert reading.indicator == ""
+    assert reading.metric_label("Indeks Keyakinan Konsumen (IKK)") == "Indeks Keyakinan Konsumen (IKK)"
+
+
+def test_an_axis_note_is_not_part_of_the_series_name():
+    reading = _to_reading(_chart([_point(series="Konsumsi (sb. kanan)", value="73,0")], indicator=""),
+                          6, "id", _FALLBACK)
+    assert reading.points[0].series == "Konsumsi"
+
+
+def test_a_chart_with_nothing_placeable_is_no_reading():
+    assert _to_reading(_chart([_point(value="")]), 2, "id", _FALLBACK) is None
+
+
+# ---------------------------------------------------------------------------
+# The pass
+# ---------------------------------------------------------------------------
+
+def test_no_vision_model_means_no_chart_pass():
+    assert asyncio.run(extract_charts_from_pdf(b"%PDF-fake", None)) == []
+
+
+def _llm(*returns):
+    structured = Mock()
+    structured.ainvoke = AsyncMock(side_effect=list(returns))
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=structured)
+    llm.model = "gemini-2.5-flash"
+    type(llm).__name__ = "ChatGoogleGenerativeAI"
+    return llm
+
+
+def _patched_regions(pages):
+    return [
+        patch("pdf_chart_extraction.chart_regions", return_value={p: [(0, 0, -1, 100)] for p in pages}),
+        patch("pdf_chart_extraction._render_regions", return_value=[(p, "png") for p in pages]),
+        patch("pdf_chart_extraction.report_period", return_value="Juni 2026"),
+        patch("pdf_chart_extraction._document_number_format", return_value="id"),
+    ]
+
+
+def test_every_chart_region_is_read_and_placed():
+    llm = _llm(_PageCharts(charts=[_chart([_point()])]),
+               _PageCharts(charts=[_chart([_point(value="121,4", series="> Rp5 juta")],
+                                          caption="Grafik 3")]))
+    patches = _patched_regions([2, 3])
+    for p in patches:
+        p.start()
+    try:
+        readings = asyncio.run(extract_charts_from_pdf(b"%PDF-fake", llm))
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert [(r.page_number, r.caption) for r in readings] == [(2, "Grafik 2"), (3, "Grafik 3")]
+
+
+def test_a_region_whose_call_fails_is_reported_unread_and_the_rest_come_back():
+    llm = _llm(RuntimeError("boom"), _PageCharts(charts=[_chart([_point()])]))
+    unread = []
+    patches = _patched_regions([2, 5])
+    for p in patches:
+        p.start()
+    try:
+        readings = asyncio.run(extract_charts_from_pdf(b"%PDF-fake", llm, on_unread=unread.extend))
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert len(readings) == 1
+    assert unread in ([2], [5])
+
+
+# ---------------------------------------------------------------------------
+# Locating charts on the real report
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skipif(not _SK.exists(), reason="SK-Juni-2026 sample not present")
+def test_every_chart_of_the_survey_report_gets_its_own_box():
+    regions = chart_regions(_SK.read_bytes())
+
+    # Grafik 1-20 plus Gambar 1: 21 charts. Page 2 holds Grafik 2 and 3 side by side (split at
+    # Grafik 3's caption) and Grafik 4 across the page.
+    assert sum(len(boxes) for boxes in regions.values()) == 21
+    assert len(regions[2]) == 3
+    left, right = regions[2][0], regions[2][1]
+    assert left[2] == right[0]                   # the side-by-side pair meets at one edge
+    assert 8 not in regions                      # the appendix pages have no charts
+
+
+@pytest.mark.skipif(not _SK.exists(), reason="SK-Juni-2026 sample not present")
+def test_the_report_period_is_the_month_the_text_names_most():
+    assert report_period(_SK.read_bytes()) == "Juni 2026"

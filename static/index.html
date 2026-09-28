@@ -529,6 +529,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
    colour, because a conflicted claim can be Entailed against its best source. */
 .fact-card.has-conflict { box-shadow: inset 0 0 0 1px #C4B5FD, 0 1px 5px rgba(11,31,58,0.05); }
 .badge.Conflict { background: linear-gradient(135deg, #EDE9FE, #DDD6FE); color: #5B21B6; }
+.badge.Chart { background: linear-gradient(135deg, #E0F2FE, #BAE6FD); color: #075985; }
 .conflict-strip {
   display: flex; align-items: flex-start; gap: 8px;
   font-size: 12px; line-height: 1.6; border-radius: var(--r);
@@ -937,6 +938,13 @@ body.auth-locked .app {
                       <span class="rule-hint">Narasi vs tabel di PDF yang sama</span>
                     </span>
                   </label>
+                  <label class="rule-check">
+                    <input type="checkbox" id="rule-charts" checked>
+                    <span class="rule-text">
+                      <span class="rule-title">Angka grafik vs tabel</span>
+                      <span class="rule-hint" id="rule-charts-hint">Label angka pada grafik dibaca AI, lalu dicek terhadap tabel</span>
+                    </span>
+                  </label>
                   <label class="rule-check is-disabled">
                     <input type="checkbox" id="rule-cross-pdf" disabled>
                     <span class="rule-text">
@@ -1334,6 +1342,7 @@ body.auth-locked .app {
   // pdfSources is the source of truth the submit handler reads.
   let pdfSources = []; // [{container, inp}]
   let severalPdfsWerePresent = false; // syncRules() state, like excelWasPresent
+  let tablesWereChosen = true;       // syncRules() state for the chart rule; intra starts checked
 
   function updatePdfRemoveButtons() {
     pdfSources.forEach((src) => {
@@ -1432,6 +1441,13 @@ body.auth-locked .app {
       document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
       "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
     severalPdfsWerePresent = severalPdfs;
+    // Chart labels are checked against tables, so the rule needs a rule that brings some.
+    const tablesChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
+    followInputs(document.getElementById("rule-charts"),
+      document.getElementById("rule-charts-hint"), tablesChosen, tablesWereChosen,
+      "Label angka pada grafik dibaca AI, lalu dicek terhadap tabel",
+      "centang konsistensi intra-file atau Excel untuk mengaktifkan");
+    tablesWereChosen = tablesChosen;
     // Dimmed only when files are there but unused. With no files the column must stay live,
     // since uploading is exactly what switches the Excel rule on.
     const muted = present && !ruleExcel.checked;
@@ -1441,6 +1457,7 @@ body.auth-locked .app {
   }
 
   document.getElementById("rule-excel").addEventListener("change", syncRules);
+  document.getElementById("rule-intra").addEventListener("change", syncRules);
   syncRules();
 
   // Browse table
@@ -1507,6 +1524,7 @@ body.auth-locked .app {
     internal: "Tabel internal tidak konsisten",
     cross: "PDF vs Excel berbeda",
     cross_pdf: "Beda dengan PDF lain",
+    chart: "Grafik berbeda dengan tabel",
   };
   const TYPE_LABEL    = {
     value: "Nilai", yoy_growth: "% YoY", average: "Rata-rata", sum: "Total",
@@ -1585,6 +1603,15 @@ body.auth-locked .app {
     // numbers than _verify_against_text_layer's threshold never gets verified, so Tabel 1 of the
     // M2 report — two value columns — was labelled "read by AI" on a perfectly readable page.
     // A caution that fires on the wrong thing costs more than it is worth.
+    const charts = data.results.filter((it) => it.checked_item === "chart").length;
+    const chartUnread = data.chart_pages_unread || [];
+    const chartStrip = chartUnread.length ? `<div class="conflict-strip gap-strip">
+      <span class="material-symbols-outlined">warning</span>
+      <span><strong>Grafik di Hal. ${escapeHtml(chartUnread.join(", "))} tidak terbaca.</strong>
+      Model AI gagal membaca label angkanya, jadi grafik itu tidak ikut diperiksa — jalankan
+      ulang pemeriksaan untuk melengkapinya.</span>
+    </div>` : "";
+
     const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
       <span class="material-symbols-outlined">rule</span>
       <span><strong>${conflicts} klaim</strong> punya lebih dari satu sumber pembanding yang
@@ -1645,7 +1672,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${gapStrip}${conflictStrip}${formatStrip}`;
+    </div>${gapStrip}${chartStrip}${conflictStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
@@ -1654,6 +1681,7 @@ body.auth-locked .app {
       <button class="filter-btn" data-filter="Entailed">Sesuai (<span class="filter-count">${e}</span>)</button>
       <button class="filter-btn" data-filter="Inconclusive">Tidak Cukup Data (<span class="filter-count">${i}</span>)</button>
       ${conflicts > 0 ? `<button class="filter-btn" data-filter="conflict">Sumber Bertentangan (<span class="filter-count">${conflicts}</span>)</button>` : ""}
+      ${charts > 0 ? `<button class="filter-btn" data-filter="chart">Angka Grafik (<span class="filter-count">${charts}</span>)</button>` : ""}
     </div>`;
 
     const uniqueSources = [...new Set(data.results.map((it) => it.matched_excel_source).filter(Boolean))];
@@ -1742,6 +1770,10 @@ body.auth-locked .app {
           const conflictBadge = conflict
             ? `<span class="badge Conflict">${CONFLICT_LABEL[conflict] || "Sumber berbeda"}</span>`
             : "";
+          // A number printed on one of the report's charts, checked against the tables — the
+          // quote names the chart ("Grafik 2 · …").
+          const isChart = item.checked_item === "chart";
+          const chartBadge = isChart ? `<span class="badge Chart">Grafik</span>` : "";
           const sourceValues = item.source_values || [];
           const sourceChips = sourceValues.length > 1
             ? `<div class="fact-sources">${sourceValues.map((sv, n) => {
@@ -1768,10 +1800,11 @@ body.auth-locked .app {
 
           const hidden = defaultFilter !== "all" && verdict !== defaultFilter ? " hidden-fact" : "";
           const searchText = escapeHtml(`${item.metric_label} ${item.context_quote || ""}`.toLowerCase());
-          return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-search="${searchText}">
+          return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-chart="${isChart ? 1 : 0}" data-search="${searchText}">
             <div class="fact-card-top">
               <span class="badge ${badgeCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span>
               ${conflictBadge}
+              ${chartBadge}
               <span class="source-badge">${escapeHtml(opLabel)}</span>
               <span class="fact-metric">${escapeHtml(item.metric_label)}</span>
               ${period ? `<span class="fact-period">${escapeHtml(period)}</span>` : ""}
@@ -1866,7 +1899,7 @@ body.auth-locked .app {
     // its number is what clicking it would show.
     function applyFilters() {
       const q = currentSearch.trim().toLowerCase();
-      const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0 };
+      const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0, chart: 0 };
       let visible = 0;
       resultEl.querySelectorAll(".fact-card").forEach((card) => {
         const matchesOthers = (!currentSource || card.dataset.source === currentSource)
@@ -1876,13 +1909,14 @@ body.auth-locked .app {
           counts.all++;
           counts[card.dataset.verdict] = (counts[card.dataset.verdict] || 0) + 1;
           if (card.dataset.conflict === "1") counts.conflict++;
+          if (card.dataset.chart === "1") counts.chart++;
         }
-        // "conflict" is a filter over a separate axis from the verdicts, so it can't just
-        // compare against data-verdict like the other chips do.
+        // "conflict" and "chart" are filters over separate axes from the verdicts, so they can't
+        // just compare against data-verdict like the other chips do.
         const matchesVerdict = currentVerdict === "all"
-          || (currentVerdict === "conflict"
-                ? card.dataset.conflict === "1"
-                : card.dataset.verdict === currentVerdict);
+          || (currentVerdict === "conflict" ? card.dataset.conflict === "1"
+              : currentVerdict === "chart" ? card.dataset.chart === "1"
+              : card.dataset.verdict === currentVerdict);
         const show = matchesVerdict && matchesOthers;
         card.classList.toggle("hidden-fact", !show);
         if (show) visible++;
@@ -1924,6 +1958,7 @@ body.auth-locked .app {
   const STAGE_EXCEL   = ["excel",   "Parsing tabel Excel"];
   const STAGE_TABLES  = ["tables",  "Membaca tabel di dalam PDF"];
   const STAGE_REFTABLES = ["reftables", "Membaca tabel di PDF lain"];
+  const STAGE_CHARTS  = ["charts",  "Membaca angka pada grafik"];
   const STAGE_EXTRACT = ["extract", "Ekstraksi klaim"];
   const STAGE_TYPO    = ["typo",    "Cek ejaan & tata bahasa"];
 
@@ -1936,8 +1971,9 @@ body.auth-locked .app {
     none:     [STAGE_PDF, STAGE_EXTRACT, ["compare", "Membandingkan dengan tabel di PDF lain"]],
   };
 
-  function stagesFor(mode, withTypo, crossPdf) {
+  function stagesFor(mode, withTypo, crossPdf, withCharts) {
     const stages = (PAIRED_STAGES_BY_MODE[mode] || PAIRED_STAGES_BY_MODE.excel).slice();
+    if (withCharts) stages.splice(stages.indexOf(STAGE_EXTRACT), 0, STAGE_CHARTS);
     if (crossPdf) {
       // Read before extraction, like the other tables; "none" already names them in its compare row.
       stages.splice(stages.indexOf(STAGE_EXTRACT), 0, STAGE_REFTABLES);
@@ -2001,8 +2037,8 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, signal) {
-    resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo, crossPdf));
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, withCharts, signal) {
+    resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo, crossPdf, withCharts));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
     const ticker = setInterval(() => {
@@ -2015,7 +2051,7 @@ body.auth-locked .app {
     try {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
-          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}`,
+          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}`,
         { method: "POST", body: formData, signal },
         (ev) => {
           if (ev.type === "stage") updateProgressStage(resultEl, ev);
@@ -2059,6 +2095,7 @@ body.auth-locked .app {
     const mode = currentMode();
     const withTypo = document.getElementById("rule-typo").checked;
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
+    const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
     if (!pdfFiles.length) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF terlebih dahulu.</div>`;
       return;
@@ -2124,7 +2161,7 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, controller.signal);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, controller.signal);
       }
     }).finally(() => {
       cancelBtn.hidden = true;
