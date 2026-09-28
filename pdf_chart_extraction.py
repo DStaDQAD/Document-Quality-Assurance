@@ -50,7 +50,7 @@ from table_parser_generic import _MONTH_ABBREVS, _bare_period_token
 logger = logging.getLogger("fact-checker")
 
 # Bump when the prompt or the region logic changes: it is part of the cache key.
-_PROMPT_VERSION = "3"
+_PROMPT_VERSION = "5"
 _MAX_CACHE_ENTRIES = 8
 
 # A chart caption, matched on the line with every space removed: the text layer spells it
@@ -191,37 +191,115 @@ def _compact(text: str) -> str:
     return re.sub(r"\s+", "", text)
 
 
-@pdfium_exclusive
-def _caption_xs(pdf_bytes: bytes) -> Dict[int, List[Tuple[float, float]]]:
-    """1-based page -> [(left x, top y)] of every 'Grafik N'/'Gambar N' spelled in the text layer.
+# A line of running text: long, and letters rather than figures. A chart drawn with live text
+# (the M2 reports' charts are) puts its axis ticks, legend and data labels in the text layer too,
+# and those are short or numeric — they must not end the chart's region the way the next
+# paragraph does. SK-Juni-2026's charts are outlines and never had this problem; on the M2
+# report for Agustus 2026 every region stopped at the chart's first axis label, 55 pt below its
+# caption, and not one chart was read.
+_PROSE_MIN_LETTERS = 45
 
-    Read glyph by glyph because the visual lines carry no x, and a caption row that holds two
-    charts side by side has to be split between them.
-    """
+
+def _is_prose(text: str) -> bool:
+    letters = sum(ch.isalpha() for ch in text)
+    digits = sum(ch.isdigit() for ch in text)
+    return letters >= _PROSE_MIN_LETTERS and digits <= letters * 0.25
+
+
+@pdfium_exclusive
+def _page_glyphs(pdf_bytes: bytes) -> Dict[int, List[Tuple[str, float, float, float, float]]]:
+    """1-based page -> every non-blank glyph as (char, left, right, top, middle), in content
+    order. `middle` is the box's vertical centre: tops differ between tall and short letters
+    of one line, centres do not."""
     import pypdfium2 as pdfium
 
-    found: Dict[int, List[Tuple[float, float]]] = {}
+    pages: Dict[int, List[Tuple[str, float, float, float, float]]] = {}
     doc = pdfium.PdfDocument(pdf_bytes)
     try:
         for index in range(len(doc)):
             page = doc[index]
             textpage = page.get_textpage()
-            glyphs: List[Tuple[str, float, float]] = []
+            glyphs: List[Tuple[str, float, float, float, float]] = []
             for i in range(textpage.count_chars()):
                 char = textpage.get_text_range(i, 1)
                 if char.strip():
-                    left, _, _, top = textpage.get_charbox(i)
-                    glyphs.append((char, left, top))
-            text = "".join(g[0] for g in glyphs)
-            hits = [(glyphs[m.start()][1], glyphs[m.start()][2])
-                    for m in re.finditer(r"(?:Grafik|Gambar)\d+", text, re.IGNORECASE)]
-            if hits:
-                found[index + 1] = hits
+                    left, bottom, right, top = textpage.get_charbox(i)
+                    glyphs.append((char, left, right, top, (top + bottom) / 2))
+            pages[index + 1] = glyphs
             textpage.close()
             page.close()
     finally:
         doc.close()
+    return pages
+
+
+def _caption_xs(
+    glyphs_by_page: Dict[int, List[Tuple[str, float, float, float, float]]]
+) -> Dict[int, List[Tuple[float, float]]]:
+    """1-based page -> [(left x, top y)] of every 'Grafik N'/'Gambar N' spelled in the text layer.
+
+    Read glyph by glyph because the visual lines carry no x, and a caption row that holds two
+    charts side by side has to be split between them.
+    """
+    found: Dict[int, List[Tuple[float, float]]] = {}
+    for page_number, glyphs in glyphs_by_page.items():
+        text = "".join(g[0] for g in glyphs)
+        hits = [(glyphs[m.start()][1], glyphs[m.start()][3])
+                for m in re.finditer(r"(?:Grafik|Gambar)\d+", text, re.IGNORECASE)]
+        if hits:
+            found[page_number] = hits
     return found
+
+
+# A paragraph beside a chart, in a two-column page, starts every line at the same x. That shared
+# left edge — not a blank strip, which the gaps between axis labels also make — is the column
+# boundary. Prose runs are told from chart text as in _is_prose, on a line's segments.
+_SEGMENT_GAP_PT = 8.0
+_LINE_TOLERANCE_PT = 2.5
+_PROSE_SEGMENT_LETTERS = 20
+_MIN_PROSE_LINES = 3
+_EDGE_TOLERANCE_PT = 3.0
+_MIN_CHART_WIDTH_PT = 150.0
+
+
+def _prose_column_edge(
+    glyphs: List[Tuple[str, float, float, float, float]], left: float, bottom: float, top: float
+) -> Optional[float]:
+    """Where a column of running text begins to the right of a chart, or None.
+
+    On the M2 reports a chart shares its rows with the narrative's right-hand column, and a
+    region cut across the page showed the model that paragraph too — with the very figures the
+    chart is then asked to confirm (Grafik 6's crop carried "5,1%, 5,8%, 5,6%, dan 4,2%").
+    """
+    inside = sorted((gm, char, gl, gr) for char, gl, gr, gt, gm in glyphs
+                    if bottom <= gt <= top and gl >= left)
+    lines: List[List[Tuple[str, float, float]]] = []
+    last_middle: Optional[float] = None
+    for gm, char, gl, gr in inside:
+        if last_middle is None or gm - last_middle > _LINE_TOLERANCE_PT:
+            lines.append([])
+        lines[-1].append((char, gl, gr))
+        last_middle = gm
+    starts: List[float] = []
+    for line in lines:
+        line.sort(key=lambda g: g[1])
+        segment = [line[0]]
+        for glyph in line[1:] + [None]:
+            if glyph is not None and glyph[1] - segment[-1][2] <= _SEGMENT_GAP_PT:
+                segment.append(glyph)
+                continue
+            text = "".join(g[0] for g in segment)
+            letters = sum(ch.isalpha() for ch in text)
+            digits = sum(ch.isdigit() for ch in text)
+            if letters >= _PROSE_SEGMENT_LETTERS and digits <= letters * 0.3:
+                starts.append(segment[0][1])
+            if glyph is not None:
+                segment = [glyph]
+    candidates = sorted(x for x in starts if x > left + _MIN_CHART_WIDTH_PT)
+    for x in candidates:
+        if sum(1 for y in candidates if abs(y - x) <= _EDGE_TOLERANCE_PT) >= _MIN_PROSE_LINES:
+            return x - 6.0
+    return None
 
 
 def chart_regions(pdf_bytes: bytes) -> Dict[int, List[Tuple[float, float, float, float]]]:
@@ -232,7 +310,8 @@ def chart_regions(pdf_bytes: bytes) -> Dict[int, List[Tuple[float, float, float,
     caption row ('Grafik 2 … Grafik 3 …') are split at the next caption's x, so each chart is
     read on its own at the full resolution budget.
     """
-    xs = _caption_xs(pdf_bytes)
+    glyphs_by_page = _page_glyphs(pdf_bytes)
+    xs = _caption_xs(glyphs_by_page)
     regions: Dict[int, List[Tuple[float, float, float, float]]] = {}
     for page_number, (_reading, visual) in _page_lines(pdf_bytes).items():
         lines = sorted(visual, key=lambda line: -line[0])     # top of the page first
@@ -245,13 +324,16 @@ def chart_regions(pdf_bytes: bytes) -> Dict[int, List[Tuple[float, float, float,
                 continue
             band = [ly for ly, _ in lines if abs(ly - y) <= _CAPTION_BAND_PT]
             top = max(band) + _CAPTION_ABOVE_PT
-            below = [ly for ly, _ in lines if ly < min(band)]
+            below = [ly for ly, t in lines if ly < min(band)
+                     and (_is_prose(t) or _CHART_CAPTION_RE.match(_compact(t)))]
             bottom = max(below) if below else 0.0
             consumed_below = min(band)
             lefts = sorted(x for x, ty in xs.get(page_number, [])
                            if min(band) - 2 <= ty <= max(band) + 2)
             if len(lefts) < 2:
-                boxes.append((_SIDE_MARGIN_PT, bottom, -1.0, top))
+                left = min(lefts[0] - _CAPTION_LEFT_PT, _SIDE_MARGIN_PT) if lefts else _SIDE_MARGIN_PT
+                edge = _prose_column_edge(glyphs_by_page.get(page_number, []), left, bottom, top)
+                boxes.append((_SIDE_MARGIN_PT, bottom, edge if edge is not None else -1.0, top))
                 continue
             edges = [x - _CAPTION_LEFT_PT for x in lefts] + [-1.0]
             for left, right in zip(edges, edges[1:]):

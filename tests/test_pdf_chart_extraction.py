@@ -213,3 +213,34 @@ def test_a_chart_reported_twice_for_one_region_is_one_reading():
     [reading] = readings
     assert reading.caption == "Grafik 2"
     assert [(p.month, p.value) for p in reading.points] == [("Jun", 108.9), ("May", 113.0)]
+
+
+_M2_AUG = Path(__file__).resolve().parent.parent / "sample_data" / "Analisis-Perkembangan-Uang Beredar-(M2)-Agustus-2026.pdf"
+
+
+@pytest.mark.skipif(not _M2_AUG.exists(), reason="M2 Agustus 2026 sample not present")
+def test_a_chart_beside_a_text_column_is_cropped_to_its_own_column():
+    # The M2 report's charts have live text (axis ticks, legends) and share their rows with the
+    # narrative's right-hand column: each region must reach past the chart's own labels, and
+    # stop short of the paragraph beside it.
+    regions = chart_regions(_M2_AUG.read_bytes())
+    grafik6 = regions[5][-1]
+    left, bottom, right, top = grafik6
+    assert top - bottom > 150                   # the whole chart, not just its caption
+    assert 250 < right < 315                    # the paragraph column starts at ~312 pt
+
+
+def test_a_prose_column_is_found_by_the_left_edge_its_lines_share():
+    from pdf_chart_extraction import _prose_column_edge
+
+    def line(text, x, y):
+        return [(ch, x + i * 5, x + i * 5 + 4, y + 4, y) for i, ch in enumerate(text) if ch.strip()]
+
+    glyphs = []
+    for n, y in enumerate((500, 488, 476, 464)):
+        glyphs += line("9,5 2020 2021", 40, y)                                    # chart text
+        glyphs += line("sebelumnya suku bunga simpanan berjangka mengalami kenaikan", 312, y)
+    assert _prose_column_edge(glyphs, 30, 400, 520) == 306
+    # A chart with only its own text beside it is left full width.
+    chart_only = [g for g in glyphs if g[1] < 300]
+    assert _prose_column_edge(chart_only, 30, 400, 520) is None

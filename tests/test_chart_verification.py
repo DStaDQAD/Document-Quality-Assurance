@@ -387,3 +387,20 @@ def test_groups_named_by_a_range_in_the_sentence_are_checked_not_waved_off():
                            claimed_value=100.0, unit=None,
                            context_quote="IPDG optimis pada sebagian besar kelompok pengeluaran.")
     assert _evaluate_fact(hedged, [source]).verdict == "Inconclusive"
+
+
+def test_a_total_named_only_total_is_checked_against_a_table_about_the_sentence_subject():
+    # M2 report, Agustus 2026: "Penyaluran kredit ... Rp9.019,3 triliun" extracted as 'Total'.
+    dpk = _ExcelSource(table=_table({("Total", 2026, "Aug"): 9732.8},
+                                    title="Tabel 4. Penghimpunan Dana Pihak Ketiga Berdasarkan Golongan Nasabah"),
+                       filename="M2", sheet="Hal. 3 · Tabel 4", origin="pdf")
+    kredit = _ExcelSource(table=_table({("Total", 2026, "Aug"): 9019.3},
+                                       title="Tabel 5. Perkembangan Kredit Berdasarkan Golongan Debitur"),
+                          filename="M2", sheet="Hal. 4 · Tabel 5", origin="pdf")
+    fact = ExtractedFact(operation="value", periods=[PeriodPoint("Total", 2026, "Aug")],
+                         claimed_value=9019.3, unit=None,
+                         context_quote="Penyaluran kredit pada Agustus 2026 tercatat sebesar Rp9.019,3 triliun")
+    result = _evaluate_fact(fact, [dpk, kredit])
+    assert result.verdict == "Entailed"
+    assert "Tabel 5" in result.matched_excel_source
+    assert result.source_conflict is None

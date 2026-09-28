@@ -581,6 +581,45 @@ def _is_narrower_than_the_claim(
     return False
 
 
+# What a BI report's sentence — and a table's title — is about. Matched on the text and on a
+# copy with the whitespace squeezed out, since PDF text breaks words mid-way ('k redit').
+_SENTENCE_SUBJECTS = {
+    "kredit": re.compile(r"kredit|pembiayaan", re.IGNORECASE),
+    "dpk": re.compile(r"danapihakketiga|dpk|simpananmasyarakat", re.IGNORECASE),
+    "m2": re.compile(r"uangberedar|m2\b", re.IGNORECASE),
+    "m0": re.compile(r"uangprimer|m0\b", re.IGNORECASE),
+}
+
+
+def _subjects(text: str) -> set:
+    squeezed = re.sub(r"\s+", "", text or "")
+    return {name for name, pattern in _SENTENCE_SUBJECTS.items() if pattern.search(squeezed)}
+
+
+def _source_is_about_the_sentence(fact: ExtractedFact, src: "_ExcelSource") -> bool:
+    """False when a claim named only 'Total' is being answered by a table about something else.
+
+    The extractor names a claim after the row it expects to hit, and for a report's headline
+    figures that row is just 'Total'. The name then carries no subject at all, every table's
+    'Total' covers it equally, and whichever table came first answered: on the M2 report for
+    Agustus 2026, "Penyaluran kredit … tercatat sebesar Rp9.019,3 triliun atau tumbuh 13,3%
+    (yoy)" was checked against Tabel 4 — Penghimpunan Dana Pihak Ketiga — and refuted with
+    DPK's 9.732,8 and 7,7% while three credit tables printed exactly the claimed figures.
+
+    So when every point's name is an aggregate word, the SENTENCE says what the total is of:
+    a table whose title is about another subject may not answer. A sentence naming several
+    subjects, or a title naming none, rules nothing out.
+    """
+    names = [p.metric_label or "" for p in fact.periods]
+    if not names or not all(
+        re.sub(r"[^a-z]", "", n.lower()) in ("total", "jumlah") for n in names
+    ):
+        return True
+    wanted = _subjects(fact.context_quote)
+    covered = _subjects(src.table.title)
+    return not wanted or not covered or bool(wanted & covered)
+
+
 def _answers_one_group_of_it(
     fact: ExtractedFact, resolved: List[Tuple[str, float]]
 ) -> bool:
@@ -1253,6 +1292,13 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         # the claim did not use is the same series worded differently ('Uang Beredar (M2)' for a
         # claim about 'Uang Beredar Luas (M2)'), and may stand in.
         if dropped_for_lack_of_data and _is_narrower_than_the_claim(fact, resolved):
+            continue
+        if not _source_is_about_the_sentence(fact, src):
+            if best_reason is None:
+                best_reason = (
+                    f"Sumber [{src.label}] membahas pokok lain dari kalimat klaim "
+                    f"('{fact.display_label}' saja tidak menyebut pokoknya)."
+                )
             continue
         if _answers_one_group_of_it(fact, resolved):
             if best_reason is None:
