@@ -18,6 +18,7 @@ from paired_verifier import (
     _chart_row_fit,
     _chart_row_names,
     _chart_source,
+    _settle_by_cited_chart,
     _evaluate_fact,
     _ExcelSource,
     check_chart_labels,
@@ -282,3 +283,89 @@ def test_a_chart_takes_the_verdict_most_of_its_labels_got():
 def test_a_tied_chart_takes_the_worse_verdict():
     assert _summary(108.9, 118.9).verdict == "Refuted"
     assert _summary(108.9, 100.0).verdict == "Inconclusive"
+
+
+# ---------------------------------------------------------------------------
+# SK-Agustus-2026 regressions (not chart-specific, found on the same report)
+# ---------------------------------------------------------------------------
+
+def test_a_rise_named_newest_period_first_is_still_a_rise():
+    ikk = "Indeks Keyakinan Konsumen (IKK)"
+    source = _ExcelSource(table=_table({(ikk, 2026, "Jul"): 116.8, (ikk, 2026, "Aug"): 118.5}),
+                          filename="SK", sheet="Hal. 8 · Tabel 1", origin="pdf")
+    fact = ExtractedFact(operation="is_increasing",
+                         periods=[PeriodPoint(ikk, 2026, "Aug"), PeriodPoint(ikk, 2026, "Jul")],
+                         claimed_value=None, unit=None, context_quote="meningkat dibandingkan Juli")
+    assert _evaluate_fact(fact, [source]).verdict == "Entailed"
+
+
+def test_a_whole_index_is_not_answered_by_one_group_of_its_breakdown():
+    # The national IEKLK row was lost from Tabel 1; Tabel 4 only has it per education level.
+    ieklk = "Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)"
+    tabel4 = _ExcelSource(table=_table({
+        (f"{ieklk} > SMA", 2026, "Aug"): 125.0, (f"{ieklk} > Sarjana", 2026, "Aug"): 128.8,
+    }, title="Tabel 4 Indeks Keyakinan Konsumen per Tingkat Pendidikan"),
+        filename="SK", sheet="Hal. 11 · Tabel 4", origin="pdf")
+
+    result = _evaluate_fact(_claim(ieklk, "Aug", 125.7), [tabel4])
+    assert result.verdict == "Inconclusive"
+    assert "per kelompok" in result.reasoning
+    # A claim that names the group is still answered by it.
+    assert _evaluate_fact(_claim(f"{ieklk} > SMA", "Aug", 125.0), [tabel4]).verdict == "Entailed"
+
+
+def test_half_a_point_on_a_ten_percent_ratio_is_relatively_stable():
+    # SK-Agustus-2026: "cicilan/utang ... sebesar 10,0%, relatif stabil dibandingkan ... 10,5%".
+    row = "Total > Cicilan pinjaman"
+    source = _ExcelSource(table=_table({(row, 2026, "Jul"): 10.5, (row, 2026, "Aug"): 10.0}),
+                          filename="SK", sheet="Hal. 12 · Tabel 5", origin="pdf")
+    stable = ExtractedFact(operation="is_stable",
+                           periods=[PeriodPoint(row, 2026, "Aug"), PeriodPoint(row, 2026, "Jul")],
+                           claimed_value=None, unit=None, context_quote="relatif stabil")
+    assert _evaluate_fact(stable, [source]).verdict == "Entailed"
+    source.table._data[(row, 2026, "Aug")] = 9.8          # a 7% move is not stable
+    assert _evaluate_fact(stable, [source]).verdict == "Refuted"
+
+
+def _ipsi_case(claimed, quote):
+    """SK-Agustus-2026: the IPSI sentence citing Grafik 5, extracted as the IKE row."""
+    ipsi = "Indeks Penghasilan Saat Ini (IPSI) > Pengeluaran >Rp5 juta"
+    ike = "Indeks Kondisi Ekonomi (IKE) > Pengeluaran >Rp5 juta"
+    tabel2 = _ExcelSource(table=_table({(ipsi, 2026, "Aug"): 125.9, (ike, 2026, "Aug"): 116.4}),
+                          filename="SK", sheet="Hal. 9 · Tabel 2", origin="pdf")
+    grafik5 = ChartReading(page_number=3, caption="Grafik 5",
+                           title="Indeks Penghasilan Saat Ini per Kelompok Pengeluaran",
+                           indicator="Indeks Penghasilan Saat Ini", unit="Indeks",
+                           points=[_pt("> Rp5 juta", "Aug", 125.9)])
+    fact = ExtractedFact(operation="value", periods=[PeriodPoint(ike, 2026, "Aug")],
+                         claimed_value=claimed, unit=None, context_quote=quote)
+    names = _chart_row_names([grafik5], [tabel2])
+    result = _evaluate_fact(fact, [tabel2])
+    return _settle_by_cited_chart(fact, result, [grafik5], names, [tabel2])
+
+
+def test_a_figure_filed_under_the_wrong_index_is_judged_by_the_chart_its_sentence_cites():
+    result = _ipsi_case(125.9, "Indeks tertinggi … >Rp5 juta, yaitu sebesar 125,9 (Grafik 5).")
+    assert result.verdict == "Entailed"
+    assert "Grafik 5" in result.reasoning and "IPSI" in result.reasoning
+
+
+def test_the_cited_chart_does_not_rescue_a_figure_it_does_not_print_or_an_uncited_one():
+    assert _ipsi_case(124.9, "… sebesar 124,9 (Grafik 5).").verdict == "Refuted"
+    assert _ipsi_case(125.9, "… sebesar 125,9.").verdict == "Refuted"
+    assert _ipsi_case(125.9, "… sebesar 125,9 (Grafik 6).").verdict == "Refuted"
+
+
+def test_the_cited_chart_still_names_the_series_when_its_label_was_read_one_bar_off():
+    ipsi = "Indeks Penghasilan Saat Ini (IPSI) > Pengeluaran >Rp5 juta"
+    ike = "Indeks Kondisi Ekonomi (IKE) > Pengeluaran >Rp5 juta"
+    tabel2 = _ExcelSource(table=_table({(ipsi, 2026, "Aug"): 125.9, (ike, 2026, "Aug"): 116.4}),
+                          filename="SK", sheet="Hal. 9 · Tabel 2", origin="pdf")
+    grafik5 = ChartReading(page_number=3, caption="Grafik 5", title="IPSI per Kelompok Pengeluaran",
+                           indicator="Indeks Penghasilan Saat Ini", unit="Indeks",
+                           points=[_pt("> Rp5 juta", "Jul", 125.9)])      # misplaced by the model
+    fact = ExtractedFact(operation="value", periods=[PeriodPoint(ike, 2026, "Aug")],
+                         claimed_value=125.9, unit=None, context_quote="sebesar 125,9 (Grafik 5).")
+    names = _chart_row_names([grafik5], [tabel2])
+    result = _settle_by_cited_chart(fact, _evaluate_fact(fact, [tabel2]), [grafik5], names, [tabel2])
+    assert result.verdict == "Entailed"

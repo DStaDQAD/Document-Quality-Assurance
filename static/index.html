@@ -1611,12 +1611,6 @@ body.auth-locked .app {
     // numbers than _verify_against_text_layer's threshold never gets verified, so Tabel 1 of the
     // M2 report — two value columns — was labelled "read by AI" on a perfectly readable page.
     // A caution that fires on the wrong thing costs more than it is worth.
-    const conflictStrip = conflicts > 0 ? `<div class="conflict-strip">
-      <span class="material-symbols-outlined">rule</span>
-      <span><strong>${conflicts} klaim</strong> punya lebih dari satu sumber pembanding yang
-      nilainya <strong>tidak sama</strong>. Klaimnya sendiri bisa saja benar — yang berbeda
-      adalah tabel-tabel pembandingnya.</span>
-    </div>` : "";
 
     // The report's own tables do not agree on how a number is written. Nothing went wrong —
     // every figure is still parsed under its own convention — but a reader checking a claim by
@@ -1671,7 +1665,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${gapStrip}${conflictStrip}${formatStrip}`;
+    </div>${gapStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">

@@ -103,7 +103,9 @@ _TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
 # ratio written as "10,0%, relatif stabil dibandingkan proporsi bulan sebelumnya sebesar 10,2%"
 # came back Tidak Sesuai over 0,2pp. Judging the move against the level fixes that without
 # blessing real swings — 0,2 on a ratio of 10 is stable, 0,2 on a ratio of 0,5 is not.
-_STABLE_RELATIVE_BAND = 0.025
+# 5% rather than the first 2,5%: SK-Agustus-2026 calls the same ratio "relatif stabil" at
+# 10,5% -> 10,0%, a 4,9% move, and the user settled that BI's own usage is the yardstick.
+_STABLE_RELATIVE_BAND = 0.05
 
 # Narrative markers of an UNNAMED subset: "peningkatan IKK terjadi di beberapa kota",
 # "sebagian besar kota mencatat penurunan IEK", "IPDG berada pada level optimis pada sebagian
@@ -579,6 +581,30 @@ def _is_narrower_than_the_claim(
     return False
 
 
+def _answers_one_group_of_it(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]]
+) -> bool:
+    """True when a claim about a whole series resolved to ONE group of its breakdown.
+
+    SK-Agustus-2026's appendix lost the national IEKLK row of Tabel 1, and "IEKLK tercatat
+    125,7" was answered by Tabel 4's 'Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK) >
+    SMA' — the high-school respondents, 125,0 — and refuted. The row contains every word of the
+    claim, which is all the containment tiers ask; what gives it away is its last level, which
+    names a group the claim never mentioned. Unlike _is_narrower_than_the_claim this holds
+    whether or not a better source was there: a group's figure is never the whole's. A claim
+    that is itself qualified, or a row whose last level the claim does name ('Total >
+    Korporasi' for "DPK korporasi"), is not affected.
+    """
+    for point, (label, _value) in zip(fact.periods, resolved):
+        if QUAL_SEP in (point.metric_label or "") or QUAL_SEP not in label:
+            continue
+        claim_words = _sig_words(point.metric_label or "")
+        leaf_words = _sig_words(label.rsplit(QUAL_SEP, 1)[1])
+        if claim_words and leaf_words and not (leaf_words & claim_words):
+            return True
+    return False
+
+
 def _rejoined_words(label: str, claim_words: set) -> List[str]:
     """The label's words, with the PDF's mid-word splits put back together where the claim says
     how. 'Kredit Konsum si (KK)' reads as ['kredit', 'konsumsi', 'kk'] for a claim about Kredit
@@ -757,6 +783,16 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
                 (py, pm), pv = prev
                 labelled = [(labelled[0][0], pv), labelled[0]]
                 used_periods = [PeriodPoint(metric_label=labelled[0][0], year=py, month=pm), p0]
+
+    # A trend runs forward in time, whatever order the claim named its periods in: "meningkat
+    # dibandingkan dengan Juli 2026" in an August report arrives as [Agustus, Juli], and read in
+    # that order SK-Agustus-2026's IKK, 116,8 -> 118,5, came back as a fall. Only reordered when
+    # every point is dated; a categorical claim keeps the order it was given.
+    if all(p.year is not None and p.month is not None for p in used_periods):
+        order = sorted(range(len(used_periods)),
+                       key=lambda i: (used_periods[i].year, _period_ordinal(used_periods[i].month)))
+        used_periods = [used_periods[i] for i in order]
+        labelled = [labelled[i] for i in order]
 
     values = [raw for (_, raw) in labelled]
     periods = _build_periods(used_periods, labelled, values)
@@ -1147,6 +1183,13 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         # the claim did not use is the same series worded differently ('Uang Beredar (M2)' for a
         # claim about 'Uang Beredar Luas (M2)'), and may stand in.
         if dropped_for_lack_of_data and _is_narrower_than_the_claim(fact, resolved):
+            continue
+        if _answers_one_group_of_it(fact, resolved):
+            if best_reason is None:
+                best_reason = (
+                    f"Sumber [{src.label}] hanya memuat rinciannya per kelompok "
+                    f"('{resolved[0][0]}'), bukan angka '{fact.display_label}' itu sendiri."
+                )
             continue
         coverage = _coverage_score(fact.periods, resolved, src)
         if coverage <= 0.0:
@@ -2148,6 +2191,76 @@ def _settle_chart_series(
     return result
 
 
+_CITED_CHART_RE = re.compile(r"\bGrafik\s*(\d+)", re.IGNORECASE)
+
+
+def _settle_by_cited_chart(
+    fact: ExtractedFact,
+    result: FactVerificationResult,
+    readings: List[ChartReading],
+    row_names: Dict[Tuple[str, str], str],
+    table_sources: List[_ExcelSource],
+) -> FactVerificationResult:
+    """Re-check a refuted figure against the chart its own sentence cites.
+
+    The extractor names a claim's metric from the sentence, and a sentence that describes an
+    index instead of naming it can be filed under the wrong one: SK-Agustus-2026's "keyakinan
+    konsumen terhadap penghasilan saat ini … >Rp5 juta, yaitu sebesar 125,9 (Grafik 5)" came
+    back as IKE (116,4) and was refuted, while Grafik 5 — IPSI per kelompok pengeluaran —
+    prints 125,9 for >Rp5 juta and the appendix holds 125,9 for that row.
+
+    So when a refuted value claim cites "Grafik N", and that chart prints the claimed figure on
+    the SAME group (the claim's last level fits the chart series) at that period or one bar
+    either side, and the table row that series was placed on holds the figure AT THE CLAIM'S
+    PERIOD, the claim is judged against that row instead — Sesuai, with the reasoning saying which chart and row decided it. All three
+    have to agree; anything less leaves the verdict as it was.
+    """
+    if result.verdict != "Refuted" or fact.operation != "value" or len(fact.periods) != 1:
+        return result
+    cited = {f"grafik{n}" for n in _CITED_CHART_RE.findall(fact.context_quote or "")}
+    point = fact.periods[0]
+    if not cited or point.year is None or point.month is None:
+        return result
+    group = (point.metric_label or "").rsplit(QUAL_SEP, 1)[-1]
+    for reading in readings:
+        if re.sub(r"\s+", "", reading.caption.lower()) not in cited:
+            continue
+        for label in reading.points:
+            # The chart only says WHICH series the figure belongs to; the table, at the claim's own
+            # period, decides. So a label the model placed one bar off still identifies it (see
+            # _settle_chart_placement for why placement is the model's weak point).
+            near = {(point.year, point.month)} | {
+                shifted for step in (-1, 1)
+                if (shifted := _shift_period(point.year, point.month, step)) is not None
+            }
+            if (label.kind != "level" or (label.year, label.month) not in near
+                    or abs(label.value - fact.claimed_value) > MATCH_TOLERANCE):
+                continue
+            if _part_fit(label.series, group) is None and _part_fit(group, label.series) is None:
+                continue
+            row = row_names.get((reading.indicator, label.series))
+            for src in table_sources:
+                if row is None or src.origin == "chart" or row not in src.table.row_labels:
+                    continue
+                value = src.table.lookup(row, point.year, point.month)
+                if value is None or abs(value - fact.claimed_value) > MATCH_TOLERANCE:
+                    continue
+                return result.model_copy(update={
+                    "verdict": "Entailed",
+                    "matched_excel_source": src.label,
+                    "computed_value": round(value, 4),
+                    "delta": round(abs(value - fact.claimed_value), 4),
+                    "reasoning": (
+                        f"Kalimat ini merujuk {reading.caption} ({reading.title}), yang mencetak "
+                        f"{fact.claimed_value} untuk {label.series}; tabel [{src.label}] memuat "
+                        f"nilai yang sama pada baris {row}. Klaim dinilai terhadap baris itu, "
+                        f"bukan '{point.metric_label}' yang dipetakan dari kalimatnya. "
+                        f"| Sebelumnya: {result.reasoning}"
+                    ),
+                })
+    return result
+
+
 def check_chart_labels(
     readings: List[ChartReading],
     table_sources: List[_ExcelSource],
@@ -2453,6 +2566,12 @@ async def verify_paired(
             llm=vision_llm or llm,
             fallback_llm=llm if vision_llm is not None else None,
         )
+
+    if chart_readings:
+        results = [
+            _settle_by_cited_chart(fact, result, chart_readings, row_names, table_sources)
+            for fact, result in zip(facts, results)
+        ]
 
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
