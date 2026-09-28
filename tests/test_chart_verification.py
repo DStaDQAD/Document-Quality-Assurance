@@ -236,3 +236,23 @@ def test_a_chart_index_is_not_placed_on_a_different_index_that_spells_it_out():
         ["Indeks Pembelian Barang Tahan Lama/Durable Goods", "> 60 tahun"],
         "Indeks Pembelian Barang Tahan Lama (Durable Goods) (IPDG) > Usia >60 th",
     ) is not None
+
+
+def test_a_label_filed_under_the_wrong_line_of_the_chart_is_left_for_a_person():
+    # SK-Juni-2026 Grafik 4: the model swapped the red IKLK and green IPDG lines.
+    iklk = "Indeks Ketersediaan Lapangan Kerja (IKLK)"
+    ipdg = "Indeks Pembelian Barang Tahan Lama (Durable Goods) (IPDG)"
+    tabel1 = _ExcelSource(table=_table({
+        (iklk, 2026, "May"): 105.0, (iklk, 2026, "Jun"): 101.8,
+        (ipdg, 2026, "May"): 108.3, (ipdg, 2026, "Jun"): 105.9,
+    }, title="Tabel 1 Indeks Keyakinan Konsumen"), filename="SK", sheet="Hal. 8 · Tabel 1", origin="pdf")
+    reading = ChartReading(page_number=2, caption="Grafik 4", title="Perkembangan IKE", indicator="",
+                           unit="Indeks", points=[
+                               _pt("Indeks Ketersediaan Lapangan Kerja (IKLK)", "Jun", 105.9),
+                               _pt("Indeks Pembelian Barang Tahan Lama (IPDG)", "Jun", 101.8),
+                               _pt("Indeks Pembelian Barang Tahan Lama (IPDG)", "May", 999.0),
+                           ])
+    results = [r for _, r in check_chart_labels([reading], [tabel1])]
+
+    assert [r.verdict for r in results] == ["Inconclusive", "Inconclusive", "Refuted"]
+    assert "Durable Goods" in results[0].reasoning and "tertukar" in results[0].reasoning

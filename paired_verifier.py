@@ -2101,6 +2101,52 @@ def _settle_chart_placement(
     return result
 
 
+def _settle_chart_series(
+    fact: ExtractedFact,
+    result: FactVerificationResult,
+    reading: ChartReading,
+    row_names: Dict[Tuple[str, str], str],
+    sources: List[_ExcelSource],
+) -> FactVerificationResult:
+    """A label that fails its own series but is ANOTHER series of the same chart: undecided.
+
+    On a line chart the model tells series apart by colour, and gets it wrong: on SK-Juni-2026's
+    Grafik 4 it filed the green IPDG labels (105,9 · 108,3 · 105,9) under the red IKLK line and
+    the red ones under the green, and a chart with nothing wrong in it came back with six Tidak
+    Sesuai. A chart whose AUTHOR swapped the legend looks exactly the same, so the label is
+    neither passed nor failed: it comes back Tidak Cukup Data, naming the series it matches, for
+    a person to look at. Same period or one either side, as in _settle_chart_placement.
+    """
+    if result.verdict != "Refuted" or fact.operation != "value":
+        return result
+    own = fact.periods[0].metric_label
+    point = fact.periods[0]
+    others = {row_names.get((reading.indicator, p.series)) for p in reading.points} - {None, own}
+    for row in sorted(others):
+        for step in (0, -1, 1):
+            when = _shift_period(point.year, point.month, step) if step else (point.year, point.month)
+            if when is None:
+                continue
+            for src in sources:
+                if src.origin == "chart" or row not in src.table.row_labels:
+                    continue
+                value = src.table.lookup(row, *when)
+                if value is None or abs(value - fact.claimed_value) > MATCH_TOLERANCE:
+                    continue
+                matched_at = f"{_MONTH_ID.get(when[1], when[1])} {when[0]}"
+                return result.model_copy(update={
+                    "verdict": "Inconclusive",
+                    "reasoning": (
+                        f"Angka grafik {fact.claimed_value} tidak cocok dengan seri yang dibaca "
+                        f"model ({own}), tetapi sama dengan seri lain di grafik yang sama: "
+                        f"{row} {matched_at} di [{src.label}]. Kemungkinan warna garis/legenda "
+                        f"tertukar saat dibaca — atau legenda grafiknya memang tertukar. "
+                        f"Periksa grafik ini secara manual. | {result.reasoning}"
+                    ),
+                })
+    return result
+
+
 def check_chart_labels(
     readings: List[ChartReading],
     table_sources: List[_ExcelSource],
@@ -2123,6 +2169,7 @@ def check_chart_labels(
                 result = _settle_chart_placement(
                     fact, _evaluate_fact_safely(fact, table_sources), table_sources
                 )
+                result = _settle_chart_series(fact, result, reading, row_names, table_sources)
             else:
                 result = _inconclusive_result(fact, None, (
                     f"Seri grafik '{fact.periods[0].metric_label}' tidak dapat dipastikan "
