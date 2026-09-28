@@ -243,48 +243,29 @@ select { cursor: pointer; }
   text-transform: uppercase; letter-spacing: 0.07em;
 }
 
-/* ── Advanced settings (in-flow disclosure) ──
-   Deliberately NOT a popover: .card has overflow:hidden, which is the only reason the
-   sheet multiselect had to go position:fixed. Growing the card in flow avoids all of that. */
-.adv-settings { margin-top: 14px; }
-.adv-toggle {
-  display: flex; align-items: center; gap: 5px;
-  font-size: 12px; color: var(--blue-500); cursor: pointer;
-  border: none; background: none; padding: 0; font-weight: 600; font-family: inherit;
+/* ── Aturan pemeriksaan: which comparisons run, always visible under the upload columns ── */
+.rules {
+  border: none; border-top: 1px solid var(--border);
+  margin: 14px 0 0; padding: 14px 0 0; min-width: 0;
 }
-.adv-toggle:hover { color: var(--blue-600); }
-.adv-toggle .material-symbols-outlined { font-size: 15px; }
-.adv-toggle .adv-chevron { transition: transform 0.15s; }
-.adv-toggle[aria-expanded="true"] .adv-chevron { transform: rotate(180deg); }
-.adv-panel {
-  display: flex; flex-direction: column; gap: 14px;
-  border-top: 1px solid var(--border); margin-top: 12px; padding-top: 14px;
-}
-/* Without this the display:flex above beats the hidden attribute and the panel never closes. */
-.adv-panel[hidden] { display: none; }
-.adv-field { display: flex; flex-direction: column; gap: 7px; }
-.segmented { display: flex; flex-wrap: wrap; gap: 0; }
-.seg-btn {
-  background: var(--white); border: 1px solid var(--border);
-  padding: 6px 13px; font-size: 11px; font-weight: 500;
-  color: var(--text-500); cursor: pointer; transition: all 0.15s; font-family: inherit;
-  margin-left: -1px;
-}
-.seg-btn:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
-.seg-btn:last-child { border-radius: 0 6px 6px 0; }
-.seg-btn:hover { border-color: var(--navy-700); color: var(--navy-900); background: var(--blue-50); }
-.seg-btn.active {
-  background: linear-gradient(135deg, #1e4fba, #0B1F3A);
-  border-color: transparent; color: white; font-weight: 700; z-index: 1;
-  box-shadow: 0 2px 8px rgba(11,31,58,0.22);
-}
-.adv-check {
-  display: flex; align-items: center; gap: 7px;
+.rules legend { float: left; width: 100%; padding: 0; margin-bottom: 10px; }
+.rules-grid { clear: both; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
+@media (max-width: 560px) { .rules-grid { grid-template-columns: 1fr; } }
+.rule-check {
+  display: flex; align-items: flex-start; gap: 7px; min-width: 0;
   font-size: 12px; color: var(--text-500); cursor: pointer;
 }
-.adv-check input { width: 14px; height: 14px; accent-color: var(--blue-500); cursor: pointer; }
-/* Excel column dimmed (not removed) in internal mode: the files stay selected, so switching
-   back does not lose the user's picks. */
+.rule-check input {
+  width: 14px; height: 14px; margin: 1px 0 0; flex-shrink: 0;
+  accent-color: var(--blue-500); cursor: pointer;
+}
+.rule-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rule-title { font-weight: 500; }
+.rule-hint { font-size: 11px; color: var(--text-400); }
+.rule-check.is-disabled { opacity: 0.45; cursor: not-allowed; }
+.rule-check.is-disabled input { cursor: not-allowed; }
+/* Excel column dimmed (not removed) while it holds files but its rule is unchecked: the files
+   stay selected, so checking the rule again does not lose the user's picks. */
 .upload-field.is-muted { opacity: 0.45; }
 .upload-field.is-muted .dropzone-sm, .upload-field.is-muted .add-excel-btn { pointer-events: none; }
 
@@ -946,27 +927,38 @@ body.auth-locked .app {
                   </button>
                 </div>
               </div>
-              <div class="adv-settings">
-                <button type="button" class="adv-toggle" id="adv-toggle" aria-expanded="false" aria-controls="adv-panel">
-                  <span class="material-symbols-outlined">tune</span>
-                  <span>Pengaturan Lanjutan</span>
-                  <span class="material-symbols-outlined adv-chevron">expand_more</span>
-                </button>
-                <div class="adv-panel" id="adv-panel" hidden>
-                  <div class="adv-field">
-                    <span class="upload-label">Sumber pembanding</span>
-                    <div class="segmented" id="mode-segmented" role="radiogroup" aria-label="Sumber pembanding">
-                      <button type="button" class="seg-btn active" data-mode="excel" role="radio" aria-checked="true">Tabel Excel</button>
-                      <button type="button" class="seg-btn" data-mode="internal" role="radio" aria-checked="false">Tabel dalam PDF</button>
-                      <button type="button" class="seg-btn" data-mode="both" role="radio" aria-checked="false">Keduanya</button>
-                    </div>
-                  </div>
-                  <label class="adv-check">
-                    <input type="checkbox" id="typo-toggle" checked>
-                    <span>Cek ejaan &amp; tata bahasa</span>
+              <fieldset class="rules" id="check-rules">
+                <legend class="upload-label">Aturan pemeriksaan</legend>
+                <div class="rules-grid">
+                  <label class="rule-check">
+                    <input type="checkbox" id="rule-intra" checked>
+                    <span class="rule-text">
+                      <span class="rule-title">Narasi vs tabel di PDF yang sama</span>
+                      <span class="rule-hint">Konsistensi intra-file</span>
+                    </span>
+                  </label>
+                  <label class="rule-check is-disabled">
+                    <input type="checkbox" id="rule-cross-pdf" disabled>
+                    <span class="rule-text">
+                      <span class="rule-title">Narasi vs PDF lain</span>
+                      <span class="rule-hint">Konsistensi antar-file · segera hadir</span>
+                    </span>
+                  </label>
+                  <label class="rule-check is-disabled">
+                    <input type="checkbox" id="rule-excel" disabled>
+                    <span class="rule-text">
+                      <span class="rule-title">Narasi vs tabel Excel</span>
+                      <span class="rule-hint" id="rule-excel-hint">Unggah file Excel untuk mengaktifkan</span>
+                    </span>
+                  </label>
+                  <label class="rule-check">
+                    <input type="checkbox" id="rule-typo" checked>
+                    <span class="rule-text">
+                      <span class="rule-title">Ejaan &amp; tata bahasa</span>
+                    </span>
                   </label>
                 </div>
-              </div>
+              </fieldset>
             </div>
             <div class="card-footer">
               <button type="button" class="cancel-btn" id="cancel-btn" hidden>
@@ -1086,6 +1078,7 @@ body.auth-locked .app {
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   let excelSources = []; // [{container, inp, picker}]
+  let excelWasPresent = false; // syncRules() state; up here because Excel entries call syncRules()
 
   const isPdfFile   = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
   const isExcelFile = (f) => /\.xlsx?$/i.test(f.name);
@@ -1251,11 +1244,20 @@ body.auth-locked .app {
     }
   }
 
+  // The last entry cannot be removed, but once it holds a file its X empties it — otherwise
+  // there would be no way back to "no Excel", which is what switches the Excel rule off.
   function updateRemoveButtons() {
     excelSources.forEach((src) => {
       src.container.querySelector(".remove-excel-btn").style.visibility =
-        excelSources.length > 1 ? "visible" : "hidden";
+        excelSources.length > 1 || src.inp.files.length > 0 ? "visible" : "hidden";
     });
+  }
+
+  function resetSheetPicker(picker) {
+    picker.querySelector(".sheet-ms-options").innerHTML = "";
+    picker.querySelector(".sheet-ms-toggle").disabled = true;
+    picker.querySelector(".sheet-ms-panel").hidden = true;
+    updatePickerState(picker);
   }
 
   function addExcelSource() {
@@ -1298,14 +1300,23 @@ body.auth-locked .app {
       placeholder: "Pilih file Excel",
       accepts: isExcelFile,
       rejectText: "File selain Excel diabaikan",
-      onFile: (file) => loadSheetsIntoPicker(file, picker),
+      onFile: (file) => {
+        if (file) loadSheetsIntoPicker(file, picker);
+        else resetSheetPicker(picker);
+        updateRemoveButtons();
+        syncRules();
+      },
       addEntry: addExcelSource,
     });
     removeBtn.addEventListener("click", () => {
-      if (excelSources.length <= 1) return;
+      if (excelSources.length <= 1) {
+        assign(null);
+        return;
+      }
       excelSources = excelSources.filter(s => s.container !== container);
       container.remove();
       updateRemoveButtons();
+      syncRules();
     });
     const src = { container, inp, picker, assign };
     excelSources.push(src);
@@ -1378,48 +1389,43 @@ body.auth-locked .app {
   });
   document.addEventListener("drop", (e) => e.preventDefault());
 
-  // ── Advanced settings: which tables the claims are compared against, and whether the
-  // spelling/grammar pass runs. Both are read by the submit handler below. ──
-  let compareMode = "excel";     // "excel" | "internal" | "both"
-  let runTypoCheck = true;
+  // ── Aturan pemeriksaan: the checkboxes map onto the backend's unchanged contract —
+  // "same-PDF tables" → internal, "Excel" → excel, both → both; the spelling box is
+  // run_typo_check. "Narasi vs PDF lain" is shown disabled and never read. ──
 
-  (function initAdvancedSettings() {
-    const toggle = document.getElementById("adv-toggle");
-    const panel = document.getElementById("adv-panel");
-    const excelField = document.getElementById("excel-upload-field");
-    const excelLabel = document.getElementById("excel-upload-label");
+  // "excel" | "internal" | "both", or null when neither numeric rule is checked.
+  function currentMode() {
+    const intra = document.getElementById("rule-intra").checked;
+    const excel = document.getElementById("rule-excel").checked;
+    if (intra && excel) return "both";
+    if (intra) return "internal";
+    if (excel) return "excel";
+    return null;
+  }
 
-    toggle.addEventListener("click", () => {
-      panel.hidden = !panel.hidden;
-      toggle.setAttribute("aria-expanded", String(!panel.hidden));
-    });
+  // The Excel rule follows the files: it can only be checked while some Excel is picked, it
+  // checks itself when the first one arrives, and it clears itself when the last one goes.
+  // Declared as a function (hoisted) because the Excel entries call it on every file change.
+  function syncRules() {
+    const ruleExcel = document.getElementById("rule-excel");
+    const present = excelSources.some((s) => s.inp.files.length > 0);
+    if (present && !excelWasPresent) ruleExcel.checked = true;
+    if (!present) ruleExcel.checked = false;
+    excelWasPresent = present;
+    ruleExcel.disabled = !present;
+    ruleExcel.closest(".rule-check").classList.toggle("is-disabled", !present);
+    document.getElementById("rule-excel-hint").textContent =
+      present ? "Konsistensi antar-file" : "Unggah file Excel untuk mengaktifkan";
+    // Dimmed only when files are there but unused. With no files the column must stay live,
+    // since uploading is exactly what switches the Excel rule on.
+    const muted = present && !ruleExcel.checked;
+    document.getElementById("excel-upload-field").classList.toggle("is-muted", muted);
+    document.getElementById("excel-upload-label").textContent =
+      muted ? "Tabel Excel (tidak dipakai)" : "Tabel Excel";
+  }
 
-    function applyMode() {
-      // The Excel column is dimmed rather than hidden: the user's file picks survive a
-      // round-trip through internal mode.
-      const optional = compareMode === "internal";
-      excelField.classList.toggle("is-muted", optional);
-      excelLabel.textContent = optional ? "Tabel Excel (tidak dipakai)" : "Tabel Excel";
-    }
-
-    document.getElementById("mode-segmented").addEventListener("click", (ev) => {
-      const btn = ev.target.closest(".seg-btn");
-      if (!btn) return;
-      compareMode = btn.dataset.mode;
-      panel.querySelectorAll(".seg-btn").forEach((b) => {
-        const on = b === btn;
-        b.classList.toggle("active", on);
-        b.setAttribute("aria-checked", String(on));
-      });
-      applyMode();
-    });
-
-    document.getElementById("typo-toggle").addEventListener("change", (ev) => {
-      runTypoCheck = ev.target.checked;
-    });
-
-    applyMode();
-  })();
+  document.getElementById("rule-excel").addEventListener("change", syncRules);
+  syncRules();
 
   // Browse table
   let tableListLoaded = false;
@@ -2018,19 +2024,24 @@ body.auth-locked .app {
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
     const resultEl = document.getElementById("paired-result");
     const pdfFiles = pdfSources.map(s => s.inp.files[0]).filter(Boolean);
-    // Internal mode compares against the PDF's own tables, so the Excel column is ignored
-    // entirely — including any files still sitting in it.
-    const filledSources = compareMode === "internal"
-      ? []
-      : excelSources.filter(s => s.inp.files.length > 0);
+    // Snapshot the settings for the whole run, so flipping a checkbox mid-run cannot make one
+    // PDF in the loop use different settings from the next.
+    const mode = currentMode();
+    const withTypo = document.getElementById("rule-typo").checked;
     if (!pdfFiles.length) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF terlebih dahulu.</div>`;
       return;
     }
-    if (compareMode !== "internal" && filledSources.length === 0) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu file Excel, atau pilih mode "Tabel dalam PDF" di Pengaturan Lanjutan.</div>`;
+    if (!mode) {
+      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu aturan pemeriksaan angka: "Narasi vs tabel di PDF yang sama" atau "Narasi vs tabel Excel".</div>`;
       return;
     }
+    // Internal mode compares against the PDF's own tables, so the Excel column is ignored
+    // entirely — including any files still sitting in it. The Excel rule can only be checked
+    // while a file is picked, so the other modes always have at least one source here.
+    const filledSources = mode === "internal"
+      ? []
+      : excelSources.filter(s => s.inp.files.length > 0);
     // One (file, sheet) source per SELECTED sheet: the same file part is appended once
     // per sheet, aligned positionally with the comma-separated sheet_names query param —
     // the backend contract (_read_paired_uploads) is unchanged.
@@ -2044,10 +2055,6 @@ body.auth-locked .app {
       perSource.push({ file: s.inp.files[0], sheets: selected });
     }
     const sheetNames = perSource.flatMap((p) => p.sheets).join(",");
-    // Snapshot the settings for the whole run, so flipping a toggle mid-run cannot make one
-    // PDF in the loop use different settings from the next.
-    const mode = compareMode;
-    const withTypo = runTypoCheck;
     const buildFormData = (pdf) => {
       const fd = new FormData();
       fd.append("pdf_file", pdf);
