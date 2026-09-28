@@ -149,8 +149,8 @@ class _ExcelSource:
     # against this source can only be resolved by the cell-pointer pass.
     pointer_only: bool = False
     # "excel" for an uploaded workbook sheet, "pdf" for a table transcribed from the report
-    # itself. Only two things branch on it: labelling a conflict internal-vs-cross, and
-    # suppressing the BI-workbook table suggestions in internal mode.
+    # itself, "pdf_other" for a table from another PDF uploaded in the same run. Branched on
+    # for labelling a conflict, and to keep "pdf_other" a fallback (see _evaluate_fact).
     origin: str = "excel"
 
     @property
@@ -1163,6 +1163,12 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # Coverage first, then label quality. Stable sort, so ties keep source order as before.
     candidates.sort(key=lambda c: (-c.coverage, c.qualification, -c.score))
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
+    # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
+    # the user chose decide whenever they can answer at all. Stable, so each group keeps the
+    # ranking above.
+    primary = [c for c in candidates if c.src.origin != "pdf_other"]
+    fallback = [c for c in candidates if c.src.origin == "pdf_other"]
+    candidates = primary + fallback
     # Every candidate is computed once — plain arithmetic over values already looked up. The
     # results are reused for the source comparison, so this costs no more than before.
     evaluated = [(c, _compute_operation(fact, c.resolved, c.factor, c.src)) for c in candidates]
@@ -1184,6 +1190,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         if result.verdict != "Inconclusive":
             head_index = index
             break
+    # The loop above stops at the first looser match, and with the fallback group sorted last
+    # that can be before any other PDF was looked at. When the own sources reached no verdict,
+    # another PDF may still answer — held to the same bar: at least as close a label match as
+    # the best own source, so it never trades "not enough data" for a different series.
+    if evaluated[head_index][1].verdict == "Inconclusive" and primary and fallback:
+        bar = _match_quality(evaluated[0][0]) - 1e-9
+        for index in range(len(primary), len(evaluated)):
+            cand, result = evaluated[index]
+            if result.verdict != "Inconclusive" and _match_quality(cand) >= bar:
+                head_index = index
+                break
 
     return _attach_source_comparison(evaluated, head_index, displaced_source)
 
@@ -1424,7 +1441,12 @@ def _attach_source_comparison(
             differs = head.verdict != other.verdict
         if differs:
             conflicting = other
-            conflict = "internal" if head.origin == other.origin == "pdf" else "cross"
+            if "pdf_other" in (head.origin, other.origin):
+                conflict = "cross_pdf"
+            elif head.origin == other.origin == "pdf":
+                conflict = "internal"
+            else:
+                conflict = "cross"
             break
 
     reasoning = result.reasoning + note
@@ -1436,11 +1458,12 @@ def _attach_source_comparison(
         value = "tidak terhitung" if sv.computed_value is None else f"{sv.computed_value}"
         return f"[{sv.source}]: {value} ({sv.verdict})"
 
-    note = (
-        f" | KONFLIK SUMBER: {_fmt(head)} vs {_fmt(conflicting)} — "
-        + ("dua tabel di dalam PDF saling bertentangan"
-           if conflict == "internal" else "tabel di PDF dan sumber Excel tidak sinkron")
-    )
+    explanation = {
+        "internal": "dua tabel di dalam PDF saling bertentangan",
+        "cross": "tabel di PDF dan sumber Excel tidak sinkron",
+        "cross_pdf": "tabel di PDF lain memuat angka berbeda (bisa jadi angka revisi)",
+    }[conflict]
+    note = f" | KONFLIK SUMBER: {_fmt(head)} vs {_fmt(conflicting)} — {explanation}"
     return result.model_copy(update={
         "source_values": values,
         "source_conflict": conflict,
@@ -1775,6 +1798,44 @@ def _merge_sources_sharing_rows(
     return [("; ".join(titles[key]), list(key)) for key in order]
 
 
+def _pdf_table_source(
+    table_from_pdf: PdfTable, filename: str, origin: str, llm: Optional[BaseChatModel],
+) -> Tuple[_ExcelSource, str]:
+    """One transcribed PDF table as a reference source, plus the name of the parser that read it."""
+    # "verified" means the values came out of the PDF's text layer rather than off the
+    # rendered image (see pdf_table_extraction._verify_against_text_layer). Surfaced in the
+    # parser name because it is the difference between a code-read number and a model-read
+    # one, which a reviewer weighing a verdict needs to know.
+    suffix = "" if table_from_pdf.verified else "-unverified"
+    try:
+        table, parser_used = _parse_grid_with_fallback(table_from_pdf.grid, llm=llm)
+        parser_used = f"pdf-{parser_used}{suffix}"
+        pointer_only = False
+    except ValueError as parse_error:
+        # The grid exists by construction, so a parse failure always degrades to
+        # pointer-only rather than dropping the table.
+        logger.warning(
+            "No parser understood the PDF table '%s' (%s) — keeping as pointer-only source.",
+            table_from_pdf.label, parse_error,
+        )
+        table = BITableData(title=table_from_pdf.caption, unit=table_from_pdf.unit, row_labels=[])
+        parser_used = f"pdf-pointer-only{suffix}"
+        pointer_only = True
+    # The transcription carries the printed unit annotation; trust it over a parser that
+    # inferred nothing (an empty unit blocks every level-claim unit conversion).
+    if not table.unit and table_from_pdf.unit:
+        table.unit = table_from_pdf.unit
+    source = _ExcelSource(
+        table=table,
+        filename=filename,
+        sheet=table_from_pdf.label,
+        grid=table_from_pdf.grid,
+        pointer_only=pointer_only,
+        origin=origin,
+    )
+    return source, parser_used
+
+
 async def verify_paired(
     narrative_text: str,
     excel_sources: List[Tuple[bytes, str, str]],
@@ -1785,6 +1846,7 @@ async def verify_paired(
     pdf_tables: Optional[List[PdfTable]] = None,
     mode: str = "excel",
     on_extract_gap: Optional[Callable[[List[int], Exception], None]] = None,
+    reference_tables: Optional[List[Tuple[str, List[PdfTable]]]] = None,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -1806,11 +1868,15 @@ async def verify_paired(
         pdf_tables:     Tables transcribed from the PDF itself (pdf_table_extraction), used as
                         reference sources alongside — or instead of — the Excel ones. Transcribing
                         them is the caller's responsibility for the same reason as narrative_text.
-        mode:           "excel" | "internal" | "both". Metadata plus two behaviour switches:
-                        table-family suggestions are pointless in "internal" mode, and the
-                        response echoes the mode back so the UI can caveat LLM-read references.
+        mode:           "excel" | "internal" | "both" | "none". Metadata plus two behaviour
+                        switches: table-family suggestions are pointless without Excel in the
+                        pool, and the response echoes the mode back so the UI can caveat
+                        LLM-read references. "none" means only reference_tables are consulted.
         on_extract_gap: Optional (pages, error) callback for each narrative chunk the extraction
                         model failed on — see extract_structured_facts_async's on_chunk_failed.
+        reference_tables: (filename, tables) per OTHER PDF uploaded in the same run. A fallback
+                        only: they answer a claim the report's own tables and the Excel cannot,
+                        and otherwise can only raise a "cross_pdf" conflict (see _evaluate_fact).
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -1872,37 +1938,8 @@ async def verify_paired(
     # source) — the PDF value then shows up as the second source_values entry instead of
     # silently changing numbers the user already trusts.
     for table_from_pdf in (pdf_tables or []):
-        # "verified" means the values came out of the PDF's text layer rather than off the
-        # rendered image (see pdf_table_extraction._verify_against_text_layer). Surfaced in the
-        # parser name because it is the difference between a code-read number and a model-read
-        # one, which a reviewer weighing a verdict needs to know.
-        suffix = "" if table_from_pdf.verified else "-unverified"
-        try:
-            table, parser_used = _parse_grid_with_fallback(table_from_pdf.grid, llm=llm)
-            parser_used = f"pdf-{parser_used}{suffix}"
-            pointer_only = False
-        except ValueError as parse_error:
-            # The grid exists by construction, so a parse failure always degrades to
-            # pointer-only rather than dropping the table.
-            logger.warning(
-                "No parser understood the PDF table '%s' (%s) — keeping as pointer-only source.",
-                table_from_pdf.label, parse_error,
-            )
-            table = BITableData(title=table_from_pdf.caption, unit=table_from_pdf.unit, row_labels=[])
-            parser_used = f"pdf-pointer-only{suffix}"
-            pointer_only = True
-        # The transcription carries the printed unit annotation; trust it over a parser that
-        # inferred nothing (an empty unit blocks every level-claim unit conversion).
-        if not table.unit and table_from_pdf.unit:
-            table.unit = table_from_pdf.unit
-        parsed_sources.append(_ExcelSource(
-            table=table,
-            filename=pdf_filename,
-            sheet=table_from_pdf.label,
-            grid=table_from_pdf.grid,
-            pointer_only=pointer_only,
-            origin="pdf",
-        ))
+        source, parser_used = _pdf_table_source(table_from_pdf, pdf_filename, "pdf", llm)
+        parsed_sources.append(source)
         excel_parsers.append(parser_used)
     if pdf_tables:
         detail = (f"{len(pdf_tables)} tabel internal · parser: "
@@ -1914,11 +1951,25 @@ async def verify_paired(
             detail += " · tanpa model vision, hanya halaman dengan lapisan teks yang dibaca"
         emit("tables", "done", detail=detail)
 
+    # Step 1c: tables of the OTHER PDFs uploaded in the same run, last of all. Their place in
+    # the list does not matter for the verdict — _evaluate_fact keeps them a fallback — but it
+    # keeps the source arrays reading own-report-first.
+    for reference_name, reference_pdf_tables in (reference_tables or []):
+        for table_from_pdf in reference_pdf_tables:
+            source, parser_used = _pdf_table_source(table_from_pdf, reference_name, "pdf_other", llm)
+            parsed_sources.append(source)
+            excel_parsers.append(parser_used)
+
     # Per-source label groups with table title context (used by the LLM to understand
     # what generic rows like 'Total' represent in each table). Categorical sources also
     # advertise their attribute columns so the LLM can fill col_label with a real name.
     def _source_desc(src: _ExcelSource) -> str:
-        origin = src.sheet if src.origin == "pdf" else src.filename
+        if src.origin == "pdf":
+            origin = src.sheet
+        elif src.origin == "pdf_other":
+            origin = f"{src.filename} · {src.sheet}"
+        else:
+            origin = src.filename
         desc = f"{src.table.title} / {origin}"
         if src.pointer_only:
             desc += " — struktur tabel tidak terurai; gunakan nama metrik apa adanya"
@@ -2025,13 +2076,16 @@ async def verify_paired(
         excel_units=excel_units,
         excel_parsers=excel_parsers,
         mode=mode,
+        reference_pdfs=[name for name, _ in (reference_tables or [])],
         conflict_count=conflicts,
         total_facts=len(results),
         entailed_count=entailed,
         refuted_count=refuted,
         inconclusive_count=inconclusive,
         results=results,
-        # The BI table-family hints tell the user which WORKBOOK to upload — noise in internal
-        # mode, where they deliberately opted out of uploading one.
-        table_suggestions=[] if mode == "internal" else _build_table_suggestions(results),
+        # The BI table-family hints tell the user which WORKBOOK to upload — noise in the modes
+        # where they deliberately opted out of uploading one.
+        table_suggestions=(
+            [] if mode in ("internal", "none") else _build_table_suggestions(results)
+        ),
     )

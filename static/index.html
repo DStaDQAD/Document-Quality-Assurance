@@ -933,22 +933,22 @@ body.auth-locked .app {
                   <label class="rule-check">
                     <input type="checkbox" id="rule-intra" checked>
                     <span class="rule-text">
-                      <span class="rule-title">Narasi vs tabel di PDF yang sama</span>
-                      <span class="rule-hint">Konsistensi intra-file</span>
+                      <span class="rule-title">Konsistensi intra-file</span>
+                      <span class="rule-hint">Narasi vs tabel di PDF yang sama</span>
                     </span>
                   </label>
                   <label class="rule-check is-disabled">
                     <input type="checkbox" id="rule-cross-pdf" disabled>
                     <span class="rule-text">
-                      <span class="rule-title">Narasi vs PDF lain</span>
-                      <span class="rule-hint">Konsistensi antar-file · segera hadir</span>
+                      <span class="rule-title">Konsistensi antar-file</span>
+                      <span class="rule-hint" id="rule-cross-pdf-hint">Narasi vs tabel di PDF lain · unggah minimal 2 PDF untuk mengaktifkan</span>
                     </span>
                   </label>
                   <label class="rule-check is-disabled">
                     <input type="checkbox" id="rule-excel" disabled>
                     <span class="rule-text">
-                      <span class="rule-title">Narasi vs tabel Excel</span>
-                      <span class="rule-hint" id="rule-excel-hint">Unggah file Excel untuk mengaktifkan</span>
+                      <span class="rule-title">Konsistensi terhadap Excel</span>
+                      <span class="rule-hint" id="rule-excel-hint">Narasi vs tabel Excel · unggah file Excel untuk mengaktifkan</span>
                     </span>
                   </label>
                   <label class="rule-check">
@@ -1329,9 +1329,11 @@ body.auth-locked .app {
   document.getElementById("add-excel-btn").addEventListener("click", addExcelSource);
 
   // ── Multi-PDF source management (mirrors the Excel pattern; each entry = one PDF) ──
-  // Every PDF is verified independently against the same Excel sources (PDF↔tabel,
-  // never PDF↔PDF). pdfSources is the source of truth the submit handler reads.
+  // Every PDF is verified in its own request against the same Excel sources; with the
+  // "Konsistensi antar-file" rule on, the other PDFs ride along as reference_pdf.
+  // pdfSources is the source of truth the submit handler reads.
   let pdfSources = []; // [{container, inp}]
+  let severalPdfsWerePresent = false; // syncRules() state, like excelWasPresent
 
   function updatePdfRemoveButtons() {
     pdfSources.forEach((src) => {
@@ -1363,6 +1365,7 @@ body.auth-locked .app {
       placeholder: "Pilih file PDF",
       accepts: isPdfFile,
       rejectText: "File selain PDF diabaikan",
+      onFile: () => syncRules(),
       addEntry: addPdfSource,
     });
     removeBtn.addEventListener("click", () => {
@@ -1370,6 +1373,7 @@ body.auth-locked .app {
       pdfSources = pdfSources.filter(s => s.container !== container);
       container.remove();
       updatePdfRemoveButtons();
+      syncRules();
     });
     const src = { container, inp, assign };
     pdfSources.push(src);
@@ -1389,33 +1393,45 @@ body.auth-locked .app {
   });
   document.addEventListener("drop", (e) => e.preventDefault());
 
-  // ── Aturan pemeriksaan: the checkboxes map onto the backend's unchanged contract —
-  // "same-PDF tables" → internal, "Excel" → excel, both → both; the spelling box is
-  // run_typo_check. "Narasi vs PDF lain" is shown disabled and never read. ──
+  // ── Aturan pemeriksaan → request. "intra-file" and "terhadap Excel" pick the mode —
+  // internal, excel, or both; "antar-file" sends the other PDFs as reference_pdf, and on its
+  // own (neither of the other two) the mode is "none". The spelling box is run_typo_check. ──
 
-  // "excel" | "internal" | "both", or null when neither numeric rule is checked.
+  // "excel" | "internal" | "both" | "none", or null when no numeric rule is checked.
   function currentMode() {
     const intra = document.getElementById("rule-intra").checked;
     const excel = document.getElementById("rule-excel").checked;
     if (intra && excel) return "both";
     if (intra) return "internal";
     if (excel) return "excel";
+    if (document.getElementById("rule-cross-pdf").checked) return "none";
     return null;
   }
 
-  // The Excel rule follows the files: it can only be checked while some Excel is picked, it
-  // checks itself when the first one arrives, and it clears itself when the last one goes.
-  // Declared as a function (hoisted) because the Excel entries call it on every file change.
+  // A rule whose inputs are missing is disabled and cleared; it checks itself the moment they
+  // arrive, like a default. The explanation says what is missing until then.
+  function followInputs(box, hint, present, wasPresent, explanation, missing) {
+    if (present && !wasPresent) box.checked = true;
+    if (!present) box.checked = false;
+    box.disabled = !present;
+    box.closest(".rule-check").classList.toggle("is-disabled", !present);
+    hint.textContent = present ? explanation : `${explanation} · ${missing}`;
+  }
+
+  // The Excel rule follows the Excel files and the cross-file rule the number of PDFs.
+  // Declared as a function (hoisted) because the file entries call it on every change.
   function syncRules() {
     const ruleExcel = document.getElementById("rule-excel");
     const present = excelSources.some((s) => s.inp.files.length > 0);
-    if (present && !excelWasPresent) ruleExcel.checked = true;
-    if (!present) ruleExcel.checked = false;
+    followInputs(ruleExcel, document.getElementById("rule-excel-hint"), present, excelWasPresent,
+      "Narasi vs tabel Excel", "unggah file Excel untuk mengaktifkan");
     excelWasPresent = present;
-    ruleExcel.disabled = !present;
-    ruleExcel.closest(".rule-check").classList.toggle("is-disabled", !present);
-    document.getElementById("rule-excel-hint").textContent =
-      present ? "Konsistensi antar-file" : "Unggah file Excel untuk mengaktifkan";
+
+    const severalPdfs = pdfSources.filter((s) => s.inp.files.length > 0).length >= 2;
+    followInputs(document.getElementById("rule-cross-pdf"),
+      document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
+      "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
+    severalPdfsWerePresent = severalPdfs;
     // Dimmed only when files are there but unused. With no files the column must stay live,
     // since uploading is exactly what switches the Excel rule on.
     const muted = present && !ruleExcel.checked;
@@ -1487,6 +1503,11 @@ body.auth-locked .app {
 
   // Paired verifier
   const VERDICT_LABEL = { Entailed: "Sesuai", Refuted: "Tidak Sesuai", Inconclusive: "Tidak Cukup Data" };
+  const CONFLICT_LABEL = {
+    internal: "Tabel internal tidak konsisten",
+    cross: "PDF vs Excel berbeda",
+    cross_pdf: "Beda dengan PDF lain",
+  };
   const TYPE_LABEL    = {
     value: "Nilai", yoy_growth: "% YoY", average: "Rata-rata", sum: "Total",
     diff: "Selisih", ratio: "Rasio",
@@ -1719,8 +1740,7 @@ body.auth-locked .app {
           // best-matching source; these chips show what each source actually said.
           const conflict = item.source_conflict || null;
           const conflictBadge = conflict
-            ? `<span class="badge Conflict">${conflict === "internal"
-                ? "Tabel internal tidak konsisten" : "PDF vs Excel berbeda"}</span>`
+            ? `<span class="badge Conflict">${CONFLICT_LABEL[conflict] || "Sumber berbeda"}</span>`
             : "";
           const sourceValues = item.source_values || [];
           const sourceChips = sourceValues.length > 1
@@ -1903,6 +1923,7 @@ body.auth-locked .app {
   const STAGE_PDF     = ["pdf",     "Membaca PDF"];
   const STAGE_EXCEL   = ["excel",   "Parsing tabel Excel"];
   const STAGE_TABLES  = ["tables",  "Membaca tabel di dalam PDF"];
+  const STAGE_REFTABLES = ["reftables", "Membaca tabel di PDF lain"];
   const STAGE_EXTRACT = ["extract", "Ekstraksi klaim"];
   const STAGE_TYPO    = ["typo",    "Cek ejaan & tata bahasa"];
 
@@ -1912,10 +1933,19 @@ body.auth-locked .app {
     excel:    [STAGE_PDF, STAGE_EXCEL, STAGE_EXTRACT, ["compare", "Membandingkan dengan Excel"]],
     internal: [STAGE_PDF, STAGE_TABLES, STAGE_EXTRACT, ["compare", "Membandingkan dengan tabel internal"]],
     both:     [STAGE_PDF, STAGE_EXCEL, STAGE_TABLES, STAGE_EXTRACT, ["compare", "Membandingkan dengan Excel & tabel internal"]],
+    none:     [STAGE_PDF, STAGE_EXTRACT, ["compare", "Membandingkan dengan tabel di PDF lain"]],
   };
 
-  function stagesFor(mode, withTypo) {
+  function stagesFor(mode, withTypo, crossPdf) {
     const stages = (PAIRED_STAGES_BY_MODE[mode] || PAIRED_STAGES_BY_MODE.excel).slice();
+    if (crossPdf) {
+      // Read before extraction, like the other tables; "none" already names them in its compare row.
+      stages.splice(stages.indexOf(STAGE_EXTRACT), 0, STAGE_REFTABLES);
+      if (mode !== "none") {
+        const [key, label] = stages[stages.length - 1];
+        stages[stages.length - 1] = [key, `${label} + PDF lain`];
+      }
+    }
     if (withTypo) stages.push(STAGE_TYPO);
     return stages;
   }
@@ -1971,8 +2001,8 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, signal) {
-    resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo));
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, signal) {
+    resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo, crossPdf));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
     const ticker = setInterval(() => {
@@ -2028,18 +2058,19 @@ body.auth-locked .app {
     // PDF in the loop use different settings from the next.
     const mode = currentMode();
     const withTypo = document.getElementById("rule-typo").checked;
+    const crossPdf = document.getElementById("rule-cross-pdf").checked;
     if (!pdfFiles.length) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF terlebih dahulu.</div>`;
       return;
     }
     if (!mode) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu aturan pemeriksaan angka: "Narasi vs tabel di PDF yang sama" atau "Narasi vs tabel Excel".</div>`;
+      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu aturan pemeriksaan angka: konsistensi intra-file, antar-file, atau terhadap Excel.</div>`;
       return;
     }
     // Internal mode compares against the PDF's own tables, so the Excel column is ignored
     // entirely — including any files still sitting in it. The Excel rule can only be checked
     // while a file is picked, so the other modes always have at least one source here.
-    const filledSources = mode === "internal"
+    const filledSources = mode === "internal" || mode === "none"
       ? []
       : excelSources.filter(s => s.inp.files.length > 0);
     // One (file, sheet) source per SELECTED sheet: the same file part is appended once
@@ -2059,11 +2090,12 @@ body.auth-locked .app {
       const fd = new FormData();
       fd.append("pdf_file", pdf);
       perSource.forEach((p) => p.sheets.forEach(() => fd.append("excel_file", p.file)));
+      if (crossPdf) pdfFiles.filter((other) => other !== pdf).forEach((other) => fd.append("reference_pdf", other));
       return fd;
     };
 
-    // Several PDFs run SEQUENTIALLY, each against the same Excel sources (PDF↔tabel,
-    // never PDF↔PDF), each rendering into its own titled section. A failure in one PDF
+    // Several PDFs run SEQUENTIALLY, each against the same Excel sources (and, with the
+    // cross-file rule, the other PDFs' tables), each rendering into its own titled section. A failure in one PDF
     // shows its error banner in place and the loop moves on to the next.
     // One controller per run: Batalkan aborts the PDF in flight and stops the loop before the
     // next one starts. Reports that already finished stay on screen.
@@ -2092,7 +2124,7 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, controller.signal);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, controller.signal);
       }
     }).finally(() => {
       cancelBtn.hidden = true;

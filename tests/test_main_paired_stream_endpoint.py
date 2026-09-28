@@ -265,6 +265,7 @@ def test_stream_cancels_the_pipeline_when_the_client_goes_away():
                 sheet_names="I.1",
                 mode="excel",
                 run_typo_check=True,
+                reference_pdf=[],
             )
             stream = response.body_iterator
             first_line = await stream.__anext__()

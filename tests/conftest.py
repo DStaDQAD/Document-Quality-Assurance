@@ -19,3 +19,13 @@ def _disable_basic_auth():
     for var in ("APP_USERNAME", "APP_PASSWORD"):
         os.environ.pop(var, None)
     yield
+
+
+@pytest.fixture(autouse=True)
+def _fresh_pdf_table_cache():
+    """main caches each PDF's transcribed tables by content, so that a PDF sent as a reference
+    in one request is not transcribed again in the next. Tests reuse the same fake bytes with
+    different mocked transcriptions, so every test starts from an empty cache."""
+    import main
+    main._PDF_TABLE_CACHE.clear()
+    yield

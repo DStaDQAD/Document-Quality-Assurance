@@ -66,7 +66,8 @@ class PeriodResult(BaseModel):
 class SourceValue(BaseModel):
     """What ONE reference source says about a claim, when more than one could answer it."""
     source: str                       # "filename / sheet" — the source's display label
-    origin: Literal["excel", "pdf"] = "excel"
+    # "pdf" is a table in the report being checked; "pdf_other" a table in ANOTHER uploaded PDF.
+    origin: Literal["excel", "pdf", "pdf_other"] = "excel"
     matched_label: Optional[str] = None   # the row label this source resolved the claim against
     computed_value: Optional[float] = None
     computed_unit: Optional[str] = None
@@ -102,9 +103,10 @@ class FactVerificationResult(BaseModel):
     #   "internal" — two tables inside the PDF contradict each other (the report is
     #                internally inconsistent, regardless of whether the claim itself is right)
     #   "cross"    — a table in the PDF and an uploaded Excel sheet disagree (out of sync)
+    #   "cross_pdf" — a table in ANOTHER uploaded PDF disagrees (often a revised figure)
     # Deliberately NOT a fourth `verdict` value: a conflict is orthogonal to whether the claim
     # matches its best source, and entailed+refuted+inconclusive must keep summing to total_facts.
-    source_conflict: Optional[Literal["internal", "cross"]] = None
+    source_conflict: Optional[Literal["internal", "cross", "cross_pdf"]] = None
 
 
 class TypoIssue(BaseModel):
@@ -171,8 +173,10 @@ class PairedVerificationResponse(BaseModel):
     # sheet and claims are resolved by the tier-4 cell-pointer pass — both worth a glance.
     excel_parsers: List[str] = Field(default_factory=list)
     # Which reference pool was used: "excel" (uploaded workbooks), "internal" (tables inside
-    # the PDF), or "both".
+    # the PDF), "both", or "none" (neither — only the other PDFs' tables, see reference_pdfs).
     mode: str = "excel"
+    # The other uploaded PDFs whose tables were a fallback reference for this one's narrative.
+    reference_pdfs: List[str] = Field(default_factory=list)
     # How many results have source_conflict set — sources that contradict each other.
     conflict_count: int = 0
     total_facts: int

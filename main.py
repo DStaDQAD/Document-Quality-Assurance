@@ -60,6 +60,7 @@ import os
 import re
 import secrets
 import time
+from collections import OrderedDict
 from pathlib import Path
 
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -110,6 +111,31 @@ _PAGE_MARKER_RE = re.compile(r'\[== Halaman \d+ ==\]')
 
 # A provider's error can carry its whole JSON body; the reader needs the status and the gist.
 _GAP_REASON_MAX_CHARS = 240
+
+# Transcribed tables per PDF, keyed by content. The UI verifies several PDFs one request at a
+# time and sends the others along as references, so without this every PDF's tables would be
+# read once per PDF in the run — on a scanned report, a vision call per page each time.
+# Small and in-process: it only has to outlive one run, never a restart.
+_PDF_TABLE_CACHE: "OrderedDict[Tuple[str, bool], List[PdfTable]]" = OrderedDict()
+_PDF_TABLE_CACHE_SIZE = 8
+
+
+async def _tables_of(
+    pdf_bytes: bytes,
+    vision_llm,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> List[PdfTable]:
+    """extract_tables_from_pdf, remembered per PDF content. Without a vision model fewer pages
+    can be read, so that result is kept apart from the full one."""
+    key = (hashlib.sha256(pdf_bytes).hexdigest(), vision_llm is not None)
+    if key in _PDF_TABLE_CACHE:
+        _PDF_TABLE_CACHE.move_to_end(key)
+        return _PDF_TABLE_CACHE[key]
+    tables = await extract_tables_from_pdf(pdf_bytes, vision_llm, on_progress=on_progress)
+    _PDF_TABLE_CACHE[key] = tables
+    while len(_PDF_TABLE_CACHE) > _PDF_TABLE_CACHE_SIZE:
+        _PDF_TABLE_CACHE.popitem(last=False)
+    return tables
 
 app = FastAPI(
     title="Fact-Checker PoC",
@@ -475,7 +501,8 @@ async def _read_paired_uploads(
     pdf_file: UploadFile,
     excel_file: List[UploadFile],
     sheet_names: str,
-) -> Tuple[bytes, str, List[Tuple[bytes, str, str]]]:
+    reference_pdf: Optional[List[UploadFile]] = None,
+) -> Tuple[bytes, str, List[Tuple[bytes, str, str]], List[Tuple[bytes, str]]]:
     """Drain the multipart uploads into memory up front.
 
     Both paired endpoints do this before any pipeline work starts. The streaming endpoint
@@ -490,7 +517,11 @@ async def _read_paired_uploads(
         sheet = sheets[i] if i < len(sheets) else sheets[-1]
         excel_sources.append((await ef.read(), sheet, ef.filename or f"table_{i+1}.xls"))
 
-    return pdf_bytes, (pdf_file.filename or "report.pdf"), excel_sources
+    references: List[Tuple[bytes, str]] = []
+    for i, rf in enumerate(reference_pdf or []):
+        references.append((await rf.read(), rf.filename or f"reference_{i+1}.pdf"))
+
+    return pdf_bytes, (pdf_file.filename or "report.pdf"), excel_sources, references
 
 
 async def _run_paired_pipeline(
@@ -500,6 +531,7 @@ async def _run_paired_pipeline(
     emit: Optional[Callable[[Dict[str, Any]], None]] = None,
     mode: str = "excel",
     run_typo_check: bool = True,
+    reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
 ) -> PairedVerificationResponse:
     """Run the full verification and return the merged fact + typo response.
 
@@ -511,8 +543,9 @@ async def _run_paired_pipeline(
     may safely use a non-thread-safe sink such as asyncio.Queue.put_nowait.
 
     `mode` selects the reference pool: "excel" (uploaded workbooks only), "internal" (tables
-    transcribed out of the PDF itself), or "both". `run_typo_check=False` skips the
-    spelling/grammar pass entirely and leaves typo_check null.
+    transcribed out of the PDF itself), "both", or "none" (neither). `reference_pdfs` are the
+    other PDFs of the run, (bytes, filename) each: their tables are added to any mode as a
+    fallback. `run_typo_check=False` skips the spelling/grammar pass and leaves typo_check null.
     """
     # Observe every stage event for timing, then forward to the real sink (if any). This
     # single recording callback is passed to both this function's _emit and verify_paired's
@@ -579,9 +612,7 @@ async def _run_paired_pipeline(
         # answers every page on its own (see extract_tables_from_pdf). Only when that reader
         # comes back empty-handed does the missing key actually cost the user anything, so
         # that is where the refusal belongs.
-        pdf_tables = await extract_tables_from_pdf(
-            pdf_bytes, vision_llm, on_progress=_on_table_progress
-        )
+        pdf_tables = await _tables_of(pdf_bytes, vision_llm, on_progress=_on_table_progress)
         if not pdf_tables and vision_llm is None:
             raise ValueError(
                 "Tidak ada tabel yang bisa dibaca dari lapisan teks PDF ini, dan mode tabel "
@@ -595,6 +626,19 @@ async def _run_paired_pipeline(
         # Cheap (one text-layer read, no LLM) and only meaningful for the tables just read, so
         # it rides along with them rather than running for every document.
         number_format_mix = await asyncio.to_thread(detect_number_format_mix, pdf_bytes)
+
+    # The other PDFs' tables, read the same way (and from the same cache) as this one's own.
+    reference_tables: List[Tuple[str, List[PdfTable]]] = []
+    if reference_pdfs:
+        for i, (reference_bytes, reference_name) in enumerate(reference_pdfs, 1):
+            _emit("reftables", "running", current=i - 1, total=len(reference_pdfs),
+                  detail=reference_name)
+            reference_tables.append((reference_name, await _tables_of(reference_bytes, vision_llm)))
+        n_reference_tables = sum(len(tables) for _, tables in reference_tables)
+        detail = f"{n_reference_tables} tabel dari {len(reference_pdfs)} PDF lain"
+        if n_reference_tables == 0 and vision_llm is None:
+            detail += " · tanpa model vision, hanya halaman dengan lapisan teks yang dibaca"
+        _emit("reftables", "done", detail=detail)
 
     # Prefer Gemini for the typo/grammar escalation call when available - it judges
     # domain jargon (e.g. "kartal", "inflasi") more reliably than the Groq text model,
@@ -628,6 +672,7 @@ async def _run_paired_pipeline(
             pdf_tables=pdf_tables,
             mode=mode,
             on_extract_gap=_gap_recorder("extract"),
+            reference_tables=reference_tables,
         ),
         _maybe_typo_check(),
     )
@@ -637,7 +682,8 @@ async def _run_paired_pipeline(
         pdf_filename=pdf_filename,
         n_pages=n_pages,
         n_facts=fact_result.total_facts,
-        n_excel_sources=len(excel_sources) + len(pdf_tables),
+        n_excel_sources=(len(excel_sources) + len(pdf_tables)
+                         + sum(len(tables) for _, tables in reference_tables)),
         timer=timer,
         usage_metadata=usage_handler.usage_metadata,
     )
@@ -656,10 +702,14 @@ async def _run_paired_pipeline(
     })
 
 
-_VERIFICATION_MODES = ("excel", "internal", "both")
+_VERIFICATION_MODES = ("excel", "internal", "both", "none")
 
 
-def _validate_mode(mode: str, excel_sources: List[Tuple[bytes, str, str]]) -> None:
+def _validate_mode(
+    mode: str,
+    excel_sources: List[Tuple[bytes, str, str]],
+    reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
+) -> None:
     """Reject an unusable mode/upload combination with a 400 before any pipeline work starts.
 
     Called from both paired endpoints while the HTTP status is still negotiable — the streaming
@@ -678,6 +728,14 @@ def _validate_mode(mode: str, excel_sources: List[Tuple[bytes, str, str]]) -> No
                 "memverifikasi klaim hanya terhadap tabel di dalam PDF."
             ),
         )
+    if mode == "none" and not reference_pdfs:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Mode 'none' hanya membandingkan dengan tabel di PDF lain, jadi memerlukan "
+                "minimal satu file reference_pdf."
+            ),
+        )
 
 
 @app.post("/api/verify-paired", response_model=PairedVerificationResponse)
@@ -687,6 +745,9 @@ async def verify_paired_endpoint(
     sheet_names: str = "I.1",
     mode: str = "excel",
     run_typo_check: bool = True,
+    reference_pdf: List[UploadFile] = File(
+        default=[], description="The other PDFs of the run; their tables are a fallback reference."
+    ),
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF report against a pool of reference tables.
 
@@ -698,19 +759,25 @@ async def verify_paired_endpoint(
     If fewer sheet names than files are provided, the last sheet name is reused for remaining files.
 
     mode: "excel" (uploaded workbooks only — the default), "internal" (tables transcribed out of
-    the PDF itself, no Excel required), or "both". Internal mode needs a vision model.
+    the PDF itself, no Excel required), "both", or "none" (only reference_pdf's tables).
+
+    reference_pdf: zero or more OTHER reports. Their tables answer a claim only when the PDF's own
+    tables and the Excel cannot, and otherwise flag a differing figure as a "cross_pdf" conflict.
 
     run_typo_check: set false to skip the spelling/grammar pass (typo_check comes back null).
 
     Returns the whole response in one shot. For live progress during the (typically 40s+)
     run, use /api/verify-paired-stream instead — same inputs, same final payload.
     """
-    pdf_bytes, pdf_name, excel_sources = await _read_paired_uploads(pdf_file, excel_file, sheet_names)
-    _validate_mode(mode, excel_sources)
+    pdf_bytes, pdf_name, excel_sources, references = await _read_paired_uploads(
+        pdf_file, excel_file, sheet_names, reference_pdf
+    )
+    _validate_mode(mode, excel_sources, references)
 
     try:
         return await _run_paired_pipeline(
-            pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check
+            pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check,
+            reference_pdfs=references,
         )
     except Exception as exc:
         logger.exception("Paired verification failed")
@@ -724,6 +791,9 @@ async def verify_paired_stream_endpoint(
     sheet_names: str = "I.1",
     mode: str = "excel",
     run_typo_check: bool = True,
+    reference_pdf: List[UploadFile] = File(
+        default=[], description="The other PDFs of the run; their tables are a fallback reference."
+    ),
 ) -> StreamingResponse:
     """Same as /api/verify-paired, but streams progress while the pipeline runs.
 
@@ -738,8 +808,10 @@ async def verify_paired_stream_endpoint(
     Failures arrive as a terminal "error" line rather than an HTTP error status: by the time
     the pipeline runs, the 200 and its headers have already been flushed to the client.
     """
-    pdf_bytes, pdf_name, excel_sources = await _read_paired_uploads(pdf_file, excel_file, sheet_names)
-    _validate_mode(mode, excel_sources)
+    pdf_bytes, pdf_name, excel_sources, references = await _read_paired_uploads(
+        pdf_file, excel_file, sheet_names, reference_pdf
+    )
+    _validate_mode(mode, excel_sources, references)
 
     async def event_stream() -> AsyncIterator[str]:
         queue: asyncio.Queue = asyncio.Queue()
@@ -749,7 +821,7 @@ async def verify_paired_stream_endpoint(
             try:
                 return await _run_paired_pipeline(
                     pdf_bytes, pdf_name, excel_sources, emit=queue.put_nowait,
-                    mode=mode, run_typo_check=run_typo_check,
+                    mode=mode, run_typo_check=run_typo_check, reference_pdfs=references,
                 )
             finally:
                 # Unblocks the drain loop below on success AND on failure; the exception
