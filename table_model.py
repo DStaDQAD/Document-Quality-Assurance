@@ -666,8 +666,35 @@ class TableData:
         }
         if not series_words:
             return True
-        known = _label_words(label) | _label_words(self.title)
+        if QUAL_SEP in label:
+            # A qualified row names its own series, so the row alone must know it — the title
+            # speaks for every row at once. And a word every row shares identifies none of them:
+            # SK-Juni-2026's Tabel 2 is titled "Indeks Keyakinan Konsumen per Kelompok
+            # Pengeluaran" and every row starts 'Indeks …', so an IKK claim whose own row had
+            # lost June was answered by 'Indeks Kondisi Ekonomi (IKE) > Pengeluaran Rp1 - 2
+            # juta' — the same group of another index — and a correct 108,9 was refuted
+            # against 101,3.
+            distinctive = series_words - self._words_in_every_row()
+            series_words = distinctive or series_words
+            known = _label_words(label)
+        else:
+            known = _label_words(label) | _label_words(self.title)
         return any(w in known or any(_same_root(w, k) for k in known) for w in series_words)
+
+    def _words_in_every_row(self) -> set:
+        """Words shared by every row label ('indeks' in a survey index table). Memoised on the
+        row list, which only ever grows while a table is being built."""
+        key = len(self.row_labels)
+        cached = self.__dict__.get("_common_words")
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        common: Optional[set] = None
+        for label in self.row_labels:
+            words = _label_words(label)
+            common = words if common is None else common & words
+        result = common or set()
+        self.__dict__["_common_words"] = (key, result)
+        return result
 
     @staticmethod
     def _group_kept(query: str, label: str) -> bool:

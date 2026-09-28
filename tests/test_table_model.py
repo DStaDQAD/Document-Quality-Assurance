@@ -598,3 +598,21 @@ def test_a_sheet_that_holds_an_english_ratio_row_counts_as_discussing_it():
 
     assert table.query_coverage("average propensity to consume ratio", "Total > Konsumsi") == 1.0
     assert table.query_coverage("saving to income ratio", "Total > Tabungan") == 1.0
+
+
+def test_a_series_claim_is_not_answered_by_another_index_of_the_same_group():
+    """SK-Juni-2026 Tabel 2: every row is 'Indeks … > Pengeluaran …' under a title naming the
+    IKK. With the IKK row's June cell missing, the IKK claim was answered by the IKE row of the
+    same expenditure group — 101,3 against a correct 108,9 — because 'indeks' (in every row) and
+    the title's words vouched for it."""
+    ikk = "Indeks Keyakinan Konsumen (IKK) > Pengeluaran Rp1 - 2 juta"
+    ike = "Indeks Kondisi Ekonomi (IKE) > Pengeluaran Rp1 - 2 juta"
+    table = TableData(
+        title="Tabel 2 Indeks Keyakinan Konsumen per Kelompok Pengeluaran", unit="",
+        row_labels=[ikk, ike],
+    )
+    table._data[(ikk, 2026, "May")] = 113.0
+    table._data[(ike, 2026, "Jun")] = 101.3
+
+    assert table.lookup_fuzzy(ikk, 2026, "Jun") == (None, None)
+    assert table.lookup_fuzzy(ikk, 2026, "May") == (ikk, 113.0)
