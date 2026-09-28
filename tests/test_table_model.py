@@ -5,6 +5,8 @@ tests/test_excel_parser_bi.py — BITableData is an alias of TableData — so th
 on the categorical lookups and the axis guards.
 """
 
+import pytest
+
 from table_model import TableData
 
 
@@ -616,3 +618,65 @@ def test_a_series_claim_is_not_answered_by_another_index_of_the_same_group():
 
     assert table.lookup_fuzzy(ikk, 2026, "Jun") == (None, None)
     assert table.lookup_fuzzy(ikk, 2026, "May") == (ikk, 113.0)
+
+
+def test_a_city_claim_named_by_the_index_abbreviation_reaches_the_city_row():
+    """SK-Agustus-2026: "IKK mengalami peningkatan tertinggi di Mataram …" extracted as
+    'IKK > Mataram', while Tabel 6 files 'Mataram > Indeks Keyakinan Konsumen (IKK)'."""
+    table = TableData(title="Tabel 6 Indeks Keyakinan Konsumen per Kota", unit="", row_labels=[
+        "Mataram > Indeks Keyakinan Konsumen (IKK)", "Mataram > Indeks Kondisi Ekonomi Saat Ini (IKE)",
+        "Padang > Indeks Keyakinan Konsumen (IKK)",
+    ])
+    for label, value in zip(table.row_labels, (135.5, 120.1, 101.0)):
+        table._data[(label, 2026, "Aug")] = value
+
+    assert table.lookup_fuzzy("IKK > Mataram", 2026, "Aug") == (
+        "Mataram > Indeks Keyakinan Konsumen (IKK)", 135.5)
+    assert table.lookup_fuzzy("IKE > Mataram", 2026, "Aug") == (
+        "Mataram > Indeks Kondisi Ekonomi Saat Ini (IKE)", 120.1)
+
+
+@pytest.mark.parametrize("described,row", [
+    ("Persepsi konsumen terhadap kondisi ekonomi saat ini", "Indeks Kondisi Ekonomi Saat Ini (IKE)"),
+    ("Ekspektasi konsumen terhadap kondisi ekonomi enam bulan ke depan", "Indeks Ekspektasi Konsumen (IEK)"),
+    ("keyakinan konsumen terhadap penghasilan saat ini", "Indeks Penghasilan Saat Ini (IPSI)"),
+    ("persepsi responden terhadap ketersediaan lapangan pekerjaan saat ini",
+     "Indeks Ketersediaan Lapangan Kerja (IKLK)"),
+    ("prakiraan konsumen terhadap ketersediaan lapangan kerja enam bulan mendatang",
+     "Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)"),
+])
+def test_an_index_the_prose_describes_is_read_as_its_row(described, row):
+    rows = ["Indeks Keyakinan Konsumen (IKK)", "Indeks Kondisi Ekonomi Saat Ini (IKE)",
+            "Indeks Ekspektasi Konsumen (IEK)", "Indeks Penghasilan Saat Ini (IPSI)",
+            "Indeks Ketersediaan Lapangan Kerja (IKLK)",
+            "Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)"]
+    table = TableData(title="Tabel 1 Indeks Keyakinan Konsumen", unit="", row_labels=list(rows))
+    for n, label in enumerate(rows):
+        table._data[(label, 2026, "Aug")] = 100.0 + n
+
+    assert table.lookup_fuzzy(described, 2026, "Aug")[0] == row
+
+
+def test_a_claim_about_one_index_is_not_answered_by_another_index_of_the_same_group():
+    """SK-Juni-2026 lost 'IEKU > Pengeluaran Rp4,1 - 5 juta'; the IEKU claim was answered by the
+    IEK row of that group on the one shared word 'ekspektasi'."""
+    ieku = "Indeks Ekspektasi Kegiatan Usaha (IEKU) > Pengeluaran Rp4,1 - 5 juta"
+    iek = "Indeks Ekspektasi Konsumen (IEK) > Pengeluaran Rp4,1 - 5 juta"
+    table = TableData(title="Tabel 2", unit="", row_labels=[iek])
+    table._data[(iek, 2026, "Jun")] = 123.5
+
+    assert table.lookup_fuzzy(ieku, 2026, "Jun") == (None, None)
+
+
+@pytest.mark.parametrize("described,row,value", [
+    ("Proporsi konsumsi terhadap pendapatan > Pengeluaran Rp2,1-3 juta", "Rp 2,1 - 3 juta > Konsumsi", 75.2),
+    ("porsi pendapatan yang ditabung > Pengeluaran Rp2,1-3 juta", "Rp 2,1 - 3 juta > Tabungan", 15.6),
+])
+def test_the_income_split_in_words_reaches_its_table_row(described, row, value):
+    """SK-Juni-2026: "Proporsi konsumsi terhadap pendapatan … Rp2,1-3 juta (75,2%)" and "porsi
+    pendapatan yang ditabung … Rp2,1-3 juta (15,6%)" found no row in Tabel 5."""
+    rows = ["Rp 2,1 - 3 juta > Konsumsi", "Rp 2,1 - 3 juta > Cicilan pinjaman", "Rp 2,1 - 3 juta > Tabungan"]
+    table = TableData(title="Tabel 5", unit="", row_labels=list(rows))
+    for label, v in zip(rows, (75.2, 9.2, 15.6)):
+        table._data[(label, 2026, "Jun")] = v
+    assert table.lookup_fuzzy(described, 2026, "Jun") == (row, value)

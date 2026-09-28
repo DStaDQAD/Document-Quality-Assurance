@@ -115,9 +115,59 @@ _REPORT_TERMS_RE = re.compile(
 _AGE_UNIT_RE = re.compile(r"(?<=\d)\s*tahun\b", re.IGNORECASE)
 
 
+# A survey index the prose describes instead of naming. BI's consumer survey writes "persepsi
+# responden terhadap ketersediaan lapangan pekerjaan saat ini" for the row 'Indeks Ketersediaan
+# Lapangan Kerja (IKLK)', "ekspektasi konsumen terhadap kondisi ekonomi enam bulan ke depan" for
+# the IEK, and the extractor takes the description as the metric's name — on SK-Agustus-2026
+# four claims found no row at all that way. Each pattern is the index's defining phrase, so the
+# most specific come first: an expectation before the current-conditions reading it contains,
+# and the IKE ("kondisi ekonomi SAAT INI") before the IKK it would otherwise read as.
+_SUBJ = r"(?:persepsi|keyakinan|penilaian)\s+(?:konsumen|responden)\s+terhadap\s+"
+_EXPECT = r"(?:ekspektasi|prakiraan|perkiraan)\s+(?:konsumen|responden)\s+terhadap\s+"
+_AHEAD = r"(?:\s+(?:enam|6)\s+bulan)?(?:\s+(?:ke\s+depan|mendatang|yang\s+akan\s+datang))?"
+_REPORT_PHRASES = [
+    (re.compile(_EXPECT + r"penghasilan" + _AHEAD, re.IGNORECASE),
+     "Indeks Ekspektasi Penghasilan (IEP)"),
+    (re.compile(_EXPECT + r"ketersediaan\s+lapangan\s+(?:kerja|pekerjaan)" + _AHEAD, re.IGNORECASE),
+     "Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)"),
+    (re.compile(_EXPECT + r"(?:perkembangan\s+)?kegiatan\s+usaha" + _AHEAD, re.IGNORECASE),
+     "Indeks Ekspektasi Kegiatan Usaha (IEKU)"),
+    (re.compile(_EXPECT + r"kondisi\s+ekonomi" + _AHEAD, re.IGNORECASE),
+     "Indeks Ekspektasi Konsumen (IEK)"),
+    (re.compile(_SUBJ + r"penghasilan(?:\s+saat\s+ini)?", re.IGNORECASE),
+     "Indeks Penghasilan Saat Ini (IPSI)"),
+    (re.compile(_SUBJ + r"ketersediaan\s+lapangan\s+(?:kerja|pekerjaan)(?:\s+saat\s+ini)?",
+                re.IGNORECASE),
+     "Indeks Ketersediaan Lapangan Kerja (IKLK)"),
+    # Without the "persepsi … terhadap" lead the extractor sometimes keeps only the object.
+    (re.compile(r"(?<![A-Za-z] )(?<!ekspektasi )ketersediaan\s+lapangan\s+(?:kerja|pekerjaan)"
+                r"\s+saat\s+ini", re.IGNORECASE),
+     "Indeks Ketersediaan Lapangan Kerja (IKLK)"),
+    (re.compile(_SUBJ + r"kondisi\s+ekonomi\s+saat\s+ini", re.IGNORECASE),
+     "Indeks Kondisi Ekonomi Saat Ini (IKE)"),
+    (re.compile(_SUBJ + r"kondisi\s+ekonomi(?!\s+saat\s+ini)", re.IGNORECASE),
+     "Indeks Keyakinan Konsumen (IKK)"),
+    # The household-income split in words (Tabel 5: 'Konsumsi', 'Cicilan pinjaman', 'Tabungan'):
+    # "proporsi konsumsi terhadap pendapatan", "porsi pendapatan yang ditabung".
+    (re.compile(r"(?:proporsi|porsi|rasio)\s+(?:pendapatan\s+(?:konsumen\s+)?(?:untuk|yang\s+"
+                r"(?:digunakan|dipakai)\s+untuk)\s+)?konsumsi(?:\s+terhadap\s+pendapatan)?",
+                re.IGNORECASE),
+     "Konsumsi"),
+    (re.compile(r"(?:proporsi|porsi)\s+pendapatan\s+(?:konsumen\s+)?yang\s+(?:ditabung|disimpan)"
+                r"|(?:proporsi|porsi|rasio)\s+tabungan(?:\s+terhadap\s+pendapatan)?",
+                re.IGNORECASE),
+     "Tabungan"),
+    (re.compile(r"(?:proporsi|porsi|rasio)\s+(?:pembayaran\s+)?cicilan(?:\s*/\s*utang|\s+pinjaman)?"
+                r"(?:\s+terhadap\s+pendapatan)?", re.IGNORECASE),
+     "Cicilan pinjaman"),
+]
+
+
 def _expand_report_terms(query: str) -> str:
     """Rewrite a report's wording as the row name its table actually uses."""
     query = _REPORT_TERMS_RE.sub(lambda m: _REPORT_TERMS[m.group(0).lower()], query)
+    for pattern, row_name in _REPORT_PHRASES:
+        query = pattern.sub(row_name, query)
     return _AGE_UNIT_RE.sub(" th", query)
 
 
@@ -404,7 +454,7 @@ class TableData:
         """
         q_words = {
             w for w in _sig_words(
-                _expand_report_terms(query).lower().replace("dana pihak ketiga", "dpk")
+                self._normalise_query(query).lower().replace("dana pihak ketiga", "dpk")
             )
             if w not in self._TITLE_STOP_WORDS and not w.isdigit()
         }
@@ -485,7 +535,7 @@ class TableData:
         """
         # A term the report writes in English is compared under the row name its own table uses
         # (see _REPORT_TERMS) — every tier below, and the two guards, then see one vocabulary.
-        query = _expand_report_terms(query)
+        query = self._normalise_query(query)
         q_canon = _canon(query)
         q_tight = _tight(query)
         q_words = _sig_words(query)
@@ -655,11 +705,19 @@ class TableData:
         """
         # Same rewrite the tiers run on, so the series half of "saving to income ratio > Rp1 - 2
         # juta" is read as 'tabungan' here too (see _REPORT_TERMS).
-        query = _expand_report_terms(query)
+        query = self._normalise_query(query)
         if not self._group_kept(query, label):
             return False
         if QUAL_SEP not in query:
             return True
+        # Two different abbreviations name two different indices, whatever words they share:
+        # SK-Juni-2026's appendix lost 'IEKU > Pengeluaran Rp4,1 - 5 juta', and the IEKU claim
+        # (118,8) was answered by 'Indeks Ekspektasi Konsumen (IEK) > …' (123,5) on the one
+        # word 'ekspektasi'.
+        wanted = set(re.findall(r"\(([A-Z]{2,6})\)", query.rsplit(QUAL_SEP, 1)[0]))
+        present = set(re.findall(r"\(([A-Z]{2,6})\)", label))
+        if wanted and present and not (wanted & present):
+            return False
         series_words = {
             w for w in _sig_words(query.rsplit(QUAL_SEP, 1)[0])
             if w not in self._TITLE_STOP_WORDS and w not in self._PERIOD_WORDS
@@ -694,6 +752,44 @@ class TableData:
             common = words if common is None else common & words
         result = common or set()
         self.__dict__["_common_words"] = (key, result)
+        return result
+
+    def _normalise_query(self, query: str) -> str:
+        """The claim's metric in this table's vocabulary: report terms (see _expand_report_terms)
+        and any level that is a bare abbreviation spelled out as this table spells it.
+
+        The extractor often names a breakdown by the index's abbreviation alone — "IKK >
+        Mataram" — while the table's row is 'Mataram > Indeks Keyakinan Konsumen (IKK)'. The
+        tiers compare words, and "IKK" is one word against four, so SK-Agustus-2026's eighteen
+        per-city claims found no row though every city was there. Only a level that is NOTHING
+        but the abbreviation is rewritten, and only when this table uses it for one name.
+        """
+        query = _expand_report_terms(query)
+        abbreviations = self._abbreviations()
+        if not abbreviations or QUAL_SEP not in query and query.strip() not in abbreviations:
+            return query
+        parts = [p.strip() for p in query.split(QUAL_SEP)]
+        return QUAL_SEP.join(abbreviations.get(p, p) for p in parts)
+
+    # The abbreviation a row level ends with: 'Indeks Keyakinan Konsumen (IKK)' -> 'IKK'.
+    _ABBREVIATION_RE: ClassVar = re.compile(r"\(([A-Z]{2,6})\)\s*$")
+
+    def _abbreviations(self) -> Dict[str, str]:
+        """'IKK' -> 'Indeks Keyakinan Konsumen (IKK)' for every abbreviation this table's row
+        levels end with and use for exactly one name. Memoised like _words_in_every_row."""
+        key = len(self.row_labels)
+        cached = self.__dict__.get("_abbreviations_cache")
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        names: Dict[str, set] = {}
+        for label in self.row_labels:
+            for level in label.split(QUAL_SEP):
+                level = level.strip()
+                match = self._ABBREVIATION_RE.search(level)
+                if match:
+                    names.setdefault(match.group(1), set()).add(level)
+        result = {abbr: next(iter(full)) for abbr, full in names.items() if len(full) == 1}
+        self.__dict__["_abbreviations_cache"] = (key, result)
         return result
 
     @staticmethod

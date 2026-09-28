@@ -369,3 +369,21 @@ def test_the_cited_chart_still_names_the_series_when_its_label_was_read_one_bar_
     names = _chart_row_names([grafik5], [tabel2])
     result = _settle_by_cited_chart(fact, _evaluate_fact(fact, [tabel2]), [grafik5], names, [tabel2])
     assert result.verdict == "Entailed"
+
+
+def test_groups_named_by_a_range_in_the_sentence_are_checked_not_waved_off():
+    # SK-Agustus-2026: "IPDG ... optimis untuk kelompok pengeluaran di atas Rp3,1 juta, sementara
+    # kelompok lainnya berada pada level pesimis."
+    row = "Indeks Pembelian Barang Tahan Lama (Durable Goods) (IPDG) > Pengeluaran Rp4,1 - 5 juta"
+    source = _ExcelSource(table=_table({(row, 2026, "Aug"): 104.2}), filename="SK",
+                          sheet="Hal. 9 · Tabel 2", origin="pdf")
+    quote = ("IPDG berada pada level optimis untuk kelompok pengeluaran di atas Rp3,1 juta, "
+             "sementara kelompok lainnya berada pada level pesimis.")
+    fact = ExtractedFact(operation="above_threshold", periods=[PeriodPoint(row, 2026, "Aug")],
+                         claimed_value=100.0, unit=None, context_quote=quote)
+    assert _evaluate_fact(fact, [source]).verdict == "Entailed"
+
+    hedged = ExtractedFact(operation="above_threshold", periods=[PeriodPoint(row, 2026, "Aug")],
+                           claimed_value=100.0, unit=None,
+                           context_quote="IPDG optimis pada sebagian besar kelompok pengeluaran.")
+    assert _evaluate_fact(hedged, [source]).verdict == "Inconclusive"

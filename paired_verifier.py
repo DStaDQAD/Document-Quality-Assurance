@@ -599,9 +599,15 @@ def _answers_one_group_of_it(
         if QUAL_SEP in (point.metric_label or "") or QUAL_SEP not in label:
             continue
         claim_words = _sig_words(point.metric_label or "")
-        leaf_words = _sig_words(label.rsplit(QUAL_SEP, 1)[1])
-        if claim_words and leaf_words and not (leaf_words & claim_words):
-            return True
+        if not claim_words:
+            continue
+        # Any level the claim does not name is a group of it — at the end ('IEKLK > SMA') or at
+        # the front, where the per-city table files each index under its city ('Medan > IKK').
+        # An aggregate level ('Total > …') names no group and is let through.
+        for level in label.split(QUAL_SEP):
+            words = _sig_words(level) - _UNNAMED_PARTS
+            if words and not (words & claim_words):
+                return True
     return False
 
 
@@ -1039,7 +1045,71 @@ def _quote_names_qualifier(metric_label: str, quote: str) -> bool:
     if QUAL_SEP not in metric_label:
         return False
     leaf_words = _sig_words(metric_label.rsplit(QUAL_SEP, 1)[1])
-    return bool(leaf_words) and leaf_words <= _sig_words(quote)
+    if bool(leaf_words) and leaf_words <= _sig_words(quote):
+        return True
+    return _quote_bounds_group(metric_label.rsplit(QUAL_SEP, 1)[1], quote)
+
+
+def _id_number(text: str) -> float:
+    return float(text.replace(".", "").replace(",", "."))
+
+
+# A group's own bounds, from its row name: 'Pengeluaran Rp4,1 - 5 juta', '>Rp5 juta',
+# 'Usia 20-30 th', 'Usia >60 th'. The unit word keeps expenditure and age apart.
+_GROUP_SPAN_RE = re.compile(
+    r"Rp\s*(?P<lo>\d+(?:,\d+)?)\s*-\s*(?P<hi>\d+(?:,\d+)?)\s*juta"
+    r"|>\s*Rp\s*(?P<above>\d+(?:,\d+)?)\s*juta"
+    r"|(?P<alo>\d+)\s*-\s*(?P<ahi>\d+)\s*(?:th|tahun)\b"
+    r"|>\s*(?P<aabove>\d+)\s*(?:th|tahun)\b",
+    re.IGNORECASE,
+)
+# A range the SENTENCE draws: "di atas Rp3,1 juta", "di bawah Rp2 juta", "usia 20-40 tahun",
+# "usia >41 tahun".
+_QUOTE_SPAN_RE = re.compile(
+    r"(?:di\s+atas|lebih\s+dari|>)\s*Rp\s*(?P<above>\d+(?:,\d+)?)\s*juta"
+    r"|(?:di\s+bawah|kurang\s+dari|<)\s*Rp\s*(?P<below>\d+(?:,\d+)?)\s*juta"
+    r"|usia\s+(?P<alo>\d+)\s*-\s*(?P<ahi>\d+)\s*tahun"
+    r"|usia\s+(?:di\s+atas\s+|lebih\s+dari\s+|>\s*)(?P<aabove>\d+)\s*tahun",
+    re.IGNORECASE,
+)
+
+
+def _span(match) -> Tuple[str, float, float]:
+    """(kind, low, high) of a _GROUP_SPAN_RE or _QUOTE_SPAN_RE match."""
+    g = match.groupdict()
+    inf = float("inf")
+    if g.get("lo"):
+        return "rp", _id_number(g["lo"]), _id_number(g["hi"])
+    if g.get("above"):
+        return "rp", _id_number(g["above"]), inf
+    if g.get("below"):
+        return "rp", 0.0, _id_number(g["below"])
+    if g.get("alo"):
+        return "age", float(g["alo"]), float(g["ahi"])
+    return "age", float(g["aabove"]), inf
+
+
+def _quote_bounds_group(group: str, quote: str) -> bool:
+    """True when the sentence names this group by a RANGE rather than by its row name.
+
+    SK-Agustus-2026: "IPDG berada pada level optimis untuk kelompok pengeluaran di atas Rp3,1
+    juta, sementara kelompok lainnya berada pada level pesimis". 'Rp4,1 - 5 juta' is nowhere in
+    the words, yet the author has said exactly which groups: every group inside the range, and —
+    since the sentence goes on about the others — every group outside it. Both are checkable
+    rows, not an extractor's stand-in for "most groups".
+    """
+    own = _GROUP_SPAN_RE.search(group)
+    if own is None:
+        return False
+    kind, low, high = _span(own)
+    ranges = [_span(m) for m in _QUOTE_SPAN_RE.finditer(quote)]
+    ranges = [(lo, hi) for k, lo, hi in ranges if k == kind]
+    if not ranges:
+        return False
+    if any(lo <= low and high <= hi for lo, hi in ranges):
+        return True
+    outside_all = all(high <= lo or low >= hi for lo, hi in ranges)
+    return outside_all and re.search(r"\blain(?:nya)?\b", quote, re.IGNORECASE) is not None
 
 
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
