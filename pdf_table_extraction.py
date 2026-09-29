@@ -84,7 +84,7 @@ _TABLE_PAGES_PER_CALL = int(os.getenv("PDF_TABLE_PAGES_PER_CALL", "1"))
 
 # Bump when the prompt, the assembly logic or the verification pass changes: it is part of the
 # cache key, so stale transcriptions from a previous version can never be served.
-_PROMPT_VERSION = "4"
+_PROMPT_VERSION = "7"
 
 _MAX_CACHE_ENTRIES = 8
 
@@ -1645,6 +1645,16 @@ _TABLE_STRIP_PX = int(os.getenv("PDF_TABLE_STRIP_PX", "450"))
 _INK_LUMA = 128
 
 
+class _RowCell(BaseModel):
+    column: str = Field(..., description="Nama kolom dari header, mis. 'Jan 2025' atau 'Perubahan'.")
+    value: str = Field("", description="Angka di sel itu persis seperti tercetak; '' bila kosong.")
+
+
+class _RowCells(BaseModel):
+    label: str = Field(..., description="Label baris persis seperti tercetak.")
+    cells: List[_RowCell] = Field(default_factory=list)
+
+
 class _StripRows(BaseModel):
     rows: List[List[str]] = Field(
         default_factory=list,
@@ -1679,6 +1689,7 @@ class _TableImage:
     """One page's table picture, cut into strips (base64 PNG, top to bottom)."""
     strips: List[str]
     caption: str    # the page's table caption from the text layer, "" when it has none
+    whole: str = ""  # the uncut picture (base64 PNG), for re-reading one row against the header
 
 
 def _cut_rows(image, strip_px: int = _TABLE_STRIP_PX) -> list:
@@ -1753,12 +1764,16 @@ def _table_images(pdf_bytes: bytes, pages: set) -> Dict[int, _TableImage]:
                 continue
             finally:
                 page.close()
+            buffer = io.BytesIO()
+            image.save(buffer, format="PNG")
+            whole = base64.b64encode(buffer.getvalue()).decode("ascii")
             strips = []
             for strip in _cut_rows(image):
                 buffer = io.BytesIO()
                 strip.save(buffer, format="PNG")
                 strips.append(base64.b64encode(buffer.getvalue()).decode("ascii"))
-            found[index] = _TableImage(strips=strips, caption=captions[0] if captions else "")
+            found[index] = _TableImage(strips=strips, caption=captions[0] if captions else "",
+                                       whole=whole)
     finally:
         doc.close()
     return found
@@ -1825,6 +1840,7 @@ async def _transcribe_table_image(
     table = _merge_one_table(head.tables) if head is not None else None
     if table is None or not table.header_rows:
         return []
+    origins = [0] * len(table.rows)      # which strip each row was read from
 
     if len(picture.strips) > 1:
         width = Counter(len(r) for r in table.rows).most_common(1)[0][0]
@@ -1857,13 +1873,157 @@ async def _transcribe_table_image(
                     "above it only.", page_number, n + 2, len(rows),
                 )
                 break
-            rows.extend(r for r in result.rows if not _is_header_echo(r, table.header_rows))
+            kept = [r for r in result.rows if not _is_header_echo(r, table.header_rows)]
+            rows.extend(kept)
+            origins.extend([n + 1] * len(kept))
         table = table.model_copy(update={"rows": rows})
 
     if picture.caption:
         table = table.model_copy(update={"caption": picture.caption})
+    table = await _repair_off_width_rows(
+        table, origins, picture, vision_llm, semaphore, max_retries, page_number, number_format
+    )
     table = _drop_off_width_rows(table, page_number, number_format)
     return _to_pdf_tables([table], page_number, number_format)
+
+
+# How many off-width rows of one table are worth a second look each.
+_MAX_ROW_REPAIRS = 8
+# How much of the first reading a re-read row must keep, in order, to be the same row.
+_REPAIR_MIN_AGREEMENT = 0.8
+
+_ROW_REPAIR_PROMPT = """\
+Gambar berikut adalah satu tabel statistik Bank Indonesia. Header tabel, seperti tercetak:
+{header}
+
+Baca HANYA baris berlabel "{label}"{section}. Untuk SETIAP kolom data dari kiri ke kanan, tulis
+nama kolomnya (bulan dan tahun dari header, atau nama kolom lain seperti "Perubahan") dan angka
+di sel baris itu pada kolom tersebut, persis seperti tercetak (koma desimal tetap koma). Baris ini
+punya tepat {columns} kolom data. Angka yang sama bisa muncul di beberapa kolom — berdampingan
+maupun tidak — dan setiap kolom punya selnya sendiri. Jangan menebak dan jangan menghitung; sel
+kosong ditulis "".
+"""
+
+
+def _cells_match_header(cells: List["_RowCell"], period_row: List[str], width: int) -> bool:
+    """True when every re-read cell names the month its position in the header holds.
+
+    The header's period row either includes the label column's cell or starts at the first data
+    column (see _align_header_to_body); cell i sits under period_row[i + offset] either way. A
+    header cell that is not a period (the change column) is not checked.
+    """
+    offset = 1 if len(period_row) == width else 0
+    for index, cell in enumerate(cells):
+        position = index + offset
+        if position >= len(period_row):
+            return False
+        wanted = _bare_period_token(period_row[position])
+        if wanted is None:
+            continue
+        named = {_bare_period_token(word) for word in re.findall(r"[A-Za-z]+", cell.column)}
+        if wanted not in named:
+            return False
+    return True
+
+
+async def _repair_off_width_rows(
+    table: _PdfTableOut,
+    origins: List[int],
+    picture: _TableImage,
+    vision_llm: BaseChatModel,
+    semaphore: asyncio.Semaphore,
+    max_retries: int,
+    page_number: int,
+    number_format: str,
+) -> _PdfTableOut:
+    """Ask for each row of the wrong width once more, on its own, before it is given up.
+
+    SK-Agustus-2026 lost Tabel 1's IEKLK row and Tabel 5's 'Konsumsi' row for Rp2,1 - 3 juta
+    the same way on every run: 21 cells for 22 columns. The IEKLK row prints 135,1 for both
+    Desember 2025 and Januari 2026, and the two identical neighbours were read as one.
+    _drop_off_width_rows is right to refuse them — which cell went missing cannot be told — but
+    both are rows the report's charts and prose quote, so Grafik 11's and Grafik 19's labels
+    came back with nothing to be checked against. Asked for that one row alone, told its section
+    and asked column by column on the whole picture — header in view — the model copies it
+    whole. (Given its first reading as a hint, it only repeated it; asked for a bare list of
+    values off a strip with no header, it skipped the same repeated value again.)
+
+    A re-read is taken only when it has the table's width AND keeps most of the first reading's
+    values in order (_REPAIR_MIN_AGREEMENT), so it cannot swap in a neighbouring row. Anything
+    else leaves the row to be dropped as before.
+    """
+    import difflib
+
+    def values(row: List) -> List[str]:
+        return [str(c).strip() for c in row[1:] if str(c or "").strip()]
+
+    def has_value(row: List) -> bool:
+        return any(isinstance(_coerce_cell(c, number_format), (int, float)) for c in row[1:])
+
+    widths = Counter(len(r) for r in table.rows if has_value(r))
+    if not widths:
+        return table
+    width = widths.most_common(1)[0][0]
+    bad = [i for i, r in enumerate(table.rows) if has_value(r) and len(r) != width]
+    if not bad:
+        return table
+
+    header = "\n".join(" | ".join(str(c or "") for c in r) for r in table.header_rows)
+    period_row = [str(c or "").strip() for c in table.header_rows[-1]]
+    repair_llm = vision_llm.with_structured_output(_RowCells)
+
+    def section_of(index: int) -> str:
+        for row in reversed(table.rows[:index]):
+            if row and not has_value(row) and str(row[0] or "").strip():
+                return f" di bawah judul seksi \"{str(row[0]).strip()}\""
+        return ""
+
+    async def reread(index: int) -> Optional[List[str]]:
+        row = table.rows[index]
+        prompt = _ROW_REPAIR_PROMPT.format(
+            header=header, label=str(row[0]).strip(), section=section_of(index), columns=width - 1,
+        )
+        # The whole picture, header included: a row at the top of a later strip was read with no
+        # column heads in view, and re-read from that strip it came back just as short.
+        strip = picture.whole or picture.strips[min(origins[index], len(picture.strips) - 1)]
+
+        async def _call():
+            return await repair_llm.ainvoke([HumanMessage(content=[
+                {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{strip}"}},
+                {"type": "text", "text": prompt},
+            ])])
+
+        result = await call_vision_with_retry(
+            _call, semaphore=semaphore, max_retries=max_retries,
+            label=f"table picture, page {page_number}, row repair", on_give_up=lambda: None,
+        )
+        if result is None:
+            return None
+        candidate = [str(row[0])] + [c.value for c in result.cells]
+        if len(candidate) != width or _norm_label(result.label) != _norm_label(row[0]):
+            return None
+        # Each cell must say it belongs to the column it sits in. On one SK-Agustus-2026 run the
+        # re-read IEKLK row had the right width and the right numbers — shifted: Agustus's
+        # 125,7 under Juli and an empty Agustus — and was taken, refuting a correct 123,1.
+        if not _cells_match_header(result.cells, period_row, width):
+            return None
+        had_blank = any(not str(c or "").strip() for c in row[1:])
+        if not had_blank and any(not c.value.strip() for c in result.cells):
+            return None
+        agreement = difflib.SequenceMatcher(None, values(row), values(candidate)).ratio()
+        return candidate if agreement >= _REPAIR_MIN_AGREEMENT else None
+
+    targets = bad[:_MAX_ROW_REPAIRS]
+    repaired = await asyncio.gather(*[reread(i) for i in targets])
+    rows = list(table.rows)
+    fixed = 0
+    for index, new_row in zip(targets, repaired):
+        if new_row is not None:
+            rows[index] = new_row
+            fixed += 1
+    logger.info("Page %d: re-read %d off-width row(s) of the table picture, %d recovered.",
+                page_number, len(targets), fixed)
+    return table.model_copy(update={"rows": rows})
 
 
 def _drop_off_width_rows(

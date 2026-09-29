@@ -270,3 +270,46 @@ def test_the_survey_appendix_pages_are_found_as_table_pictures():
     assert pictures[8].caption.startswith("Tabel 2")
     assert len(pictures[8].strips) >= 2          # 60 rows: read in strips
     assert len(pictures[7].strips) == 1          # Tabel 1, 12 rows: read whole
+
+
+def test_a_row_read_one_cell_short_is_read_again_column_by_column():
+    # SK-Agustus-2026 Tabel 1: 135,1 printed twice in a row, read as one — 21 cells for 22.
+    from pdf_table_extraction import _RowCell, _RowCells
+
+    header = [["", "2026", "", "", "Perubahan"], ["KETERANGAN", "Mei", "Juni", "Juli", "(Jul-Jun)"]]
+    rows = [["- Indeks Keyakinan Konsumen (IKK)", "120,9", "117,8", "116,8", "-1,0"],
+            ["- Indeks Ekspektasi Konsumen (IEK)", "129,7", "126,4", "125,7", "-0,7"],
+            ["- Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)", "135,1", "123,1", "-12,0"]]
+    head = _PageTables(tables=[_PdfTableOut(caption="Tabel 1", unit=None, header_rows=header, rows=rows)])
+    repaired = _RowCells(label="- Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)", cells=[
+        _RowCell(column="Mei 2026", value="135,1"), _RowCell(column="Juni 2026", value="135,1"),
+        _RowCell(column="Juli 2026", value="123,1"), _RowCell(column="Perubahan", value="-12,0"),
+    ])
+    llm, repair_channel = _picture_llm(head, [repaired])
+    picture = _TableImage(strips=[_png()], caption="Tabel 1 Indeks Keyakinan Konsumen", whole=_png())
+
+    tables = asyncio.run(_transcribe_table_image(
+        8, picture, llm, asyncio.Semaphore(2), max_retries=1, number_format="id"))
+
+    table = parse_generic_grid(tables[0].grid)
+    ieklk = "- Indeks Ekspektasi Ketersediaan Lapangan Kerja (IEKLK)"
+    assert table.lookup(ieklk, 2026, "Jun") == 135.1
+    assert table.lookup(ieklk, 2026, "Jul") == 123.1
+    assert "kolom data" in repair_channel.ainvoke.call_args.args[0][0].content[1]["text"]
+
+
+def test_a_re_read_that_is_a_different_row_is_not_taken():
+    from pdf_table_extraction import _RowCell, _RowCells
+
+    header = [["", "2026", "2026"], ["KETERANGAN", "Juni", "Juli"]]
+    rows = [["- IKK", "117,8", "116,8"], ["- IKE", "109,2", "107,9"], ["- IEK", "126,4"]]
+    head = _PageTables(tables=[_PdfTableOut(caption="Tabel 1", unit=None, header_rows=header, rows=rows)])
+    other_row = _RowCells(label="- IEK", cells=[_RowCell(column="Juni 2026", value="999,9"),
+                                                _RowCell(column="Juli 2026", value="888,8")])
+    llm, _ = _picture_llm(head, [other_row])
+    picture = _TableImage(strips=[_png()], caption="Tabel 1", whole=_png())
+
+    tables = asyncio.run(_transcribe_table_image(
+        8, picture, llm, asyncio.Semaphore(2), max_retries=1, number_format="id"))
+    labels = [r[0] for r in tables[0].grid if isinstance(r[0], str)]
+    assert not any("IEK" == l.strip("- ").strip() for l in labels)
