@@ -39,7 +39,7 @@ from cell_pointer import (
 from excel_parser_bi import BITableData, parse_bi_table
 from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
-from table_model import QUAL_SEP, _sig_words, label_match_score
+from table_model import QUAL_SEP, _expand_report_terms, _sig_words, label_match_score
 from table_parser_generic import (
     _MONTH_ABBREVS,
     _load_grid,
@@ -637,7 +637,9 @@ def _answers_one_group_of_it(
     for point, (label, _value) in zip(fact.periods, resolved):
         if QUAL_SEP in (point.metric_label or "") or QUAL_SEP not in label:
             continue
-        claim_words = _sig_words(point.metric_label or "")
+        # In the tables' vocabulary: "average propensity to consume ratio" names the 'Konsumsi'
+        # level of 'Total > Konsumsi' though no word of it appears there (see _REPORT_TERMS).
+        claim_words = _sig_words(_expand_report_terms(point.metric_label or ""))
         if not claim_words:
             continue
         # Any level the claim does not name is a group of it — at the end ('IEKLK > SMA') or at
@@ -1151,6 +1153,92 @@ def _quote_bounds_group(group: str, quote: str) -> bool:
     return outside_all and re.search(r"\blain(?:nya)?\b", quote, re.IGNORECASE) is not None
 
 
+def _groups_the_sentence_names(
+    fact: ExtractedFact, sources: List[_ExcelSource]
+) -> List[str]:
+    """Rows of the claim's own series for the groups its sentence names, when the claim names
+    none itself.
+
+    SK-Agustus-2026: "persepsi responden terhadap ketersediaan lapangan pekerjaan saat ini
+    meningkat pada responden berpendidikan SMA dan akademi/diploma" came out as one IKLK trend
+    with no group, and was checked against the national IKLK — right by coincidence (it rose
+    too), about the wrong series. The sentence is about the SMA and Akademi/Diploma rows.
+
+    A row counts when one of its levels IS the claim's series (as the table spells it: every
+    word of the rewritten name, so IEKLK does not pass for IKLK) and every other level is named
+    in the sentence. Taken from the first table that has any, so the groups come from one
+    breakdown.
+    """
+    if any(QUAL_SEP in (p.metric_label or "") for p in fact.periods):
+        return []
+    names = {p.metric_label for p in fact.periods}
+    if len(names) != 1:
+        return []
+    quote_words, quote_figures = _label_tokens(fact.context_quote or "")
+    quote_figures = set(quote_figures)
+
+    def named_in_quote(level: str) -> bool:
+        # Words AND figures: 'Usia 20-30 th' and 'Usia 31-40 th' differ only in their figures.
+        words, figures = _label_tokens(level)
+        return bool(words | set(figures)) and words <= quote_words and set(figures) <= quote_figures
+
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        series_words = _sig_words(src.table._normalise_query(next(iter(names))))
+        if not series_words:
+            continue
+        rows = []
+        for label in src.table.row_labels:
+            levels = [level.strip() for level in label.split(QUAL_SEP)]
+            if len(levels) < 2:
+                continue
+            is_series = [series_words <= _sig_words(level) for level in levels]
+            others = [level for level, own in zip(levels, is_series) if not own]
+            if any(is_series) and others and all(named_in_quote(level) for level in others):
+                rows.append(label)
+        if rows:
+            return rows
+    return []
+
+
+def _judge_per_group(
+    fact: ExtractedFact, rows: List[str], sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """The claim checked on each named group's row; it holds only if it holds for every one."""
+    verdicts = []
+    for row in rows:
+        sub = ExtractedFact(
+            operation=fact.operation,
+            periods=[PeriodPoint(row, p.year, p.month, p.col_label) for p in fact.periods],
+            claimed_value=fact.claimed_value, unit=fact.unit,
+            context_quote=fact.context_quote, page_number=fact.page_number,
+        )
+        verdicts.append((row, _evaluate_fact(sub, sources)))
+    if any(r.verdict == "Refuted" for _, r in verdicts):
+        overall = "Refuted"
+    elif any(r.verdict == "Inconclusive" for _, r in verdicts):
+        overall = "Inconclusive"
+    else:
+        overall = "Entailed"
+    head = next((r for _, r in verdicts if r.verdict == overall), verdicts[0][1])
+    lines = " | ".join(
+        f"{row}: {VERDICT_TEXT.get(r.verdict, r.verdict)} — {r.reasoning.split(' | ')[-1]}"
+        for row, r in verdicts
+    )
+    return head.model_copy(update={
+        "verdict": overall,
+        "metric_label": fact.display_label,
+        "reasoning": (
+            f"Kalimat ini tentang kelompok yang disebutnya, bukan '{fact.display_label}' secara "
+            f"keseluruhan; diperiksa per kelompok. | {lines}"
+        ),
+    })
+
+
+VERDICT_TEXT = {"Entailed": "sesuai", "Refuted": "tidak sesuai", "Inconclusive": "tidak cukup data"}
+
+
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     # A time-only operation over categorical data points can never be computed — fail fast
     # with an explanation instead of scanning sources for data that cannot qualify.
@@ -1183,6 +1271,13 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     "diklaim."
                 ),
             )
+
+    # A trend or threshold the sentence states for named groups is checked on THOSE groups,
+    # whatever name the extractor gave it — see _groups_the_sentence_names.
+    if fact.operation in _TREND_OPS | _THRESHOLD_OPS:
+        group_rows = _groups_the_sentence_names(fact, sources)
+        if group_rows:
+            return _judge_per_group(fact, group_rows, sources)
 
     # A trend must follow ONE metric. When the extractor bundles several DIFFERENT metrics
     # into one fact (e.g. "SBT meningkat pada KMK, KI, dan KK" — three metrics at the same
@@ -1564,6 +1659,12 @@ def _attach_source_comparison(
         # government) beside Lampiran 1's 38,6% (the monetary system's) invites the reader to
         # doubt a number that was never in question. Same reasoning as the score filter above.
         and _may_contradict(head_cand_for_filter, pair[0])
+        # A chart is compared with the tables on the Cek Grafik tab, label by label, where a
+        # misread position is recognised as one. Beside a claim it only ever repeated that
+        # comparison without the recognition: SK-Agustus-2026's IKLK claims, right against
+        # Tabel 1, were flagged "Grafik berbeda dengan tabel" because the model had read Grafik
+        # 4's 104,1 and 101,1 one month apart.
+        and pair[0].src.origin != "chart"
     ]
     result = per_source[0][1]
     values = [_source_value(cand, res) for cand, res in per_source]
@@ -1608,9 +1709,7 @@ def _attach_source_comparison(
             differs = head.verdict != other.verdict
         if differs:
             conflicting = other
-            if "chart" in (head.origin, other.origin):
-                conflict = "chart"
-            elif "pdf_other" in (head.origin, other.origin):
+            if "pdf_other" in (head.origin, other.origin):
                 conflict = "cross_pdf"
             elif head.origin == other.origin == "pdf":
                 conflict = "internal"
@@ -1631,7 +1730,6 @@ def _attach_source_comparison(
         "internal": "dua tabel di dalam PDF saling bertentangan",
         "cross": "tabel di PDF dan sumber Excel tidak sinkron",
         "cross_pdf": "tabel di PDF lain memuat angka berbeda (bisa jadi angka revisi)",
-        "chart": "angka yang tercetak di grafik berbeda dengan tabel",
     }[conflict]
     note = f" | KONFLIK SUMBER: {_fmt(head)} vs {_fmt(conflicting)} — {explanation}"
     return result.model_copy(update={
@@ -2138,6 +2236,7 @@ def _chart_source(
     filename: str,
     row_names: Optional[Dict[Tuple[str, str], str]] = None,
     table_sources: Optional[List[_ExcelSource]] = None,
+    checks: Optional[List[Tuple[ExtractedFact, FactVerificationResult]]] = None,
 ) -> _ExcelSource:
     """A chart's level labels as a sparse source, keyed by the tables' own row names where
     _chart_row_names found them — so a narrative claim resolves against the chart exactly as it
@@ -2153,14 +2252,14 @@ def _chart_source(
     row_names = row_names or {}
     data: Dict[Tuple, float] = {}
     clashing: set = set()
-    for point in reading.points:
-        if point.kind != "level":
-            continue
-        label = row_names.get((reading.indicator, point.series)) or reading.metric_label(point.series)
-        key = (label, point.year, point.month)
-        if key in data and abs(data[key] - point.value) > MATCH_TOLERANCE:
+    for label, year, month, value in (
+        _settled_levels(checks) if checks is not None else _read_levels(reading, row_names)
+    ):
+        key = (label, year, month)
+        point_value = value
+        if key in data and abs(data[key] - point_value) > MATCH_TOLERANCE:
             clashing.add(key)
-        data.setdefault(key, point.value)
+        data.setdefault(key, point_value)
     for key in clashing:
         del data[key]
     labels = list(dict.fromkeys(key[0] for key in data))
@@ -2173,6 +2272,34 @@ def _chart_source(
     )
     table._data.update(data)
     return _ExcelSource(table=table, filename=filename, sheet=reading.label, origin="chart")
+
+
+def _read_levels(reading: ChartReading, row_names: Dict[Tuple[str, str], str]):
+    """(row, year, month, value) for every level label, where the model placed it."""
+    for point in reading.points:
+        if point.kind == "level":
+            label = (row_names.get((reading.indicator, point.series))
+                     or reading.metric_label(point.series))
+            yield label, point.year, point.month, point.value
+
+
+def _settled_levels(checks: List[Tuple[ExtractedFact, FactVerificationResult]]):
+    """(row, year, month, value) for the level labels a chart can be trusted with.
+
+    A label the tables confirmed goes where they confirmed it — the settled period, not the one
+    the model read (see _settle_chart_placement). A label no table could speak to (its series
+    has no row) stays where it was read: that is what the chart is a fallback FOR. A label the
+    tables contradict, or that matched another line of the chart, is left out.
+    """
+    for fact, result in checks:
+        if fact.operation != "value":
+            continue
+        if result.verdict == "Entailed" and result.periods:
+            p = result.periods[0]
+            yield p.metric_label, p.year, p.month, fact.claimed_value
+        elif result.verdict == "Inconclusive" and result.matched_excel_source is None:
+            p = fact.periods[0]
+            yield p.metric_label, p.year, p.month, fact.claimed_value
 
 
 def chart_label_facts(
@@ -2615,11 +2742,13 @@ async def verify_paired(
     # names would steer how the narrative's claims get named.
     table_sources = list(parsed_sources)
     row_names = _chart_row_names(chart_readings or [], table_sources)
-    for reading in (chart_readings or []):
-        parsed_sources.append(_chart_source(reading, pdf_filename, row_names, table_sources))
-        excel_parsers.append("chart")
     per_chart = [(reading, _check_reading(reading, table_sources, row_names))
                  for reading in (chart_readings or [])]
+    for reading, checks in per_chart:
+        parsed_sources.append(
+            _chart_source(reading, pdf_filename, row_names, table_sources, checks=checks)
+        )
+        excel_parsers.append("chart")
     chart_checks = [summarize_chart(reading, checks) for reading, checks in per_chart if checks]
     chart_facts = [fact for _, checks in per_chart for fact, _ in checks]
 

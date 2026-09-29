@@ -1546,7 +1546,6 @@ body.auth-locked .app {
     internal: "Tabel internal tidak konsisten",
     cross: "PDF vs Excel berbeda",
     cross_pdf: "Beda dengan PDF lain",
-    chart: "Grafik berbeda dengan tabel",
   };
   const TYPE_LABEL    = {
     value: "Nilai", yoy_growth: "% YoY", average: "Rata-rata", sum: "Total",
@@ -1915,7 +1914,7 @@ body.auth-locked .app {
               <div class="chart-issue-why">${escapeHtml(why)}</div>
             </li>`;
           }).join("");
-          return `<div class="fact-card ${escapeHtml(c.verdict)}">
+          return `<div class="fact-card chart-card ${escapeHtml(c.verdict)}">
             <div class="fact-card-top">
               <span class="badge ${escapeHtml(c.verdict)}">${escapeHtml(VERDICT_LABEL[c.verdict] || c.verdict)}</span>
               <span class="fact-metric">${escapeHtml(c.caption)}</span>
@@ -2000,7 +1999,9 @@ body.auth-locked .app {
       const q = currentSearch.trim().toLowerCase();
       const counts = { all: 0, Entailed: 0, Refuted: 0, Inconclusive: 0, conflict: 0 };
       let visible = 0;
-      resultEl.querySelectorAll(".fact-card").forEach((card) => {
+      // Only the claim cards: the Cek Grafik tab reuses the card styling, and its cards carry
+      // none of the attributes filtered on — a filter here used to hide every chart card.
+      resultEl.querySelectorAll('[data-report-panel="fact"] .fact-card').forEach((card) => {
         const matchesOthers = (!currentSource || card.dataset.source === currentSource)
           && (!currentPage || card.dataset.page === currentPage)
           && (!q || card.dataset.search.includes(q));

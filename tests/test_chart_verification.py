@@ -188,14 +188,29 @@ def test_a_chart_answers_a_claim_no_table_can():
     assert "Grafik 2" in result.matched_excel_source
 
 
-def test_the_table_decides_and_a_disagreeing_chart_is_reported_as_a_chart_conflict():
+def test_the_table_decides_and_a_chart_is_never_a_rival_beside_a_claim():
+    # Chart-vs-table differences belong to the Cek Grafik tab; beside a claim they only repeated
+    # the model's misreadings (SK-Agustus-2026: IKLK flagged against a misplaced Grafik 4).
     appendix = _appendix()
     chart = _chart_src(_pt("Rp1 - 2 juta", "Jun", 118.9), sources=[appendix])
 
     result = _evaluate_fact(_claim(_IKK_RP1, "Jun", 108.9), [appendix, chart])
     assert result.verdict == "Entailed"
     assert "Tabel 2" in result.matched_excel_source
-    assert result.source_conflict == "chart"
+    assert result.source_conflict is None
+    assert not any(sv.origin == "chart" for sv in result.source_values)
+
+
+def test_a_chart_source_holds_its_labels_where_the_tables_placed_them():
+    # The model read June's 108,9 on the May bar; the settled check moved it to June.
+    appendix = _appendix()
+    reading = _grafik2(_pt("Rp1 - 2 juta", "May", 108.9), _pt("Rp1 - 2 juta", "Jun", 999.0))
+    names = _chart_row_names([reading], [appendix])
+    checks = check_chart_labels([reading], [appendix], names)
+    source = _chart_source(reading, "SK", names, [appendix], checks=checks)
+    assert source.table.lookup(_IKK_RP1, 2026, "Jun") == 108.9
+    assert source.table.lookup(_IKK_RP1, 2026, "May") is None       # the misread spot
+    assert (_IKK_RP1, 2026, "Jun") in source.table._data            # 999,0 was refuted, left out
 
 
 # ---------------------------------------------------------------------------
@@ -411,3 +426,57 @@ def test_a_chart_summary_carries_the_chart_picture():
     reading.thumbnail = "data:image/jpeg;base64,AAAA"
     chart = summarize_chart(reading, check_chart_labels([reading], [_appendix()]))
     assert chart.thumbnail == "data:image/jpeg;base64,AAAA"
+
+
+def test_a_trend_stated_for_named_groups_is_checked_on_those_groups():
+    # SK-Agustus-2026: "persepsi responden terhadap ketersediaan lapangan pekerjaan saat ini
+    # meningkat pada responden berpendidikan SMA dan akademi/diploma" — extracted without groups.
+    iklk = "Indeks Ketersediaan Lapangan Kerja (IKLK)"
+    tabel1 = _ExcelSource(table=_table({(iklk, 2026, "Jul"): 101.1, (iklk, 2026, "Aug"): 104.1},
+                                       title="Tabel 1"), filename="SK", sheet="Hal. 8 · Tabel 1", origin="pdf")
+    rows = {f"{iklk} > SMA": (95.9, 100.5), f"{iklk} > Akademi/Diploma": (106.2, 108.0),
+            f"{iklk} > Sarjana": (114.5, 112.8)}
+    data = {}
+    for row, (jul, aug) in rows.items():
+        data[(row, 2026, "Jul")], data[(row, 2026, "Aug")] = jul, aug
+    tabel4 = _ExcelSource(table=_table(data, title="Tabel 4 per Tingkat Pendidikan"),
+                          filename="SK", sheet="Hal. 11 · Tabel 4", origin="pdf")
+    quote = ("persepsi responden terhadap ketersediaan lapangan pekerjaan saat ini meningkat pada "
+             "responden berpendidikan SMA dan akademi/diploma")
+    fact = ExtractedFact(operation="is_increasing",
+                         periods=[PeriodPoint("persepsi responden terhadap ketersediaan lapangan "
+                                              "pekerjaan saat ini", 2026, "Aug")],
+                         claimed_value=None, unit=None, context_quote=quote)
+
+    result = _evaluate_fact(fact, [tabel1, tabel4])
+    assert result.verdict == "Entailed"
+    assert "SMA" in result.reasoning and "Akademi/Diploma" in result.reasoning
+    assert "Sarjana" not in result.reasoning          # a group the sentence did not name
+
+    # Had Sarjana been named too, its fall would refute the claim.
+    fact.context_quote = quote.replace("SMA dan", "SMA, sarjana, dan")
+    assert _evaluate_fact(fact, [tabel1, tabel4]).verdict == "Refuted"
+
+
+def test_an_age_group_is_told_apart_by_its_figures():
+    ikk = "Indeks Keyakinan Konsumen (IKK)"
+    data = {}
+    for group, (jul, aug) in {"Usia 20-30 th": (120.0, 124.3), "Usia 31-40 th": (125.0, 120.5)}.items():
+        data[(f"{ikk} > {group}", 2026, "Jul")], data[(f"{ikk} > {group}", 2026, "Aug")] = jul, aug
+    tabel3 = _ExcelSource(table=_table(data, title="Tabel 3"), filename="SK", sheet="Tabel 3", origin="pdf")
+    fact = ExtractedFact(operation="is_increasing", periods=[PeriodPoint(ikk, 2026, "Aug")],
+                         claimed_value=None, unit=None,
+                         context_quote="IKK meningkat pada responden usia 20-30 tahun")
+    result = _evaluate_fact(fact, [tabel3])
+    assert result.verdict == "Entailed" and "31-40" not in result.reasoning
+
+
+def test_an_english_report_term_is_not_mistaken_for_a_group_of_itself():
+    # SK-Agustus-2026: "average propensity to consume ratio ... 73,0%" against Tabel 5's
+    # 'Total > Konsumsi' — the claim names that level, in English.
+    tabel5 = _ExcelSource(table=_table({("Total > Konsumsi", 2026, "Aug"): 73.0,
+                                        ("Rp 1 - 2 juta > Konsumsi", 2026, "Aug"): 76.1},
+                                       title="Tabel 5 Perkembangan Proporsi Pengeluaran Responden"),
+                          filename="SK", sheet="Hal. 12 · Tabel 5", origin="pdf")
+    result = _evaluate_fact(_claim("average propensity to consume ratio", "Aug", 73.0), [tabel5])
+    assert result.verdict == "Entailed"
