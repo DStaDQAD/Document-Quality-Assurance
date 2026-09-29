@@ -131,6 +131,8 @@ class ChartCheck(BaseModel):
     refuted_count: int
     inconclusive_count: int
     issues: List[FactVerificationResult] = Field(default_factory=list)
+    # The chart itself, small: a data-URL JPEG of the region its labels were read from.
+    thumbnail: Optional[str] = None
 
 
 class TypoIssue(BaseModel):

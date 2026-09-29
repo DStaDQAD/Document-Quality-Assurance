@@ -244,3 +244,28 @@ def test_a_prose_column_is_found_by_the_left_edge_its_lines_share():
     # A chart with only its own text beside it is left full width.
     chart_only = [g for g in glyphs if g[1] < 300]
     assert _prose_column_edge(chart_only, 30, 400, 520) is None
+
+
+def test_every_reading_carries_a_small_picture_of_its_chart():
+    import base64
+    import io
+
+    from PIL import Image
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (1536, 1000), "white").save(buffer, format="PNG")
+    png = base64.b64encode(buffer.getvalue()).decode("ascii")
+    llm = _llm(_PageCharts(charts=[_chart([_point()])]))
+    patches = _patched_regions([2])
+    for p in patches:
+        p.start()
+    try:
+        with patch("pdf_chart_extraction._render_regions", return_value=[(2, png)]):
+            [reading] = asyncio.run(extract_charts_from_pdf(b"%PDF-fake", llm))
+    finally:
+        for p in patches:
+            p.stop()
+
+    assert reading.thumbnail.startswith("data:image/jpeg;base64,")
+    thumb = Image.open(io.BytesIO(base64.b64decode(reading.thumbnail.split(",", 1)[1])))
+    assert max(thumb.size) <= 720

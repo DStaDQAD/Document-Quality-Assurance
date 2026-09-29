@@ -50,7 +50,7 @@ from table_parser_generic import _MONTH_ABBREVS, _bare_period_token
 logger = logging.getLogger("fact-checker")
 
 # Bump when the prompt or the region logic changes: it is part of the cache key.
-_PROMPT_VERSION = "5"
+_PROMPT_VERSION = "6"
 _MAX_CACHE_ENTRIES = 8
 
 # A chart caption, matched on the line with every space removed: the text layer spells it
@@ -86,6 +86,9 @@ class ChartReading:
     indicator: str      # 'Indeks Keyakinan Konsumen (IKK)', or '' when each series is one
     unit: str
     points: List[ChartPoint] = field(default_factory=list)
+    # A small JPEG of the region the labels were read from, as a data URL, so the reader can
+    # see the chart a verdict is about. None when it could not be made.
+    thumbnail: Optional[str] = None
 
     @property
     def label(self) -> str:
@@ -393,6 +396,29 @@ def _ink_box(page, box: Tuple[float, float, float, float]) -> Tuple[float, float
     )
 
 
+def _drop_page_art(page, width: float, height: float) -> None:
+    """Take the page's full-bleed background picture out before its charts are rendered.
+
+    SK-Juni-2026 prints a pale wave across every page as one picture that bleeds off the page
+    edges. It left ink in every pixel row below a chart, so _ink_box found no blank band to stop
+    at and Grafik 1's picture came with half a page of wave and footer. Only pictures reaching
+    past the page are removed (the same test _table_images uses for background art), and only
+    from this in-memory copy: the chart's own markers and bitmaps stay.
+    """
+    import pypdfium2.raw as pdfium_c
+
+    art = []
+    for obj in page.get_objects(filter=[pdfium_c.FPDF_PAGEOBJ_IMAGE], max_depth=1):
+        left, bottom, right, top = obj.get_bounds()
+        if left < -1 or bottom < -1 or right > width + 1 or top > height + 1:
+            art.append(obj)
+    for obj in art:
+        page.remove_obj(obj)
+        obj.close()     # a removed object belongs to nothing and must be released here
+    if art:
+        page.gen_content()
+
+
 @pdfium_exclusive
 def _render_regions(
     pdf_bytes: bytes, regions: Dict[int, List[Tuple[float, float, float, float]]], max_px: int
@@ -410,6 +436,7 @@ def _render_regions(
             page = doc[page_number - 1]
             try:
                 width, height = page.get_size()
+                _drop_page_art(page, width, height)
                 for left, bottom, right, top in regions[page_number]:
                     right = width - _SIDE_MARGIN_PT if right < 0 else right
                     left, top = max(left, 0.0), min(top, height)
@@ -547,6 +574,26 @@ def _to_reading(out: _ChartOut, page_number: int, number_format: str,
     )
 
 
+# Longest side of a chart's thumbnail, and its JPEG quality: legible labels at a size that keeps
+# twenty charts to about a megabyte of response.
+_THUMBNAIL_PX = 720
+_THUMBNAIL_QUALITY = 80
+
+
+def _thumbnail(png_b64: str) -> Optional[str]:
+    """A data-URL JPEG of a rendered chart region, scaled down; None when it is not an image."""
+    try:
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(base64.b64decode(png_b64))).convert("RGB")
+        image.thumbnail((_THUMBNAIL_PX, _THUMBNAIL_PX))
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=_THUMBNAIL_QUALITY, optimize=True)
+    except Exception:
+        return None
+    return "data:image/jpeg;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -634,7 +681,10 @@ async def extract_charts_from_pdf(
                             page_number)
                 result = await structured.ainvoke(message)
             reading = _to_reading(_one_chart(result.charts), page_number, number_format, fallback)
-            return [reading] if reading is not None else []
+            if reading is None:
+                return []
+            reading.thumbnail = _thumbnail(b64)
+            return [reading]
 
         started = time.monotonic()
         readings = await call_vision_with_retry(

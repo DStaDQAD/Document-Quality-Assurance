@@ -2441,6 +2441,7 @@ def summarize_chart(
         refuted_count=counts["Refuted"],
         inconclusive_count=counts["Inconclusive"],
         issues=[result for _, result in checks if result.verdict != "Entailed"],
+        thumbnail=reading.thumbnail,
     )
 
 

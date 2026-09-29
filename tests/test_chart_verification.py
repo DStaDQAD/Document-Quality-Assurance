@@ -404,3 +404,10 @@ def test_a_total_named_only_total_is_checked_against_a_table_about_the_sentence_
     assert result.verdict == "Entailed"
     assert "Tabel 5" in result.matched_excel_source
     assert result.source_conflict is None
+
+
+def test_a_chart_summary_carries_the_chart_picture():
+    reading = _grafik2(_pt("Rp1 - 2 juta", "Jun", 108.9))
+    reading.thumbnail = "data:image/jpeg;base64,AAAA"
+    chart = summarize_chart(reading, check_chart_labels([reading], [_appendix()]))
+    assert chart.thumbnail == "data:image/jpeg;base64,AAAA"
