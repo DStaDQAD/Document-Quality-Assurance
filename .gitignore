@@ -27,6 +27,11 @@ sample_data/Kinerja.pdf
 sample_data/SK-Juni-2026.pdf
 sample_data/M2-April-2026 (1).pdf
 sample_data/Hasil Survei Perbankan Bank Indonesia menunjukkan penyaluran kredit baru pada triwulan II 2026 meningkat dibandingkan triwulan sebelumnya.pdf
+# Word versions of the reports (real report data, like the PDFs above)
+sample_data/test case_Analisis Uang Beredar Posisi April.docx
+sample_data/*.docx
+# Per-plan execution ledgers of the superpowers workflow: local scratch, never committed
+.superpowers/
 # Hand-made multi-level test pair. Unlike penjualan_2024.xlsx / penjualan_cabang.xlsx, which
 # create_sample_excel.py regenerates and which stay tracked, these two exist only locally.
 sample_data/penjualan_bertingkat.xlsx

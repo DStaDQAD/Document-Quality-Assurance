@@ -109,8 +109,14 @@ class PdfTable:
 
     @property
     def label(self) -> str:
-        """Display name used as the source's 'sheet' — e.g. 'Hal. 7 · Lampiran 1. Tabel …'."""
+        """Display name used as the source's 'sheet' — e.g. 'Hal. 7 · Lampiran 1. Tabel …'.
+
+        A table read out of a Word document has no page (page_number 0) and is named by its
+        caption alone.
+        """
         caption = self.caption.strip() or f"Tabel {self.index_on_page + 1}"
+        if self.page_number <= 0:
+            return caption[:60]
         return f"Hal. {self.page_number} · {caption[:60]}"
 
 

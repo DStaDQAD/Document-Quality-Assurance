@@ -126,3 +126,195 @@ def emf_table_lines(runs: List[EmfText]) -> List[Tuple[float, str]]:
         label = sorted(by_x[:len(by_x) - n_values], key=lambda r: (r.y, r.x))
         lines.append((-float(y), " ".join(r.text for r in label + values)))
     return lines
+
+
+# ---------------------------------------------------------------------------
+# .docx: narrative, pictures, captions
+# ---------------------------------------------------------------------------
+
+_W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+_R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+_A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+_V = "{urn:schemas-microsoft-com:vml}"
+_MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+_PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+
+# Stricter than pdf_table_extraction._CAPTION_RE: in Word every paragraph is a candidate, and a
+# sentence such as "Tabel 2 menunjukkan …" must not open a caption. A real caption numbers the
+# table and closes the number with a period ("Tabel 1.  Uang Beredar …").
+_TABLE_CAPTION_RE = re.compile(r'^(?:Tabel|Lampiran)\s*[IVX\d]+\.\s', re.IGNORECASE)
+_CHART_CAPTION_RE = re.compile(r'^Grafik\s*\d+\.', re.IGNORECASE)
+_APPENDIX_CAPTION_RE = re.compile(r'^Lampiran\s*[IVX\d]+[.\s]', re.IGNORECASE)
+_SPACES_RE = re.compile(r'[ \t   ]+')
+_INVISIBLE_RE = re.compile(r'[­​‌‍﻿]')
+# Above every line of a picture, so _tables_on_page finds the caption over the header.
+_CAPTION_Y = 1e9
+
+
+@dataclass
+class WordDocument:
+    narrative_text: str
+    tables: List[PdfTable] = field(default_factory=list)
+    unread_tables: List[str] = field(default_factory=list)   # "<caption> — <reason>"
+
+
+@dataclass
+class _Paragraph:
+    text: str
+    pictures: List[str]      # relationship ids, in order
+    page_break: bool
+
+
+def is_word_document(data: bytes) -> bool:
+    if not data.startswith(b"PK\x03\x04"):
+        return False
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            return "word/document.xml" in z.namelist()
+    except zipfile.BadZipFile:
+        return False
+
+
+def is_legacy_word_document(filename: str) -> bool:
+    return (filename or "").lower().endswith(".doc")
+
+
+def _clean(text: str) -> str:
+    return _SPACES_RE.sub(" ", _INVISIBLE_RE.sub("", text)).strip()
+
+
+def _read_paragraph(p: ET.Element, out: List[_Paragraph]) -> None:
+    """One paragraph, then the paragraphs of any text box it carries, each exactly once."""
+    texts: List[str] = []
+    pictures: List[str] = []
+    boxes: List[ET.Element] = []
+    page_break = False
+
+    def visit(element: ET.Element) -> None:
+        nonlocal page_break
+        for child in element:
+            tag = child.tag
+            if tag == _MC + "Fallback":        # the same content again, for older readers
+                continue
+            if tag == _W + "txbxContent":      # a text box: its own paragraphs, read after this one
+                boxes.append(child)
+                continue
+            if tag == _W + "t" and child.text:
+                texts.append(child.text)
+            elif tag == _W + "tab":
+                texts.append(" ")
+            elif tag == _W + "br":
+                if child.get(_W + "type") == "page":
+                    page_break = True
+                else:
+                    texts.append(" ")
+            elif tag == _W + "noBreakHyphen":
+                texts.append("-")
+            elif tag == _W + "pageBreakBefore" and child.get(_W + "val") not in ("0", "false"):
+                page_break = True
+            elif tag == _A + "blip" and child.get(_R + "embed"):
+                pictures.append(child.get(_R + "embed"))
+            elif tag == _V + "imagedata" and child.get(_R + "id"):
+                pictures.append(child.get(_R + "id"))
+            visit(child)
+
+    visit(p)
+    out.append(_Paragraph(_clean("".join(texts)), pictures, page_break))
+    for box in boxes:
+        _walk(box, out)
+
+
+def _walk(element: ET.Element, out: List[_Paragraph]) -> None:
+    """Every paragraph under `element` in document order — body, table cells, content controls."""
+    for child in element:
+        if child.tag == _MC + "Fallback":
+            continue
+        if child.tag == _W + "p":
+            _read_paragraph(child, out)
+        else:
+            _walk(child, out)
+
+
+def _narrative(paragraphs: List[_Paragraph]) -> str:
+    blocks: List[List[str]] = [[]]
+    for p in paragraphs:
+        if (p.page_break or _APPENDIX_CAPTION_RE.match(p.text)) and blocks[-1]:
+            blocks.append([])
+        if p.text:
+            blocks[-1].append(p.text)
+    return "\n".join(
+        f"[== Halaman {i} ==]\n" + "\n".join(lines)
+        for i, lines in enumerate((b for b in blocks if b), 1)
+    )
+
+
+def _relationships(z: zipfile.ZipFile) -> Dict[str, str]:
+    """rId → archive path of each internal target of word/document.xml."""
+    try:
+        root = ET.fromstring(z.read("word/_rels/document.xml.rels"))
+    except KeyError:
+        return {}
+    out: Dict[str, str] = {}
+    for rel in root.iter(_PKG_REL + "Relationship"):
+        if rel.get("TargetMode") == "External":
+            continue
+        target = rel.get("Target", "")
+        out[rel.get("Id", "")] = target.lstrip("/") if target.startswith("/") else f"word/{target}"
+    return out
+
+
+def _picture_tables(
+    paragraphs: List[_Paragraph], rels: Dict[str, str], z: zipfile.ZipFile
+) -> Tuple[List[PdfTable], List[str]]:
+    """Each table caption paired with the first picture after it, read when it is an EMF."""
+    unread: List[str] = []
+    readings: List[Tuple[str, List[Tuple[float, str]]]] = []
+    names = set(z.namelist())
+    pending: Optional[str] = None
+
+    for p in paragraphs:
+        if _TABLE_CAPTION_RE.match(p.text) or _CHART_CAPTION_RE.match(p.text):
+            if pending:
+                unread.append(f"{pending} — tidak ada gambar tabel sesudah judul ini")
+            # A chart caption closes the table caption before it but claims no picture as a table.
+            pending = p.text if _TABLE_CAPTION_RE.match(p.text) else None
+        for rid in p.pictures:
+            if pending is None:
+                continue
+            path = rels.get(rid, "")
+            ext = path.rsplit(".", 1)[-1].lower() if "." in path else "?"
+            if ext != "emf" or path not in names:
+                unread.append(f"{pending} — gambar tabel berformat {ext.upper()}, belum bisa dibaca")
+            else:
+                readings.append((pending, emf_table_lines(emf_text_runs(z.read(path)))))
+            pending = None
+    if pending:
+        unread.append(f"{pending} — tidak ada gambar tabel sesudah judul ini")
+
+    # One convention per document, decided from all its tables' text (see detect_number_format).
+    number_format = detect_number_format(
+        "\n".join(text for _, lines in readings for _, text in lines))
+    tables: List[PdfTable] = []
+    for index, (caption, lines) in enumerate(readings):
+        view = [(_CAPTION_Y, caption)] + lines
+        found, _ = _tables_on_page(view, view, 0, number_format)
+        if not found:
+            unread.append(f"{caption} — tabel di gambar ini tidak bisa disusun "
+                          "(kolom dan judul periodenya tidak cocok)")
+        for table in found:
+            table.index_on_page = len(tables)
+            table.caption_index = index
+            tables.append(table)
+    return tables, unread
+
+
+def read_word_document(data: bytes) -> WordDocument:
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        body = ET.fromstring(z.read("word/document.xml")).find(_W + "body")
+        paragraphs: List[_Paragraph] = []
+        if body is not None:
+            _walk(body, paragraphs)
+        tables, unread = _picture_tables(paragraphs, _relationships(z), z)
+    logger.info("Word document: %d paragraph(s), %d table(s) read, %d caption(s) unread.",
+                len(paragraphs), len(tables), len(unread))
+    return WordDocument(narrative_text=_narrative(paragraphs), tables=tables, unread_tables=unread)
