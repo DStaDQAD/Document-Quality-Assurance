@@ -144,7 +144,9 @@ _PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 # table and closes the number with a period ("Tabel 1.  Uang Beredar …").
 _TABLE_CAPTION_RE = re.compile(r'^(?:Tabel|Lampiran)\s*[IVX\d]+\.\s', re.IGNORECASE)
 _CHART_CAPTION_RE = re.compile(r'^Grafik\s*\d+\.', re.IGNORECASE)
-_APPENDIX_CAPTION_RE = re.compile(r'^Lampiran\s*[IVX\d]+[.\s]', re.IGNORECASE)
+# As strict as _TABLE_CAPTION_RE: the narrative is one block up to the next appendix, so a
+# sentence opening with "Lampiran 1 memuat …" taken for a title would drop everything after it.
+_APPENDIX_CAPTION_RE = re.compile(r'^Lampiran\s*[IVX\d]+\.\s', re.IGNORECASE)
 _SPACES_RE = re.compile(r'[ \t   ]+')
 _INVISIBLE_RE = re.compile(r'[­​‌‍﻿]')
 # Above every line of a picture, so _tables_on_page finds the caption over the header.

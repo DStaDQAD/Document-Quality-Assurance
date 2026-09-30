@@ -182,6 +182,21 @@ def test_appendix_opens_its_own_block_and_is_filtered_out():
     assert "Rp10.253,7" in kept and "GWM" not in kept
 
 
+def test_a_sentence_starting_with_lampiran_does_not_drop_the_narrative_after_it():
+    # Word narrative is one block until the next real appendix caption, so a sentence taken for
+    # an appendix title would silently drop every claim after it.
+    # Placed past the opening lines, as in a real report: _filter_narrative's appendix rule looks
+    # at the first lines of every block, which is a separate (PDF-route) rule.
+    body = (para("Posisi M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun atau tumbuh 9,2%.")
+            + para("Uang beredar sempit (M1) pada April 2026 tumbuh sebesar 13,6% (yoy).")
+            + para("Uang kuasi pada April 2026 tumbuh sebesar 4,7% (yoy) menjadi Rp4.253,6 triliun.")
+            + para("Lampiran 1 memuat rincian kredit menurut sektor ekonomi secara lengkap.")
+            + para("Penyaluran kredit pada April 2026 tercatat sebesar Rp8.606,6 triliun atau "
+                   "tumbuh 9,4% (yoy)."))
+    kept = _filter_narrative(read_word_document(docx_bytes(body)).narrative_text)
+    assert "Rp8.606,6 triliun" in kept
+
+
 def test_an_explicit_page_break_opens_a_new_block():
     body = para("satu dua tiga empat lima enam") + (
         '<w:p><w:r><w:br w:type="page"/><w:t>tujuh delapan</w:t></w:r></w:p>')
