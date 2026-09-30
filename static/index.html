@@ -936,10 +936,10 @@ body.auth-locked .app {
             <div class="card-header">
               <div class="upload-row">
                 <div class="upload-field">
-                  <span class="upload-label">PDF Laporan</span>
+                  <span class="upload-label">Laporan (PDF / Word)</span>
                   <div id="pdf-sources-container"></div>
                   <button type="button" id="add-pdf-btn" class="add-excel-btn">
-                    <span class="material-symbols-outlined">add</span> Tambah PDF
+                    <span class="material-symbols-outlined">add</span> Tambah file
                   </button>
                 </div>
                 <div class="upload-field" id="excel-upload-field">
@@ -1112,6 +1112,10 @@ body.auth-locked .app {
 
   const isPdfFile   = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
   const isExcelFile = (f) => /\.xlsx?$/i.test(f.name);
+  // The report slot takes a Word (.docx) report as well as a PDF; the backend tells them apart.
+  const WORD_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  const isWordFile   = (f) => f.type === WORD_MIME || /\.docx$/i.test(f.name);
+  const isReportFile = (f) => isPdfFile(f) || isWordFile(f);
 
   // One file per entry. Several files dropped (or picked) at once fill this entry with the
   // first and open a new entry for each of the rest. Files of the wrong type are ignored with
@@ -1381,8 +1385,8 @@ body.auth-locked .app {
       <div class="source-entry-header">
         <div class="dropzone-sm" id="pdf-dz-${uid}">
           <span class="material-symbols-outlined">picture_as_pdf</span>
-          <div class="dz-sub" id="pdf-fn-${uid}">Pilih file PDF</div>
-          <input type="file" id="pdf-inp-${uid}" accept="application/pdf" multiple style="display:none">
+          <div class="dz-sub" id="pdf-fn-${uid}">Pilih file PDF atau Word (.docx)</div>
+          <input type="file" id="pdf-inp-${uid}" accept="application/pdf,.pdf,.docx,${WORD_MIME}" multiple style="display:none">
         </div>
         <button type="button" class="remove-excel-btn" title="Hapus" style="visibility:hidden">
           <span class="material-symbols-outlined">close</span>
@@ -1393,9 +1397,9 @@ body.auth-locked .app {
     const dz  = container.querySelector(`#pdf-dz-${uid}`);
     const removeBtn = container.querySelector(".remove-excel-btn");
     const assign = attachDropzoneBehavior(dz, inp, fn, {
-      placeholder: "Pilih file PDF",
-      accepts: isPdfFile,
-      rejectText: "File selain PDF diabaikan",
+      placeholder: "Pilih file PDF atau Word (.docx)",
+      accepts: isReportFile,
+      rejectText: "File selain PDF atau Word diabaikan",
       onFile: () => syncRules(),
       addEntry: addPdfSource,
     });
@@ -1666,6 +1670,16 @@ body.auth-locked .app {
       </div>`;
     })() : "";
 
+    // A Word report names a table by caption but its picture could not be read (a PNG, or no
+    // picture at all). Claims only that table could answer come back Tidak Cukup Data; say why.
+    const unread = data.unread_tables || [];
+    const unreadStrip = unread.length ? `<div class="conflict-strip gap-strip">
+        <span class="material-symbols-outlined">table_chart</span>
+        <span><strong>${unread.length} tabel tidak bisa dibaca dari dokumen ini.</strong>
+        Klaim yang hanya bisa dijawab tabel tersebut akan berstatus Tidak Cukup Data.
+        <span class="gap-reason">${unread.map(escapeHtml).join("<br>")}</span></span>
+      </div>` : "";
+
     const header = `<div class="report-top">
       <div class="donut-wrap">${renderDonutSVG(e, r, i)}</div>
       <div class="report-stats">
@@ -1678,7 +1692,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
         </div>
       </div>
-    </div>${gapStrip}${formatStrip}`;
+    </div>${gapStrip}${unreadStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">
@@ -2196,7 +2210,7 @@ body.auth-locked .app {
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
     const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
     if (!pdfFiles.length) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF terlebih dahulu.</div>`;
+      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF atau Word terlebih dahulu.</div>`;
       return;
     }
     if (!mode) {
