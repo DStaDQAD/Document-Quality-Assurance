@@ -32,6 +32,8 @@ sample_data/test case_Analisis Uang Beredar Posisi April.docx
 sample_data/*.docx
 # Per-plan execution ledgers of the superpowers workflow: local scratch, never committed
 .superpowers/
+# Parked plan, kept local until the work is picked up
+docs/superpowers/plans/2026-09-29-bank-soal-regresi.md
 # Hand-made multi-level test pair. Unlike penjualan_2024.xlsx / penjualan_cabang.xlsx, which
 # create_sample_excel.py regenerates and which stay tracked, these two exist only locally.
 sample_data/penjualan_bertingkat.xlsx
