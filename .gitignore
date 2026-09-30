@@ -27,6 +27,12 @@ sample_data/Kinerja.pdf
 sample_data/SK-Juni-2026.pdf
 sample_data/M2-April-2026 (1).pdf
 sample_data/Hasil Survei Perbankan Bank Indonesia menunjukkan penyaluran kredit baru pada triwulan II 2026 meningkat dibandingkan triwulan sebelumnya.pdf
+# Reports added 2026-09 (real report data, like the ones above)
+sample_data/SK-Agustus-2026.pdf
+sample_data/UB/
+sample_data/CADEV/
+sample_data/Analisis-Perkembangan-Uang Beredar-(M2)-Agustus-2026.pdf
+sample_data/cadangan devisa.pdf
 # Word versions of the reports (real report data, like the PDFs above)
 sample_data/test case_Analisis Uang Beredar Posisi April.docx
 sample_data/*.docx
