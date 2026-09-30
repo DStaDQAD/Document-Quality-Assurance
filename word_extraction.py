@@ -163,6 +163,9 @@ class _Paragraph:
     text: str
     pictures: List[str]      # relationship ids, in order
     page_break: bool
+    # Not a paragraph: the start of a real Word table holding no picture. Such a table is typed
+    # into Word rather than pasted from Excel, and closes the caption above it (see _walk).
+    word_table: bool = False
 
 
 def is_word_document(data: bytes) -> bool:
@@ -231,8 +234,14 @@ def _walk(element: ET.Element, out: List[_Paragraph]) -> None:
             continue
         if child.tag == _W + "p":
             _read_paragraph(child, out)
-        else:
-            _walk(child, out)
+            continue
+        # A table with no picture in it is a real Word table. A table that does hold pictures is
+        # page layout (the report's two-column frame), and its pictures are read as usual.
+        if child.tag == _W + "tbl" and not any(
+            e.tag in (_A + "blip", _V + "imagedata") for e in child.iter()
+        ):
+            out.append(_Paragraph("", [], False, word_table=True))
+        _walk(child, out)
 
 
 def _narrative(paragraphs: List[_Paragraph]) -> str:
@@ -273,6 +282,11 @@ def _picture_tables(
     pending: Optional[str] = None
 
     for p in paragraphs:
+        if p.word_table:
+            if pending:
+                unread.append(f"{pending} — tabel Word (bukan gambar), belum bisa dibaca")
+            pending = None
+            continue
         if _TABLE_CAPTION_RE.match(p.text) or _CHART_CAPTION_RE.match(p.text):
             if pending:
                 unread.append(f"{pending} — tidak ada gambar tabel sesudah judul ini")

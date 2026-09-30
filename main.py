@@ -600,7 +600,16 @@ async def _run_paired_pipeline(
             "lalu unggah lagi."
         )
     # A Word report carries its narrative and its tables as text: no vision pass, no pages.
-    word = read_word_document(pdf_bytes) if is_word_document(pdf_bytes) else None
+    broken_word = ValueError("File Word ini rusak atau tidak bisa dibuka. Buka di Word, simpan "
+                             "ulang sebagai .docx, lalu unggah lagi.")
+    word = None
+    if is_word_document(pdf_bytes):
+        try:
+            word = read_word_document(pdf_bytes)
+        except Exception as exc:
+            raise broken_word from exc
+    elif pdf_filename.lower().endswith((".docx", ".docm")):
+        raise broken_word
 
     # Extract the narrative text once and share it between fact-verification and the
     # typo/grammar check — the vision fallback is an LLM call, so re-extracting per
@@ -650,11 +659,12 @@ async def _run_paired_pipeline(
         # that is where the refusal belongs.
         if word is not None:
             pdf_tables = word.tables
-            if not pdf_tables:
+            # In "both" the uploaded Excel still answers; only "internal" has nothing left.
+            if not pdf_tables and mode == "internal":
                 raise ValueError(
                     "Tidak ada tabel yang bisa dibaca dari dokumen Word ini. Tabel perlu ditempel "
                     "sebagai gambar EMF dari Excel dengan judul 'Tabel N.' atau 'Lampiran N.' "
-                    "tepat di atasnya."
+                    "tepat di atasnya. " + "; ".join(word.unread_tables)
                 )
         else:
             pdf_tables = await _tables_of(pdf_bytes, vision_llm, on_progress=_on_table_progress)
@@ -763,6 +773,9 @@ async def _run_paired_pipeline(
         if typo_result is not None:
             typo_result = typo_result.model_copy(update={"issues": [
                 i.model_copy(update={"page_number": None}) for i in typo_result.issues]})
+        # Same for a failed extraction chunk: its "page" is a block number (the UI then says
+        # "sebagian teks" instead of naming a page).
+        coverage_gaps = [g.model_copy(update={"pages": []}) for g in coverage_gaps]
     return fact_result.model_copy(update={
         "typo_check": typo_result,
         "number_format_notice": notice,

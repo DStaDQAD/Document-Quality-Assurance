@@ -206,3 +206,20 @@ def test_real_april_report_reads_like_the_pdf_route():
     assert "Rp10.253,7 triliun" in doc.narrative_text
     assert "\u00a0" not in doc.narrative_text and "April 2026April 2026" not in doc.narrative_text
     assert "Posisi GWM Ketentuan" not in _filter_narrative(doc.narrative_text)
+
+
+def test_a_real_word_table_after_a_caption_is_reported_as_such():
+    word_table = ('<w:tbl><w:tr><w:tc>' + para("Uang Beredar") + '</w:tc><w:tc>' + para("10.253,7")
+                  + '</w:tc></w:tr></w:tbl>')
+    doc = read_word_document(docx_bytes(
+        para(_CAPTION) + word_table + picture("rId1"), {"image1.png": _PNG}))
+    assert doc.unread_tables == [
+        "Tabel 1. Uang Beredar dan Komponennya (triliun Rp) — tabel Word (bukan gambar), "
+        "belum bisa dibaca"]
+
+
+def test_a_layout_table_holding_the_picture_does_not_close_the_caption():
+    layout = '<w:tbl><w:tr><w:tc>' + picture("rId1") + '</w:tc></w:tr></w:tbl>'
+    doc = read_word_document(docx_bytes(para(_CAPTION) + layout,
+                                        {"image1.emf": emf_bytes(SNIPPET_RUNS)}))
+    assert len(doc.tables) == 2 and doc.unread_tables == []
