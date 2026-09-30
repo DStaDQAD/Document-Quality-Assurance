@@ -217,6 +217,10 @@ class PairedVerificationResponse(BaseModel):
     # Parts of the document the model failed on while the rest succeeded — see CoverageGap. A
     # total failure never lands here: it raises instead.
     coverage_gaps: List[CoverageGap] = Field(default_factory=list)
+    # Tables a Word report names by caption but whose picture could not be read (a PNG instead of
+    # an EMF, a caption with no picture, or a picture whose columns do not fit its periods). A
+    # claim only such a table could answer comes back Inconclusive; this says why.
+    unread_tables: List[str] = Field(default_factory=list)
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)

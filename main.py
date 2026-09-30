@@ -104,6 +104,7 @@ from schemas import (
 )
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
+from word_extraction import is_legacy_word_document, is_word_document, read_word_document
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fact-checker")
@@ -128,6 +129,9 @@ async def _tables_of(
 ) -> List[PdfTable]:
     """extract_tables_from_pdf, remembered per PDF content. Without a vision model fewer pages
     can be read, so that result is kept apart from the full one."""
+    # A Word reference (the cross-file rule sends every other upload) is read without a model.
+    if is_word_document(pdf_bytes):
+        return read_word_document(pdf_bytes).tables
     key = (hashlib.sha256(pdf_bytes).hexdigest(), vision_llm is not None)
     if key in _PDF_TABLE_CACHE:
         _PDF_TABLE_CACHE.move_to_end(key)
@@ -590,23 +594,35 @@ async def _run_paired_pipeline(
             coverage_gaps.append(CoverageGap(stage=stage, pages=sorted(pages), reason=reason))
         return _record
 
+    if is_legacy_word_document(pdf_filename):
+        raise ValueError(
+            "File Word format lama (.doc) belum didukung. Buka di Word, simpan sebagai .docx, "
+            "lalu unggah lagi."
+        )
+    # A Word report carries its narrative and its tables as text: no vision pass, no pages.
+    word = read_word_document(pdf_bytes) if is_word_document(pdf_bytes) else None
+
     # Extract the narrative text once and share it between fact-verification and the
     # typo/grammar check — the vision fallback is an LLM call, so re-extracting per
     # consumer would double its cost and rate-limit exposure for no benefit.
     _emit("pdf", "running", detail=pdf_filename)
-    narrative_text = await extract_narrative_text(
-        pdf_bytes, vision_llm, on_vision_gap=_gap_recorder("pdf")
-    )
+    if word is not None:
+        narrative_text = word.narrative_text
+    else:
+        narrative_text = await extract_narrative_text(
+            pdf_bytes, vision_llm, on_vision_gap=_gap_recorder("pdf")
+        )
     n_pages = len(_PAGE_MARKER_RE.findall(narrative_text))
     n_chars = len(_PAGE_MARKER_RE.sub("", narrative_text).strip())
-    _emit("pdf", "done", detail=f"{n_pages} halaman · {n_chars:,} karakter".replace(",", "."))
+    where = "dokumen Word" if word is not None else f"{n_pages} halaman"
+    _emit("pdf", "done", detail=f"{where} · {n_chars:,} karakter".replace(",", "."))
 
     # The charts are read alongside the tables rather than after them: each chart is a small,
     # separate call, and the table pass spends most of its time on a few long appendix pages.
     chart_readings: List[ChartReading] = []
     chart_pages_unread: List[int] = []
     chart_task: Optional[asyncio.Task] = None
-    if check_charts and vision_llm is not None:
+    if check_charts and vision_llm is not None and word is None:
         _emit("charts", "running")
 
         def _on_chart_progress(done: int, total: int) -> None:
@@ -632,20 +648,30 @@ async def _run_paired_pipeline(
         # answers every page on its own (see extract_tables_from_pdf). Only when that reader
         # comes back empty-handed does the missing key actually cost the user anything, so
         # that is where the refusal belongs.
-        pdf_tables = await _tables_of(pdf_bytes, vision_llm, on_progress=_on_table_progress)
-        if not pdf_tables and vision_llm is None:
-            raise ValueError(
-                "Tidak ada tabel yang bisa dibaca dari lapisan teks PDF ini, dan mode tabel "
-                "internal tidak dapat memindai halamannya karena GOOGLE_API_KEY belum diatur."
-            )
+        if word is not None:
+            pdf_tables = word.tables
+            if not pdf_tables:
+                raise ValueError(
+                    "Tidak ada tabel yang bisa dibaca dari dokumen Word ini. Tabel perlu ditempel "
+                    "sebagai gambar EMF dari Excel dengan judul 'Tabel N.' atau 'Lampiran N.' "
+                    "tepat di atasnya."
+                )
+        else:
+            pdf_tables = await _tables_of(pdf_bytes, vision_llm, on_progress=_on_table_progress)
+            if not pdf_tables and vision_llm is None:
+                raise ValueError(
+                    "Tidak ada tabel yang bisa dibaca dari lapisan teks PDF ini, dan mode tabel "
+                    "internal tidak dapat memindai halamannya karena GOOGLE_API_KEY belum diatur."
+                )
         # Only the empty case is reported here; when tables were found, verify_paired closes the
         # stage with a detail that names each one's parser (see its "tables" done event).
         if not pdf_tables:
             _emit("tables", "done", detail="Tidak ada tabel terbaca di dalam PDF")
 
         # Cheap (one text-layer read, no LLM) and only meaningful for the tables just read, so
-        # it rides along with them rather than running for every document.
-        number_format_mix = await asyncio.to_thread(detect_number_format_mix, pdf_bytes)
+        # it rides along with them rather than running for every document. A PDF property only.
+        if word is None:
+            number_format_mix = await asyncio.to_thread(detect_number_format_mix, pdf_bytes)
 
     if chart_task is not None:
         chart_readings = await chart_task
@@ -655,7 +681,9 @@ async def _run_paired_pipeline(
             detail += f" · gagal dibaca di hal. {', '.join(map(str, chart_pages_unread))}"
         _emit("charts", "done", detail=detail)
     elif check_charts:
-        _emit("charts", "done", detail="Dilewati: model vision tidak tersedia")
+        _emit("charts", "done", detail=(
+            "Dilewati: grafik di dokumen Word belum bisa dibaca" if word is not None
+            else "Dilewati: model vision tidak tersedia"))
 
     # The other PDFs' tables, read the same way (and from the same cache) as this one's own.
     reference_tables: List[Tuple[str, List[PdfTable]]] = []
@@ -727,10 +755,20 @@ async def _run_paired_pipeline(
         )
         if number_format_mix is not None else None
     )
+    if word is not None:
+        # The narrative's block markers are not pages; a "Hal. 3" badge would send the reader to
+        # the wrong place in the document.
+        fact_result = fact_result.model_copy(update={"results": [
+            r.model_copy(update={"page_number": None}) for r in fact_result.results]})
+        if typo_result is not None:
+            typo_result = typo_result.model_copy(update={"issues": [
+                i.model_copy(update={"page_number": None}) for i in typo_result.issues]})
     return fact_result.model_copy(update={
         "typo_check": typo_result,
         "number_format_notice": notice,
         "coverage_gaps": coverage_gaps,
+        "unread_tables": (word.unread_tables
+                          if word is not None and mode in ("internal", "both") else []),
     })
 
 
