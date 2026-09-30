@@ -105,6 +105,14 @@ are compared against:
 | `internal` | the tables printed inside the PDF itself | not accepted |
 | `both` | both pools at once | required |
 
+**Word reports.** A `.docx` can be submitted wherever a PDF report is accepted (`pdf_file`, and
+`reference_pdf`). Its narrative is read from the document itself and its tables from the EMF
+pictures pasted from Excel. Each picture is paired with the `Tabel N.` / `Lampiran N.` caption
+above it and read by the same text-layer reader as a digital PDF, so no vision model is needed
+(`word_extraction.py`). A table pasted as a PNG, or a caption with no picture, is listed in
+`unread_tables`. Word has no fixed pages, so results carry no `page_number`. Charts in a Word
+report are not checked. Legacy `.doc` files are refused; re-save them as `.docx`.
+
 Tables are read out of the PDF by `pdf_table_extraction.py`, native reader first:
 
 - **Native (no LLM at all)** - captions (`Tabel N.` / `Lampiran N.`), the period header under
