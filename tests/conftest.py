@@ -29,3 +29,14 @@ def _fresh_pdf_table_cache():
     import main
     main._PDF_TABLE_CACHE.clear()
     yield
+
+
+@pytest.fixture(autouse=True)
+def _isolated_history_db(tmp_path, monkeypatch):
+    """Every test gets its own empty SQLite check history, so no test ever writes to the real
+    history (a local history.db, or Neon when .env sets HISTORY_DATABASE_URL)."""
+    import check_history
+    monkeypatch.setenv("HISTORY_DATABASE_URL", f"sqlite:///{(tmp_path / 'history.db').as_posix()}")
+    check_history.reset_engine()
+    yield
+    check_history.reset_engine()

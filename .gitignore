@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 venv/
 statistik_makro.db
+history.db
 .pytest_cache/
 ~$*.xlsx
 

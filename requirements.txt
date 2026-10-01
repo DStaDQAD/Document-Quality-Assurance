@@ -16,6 +16,8 @@ openpyxl>=3.1.0
 xlrd>=2.0.1
 phunspell>=0.1.6
 PyYAML>=6.0  # eval harness reads labelled cases from YAML
+SQLAlchemy>=2.0  # check history; listed explicitly since langchain-community (which pulled it in) is being sunset
+psycopg[binary]>=3.2  # check history in Postgres (Neon)
 
 # Dev / test
 pytest>=8.0.0

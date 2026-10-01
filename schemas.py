@@ -1,5 +1,6 @@
 """Shared Pydantic request/response models for the fact-checking API."""
 
+from datetime import datetime
 from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -244,3 +245,34 @@ class TableDataResponse(BaseModel):
     total_rows: int
     limit: int
     offset: int
+
+
+# ---------------------------------------------------------------------------
+# Check history (Riwayat)
+# ---------------------------------------------------------------------------
+
+
+class CheckSummary(BaseModel):
+    """One stored check as the history list shows it — everything but the full result."""
+    id: Optional[str] = None
+    created_at: Optional[datetime] = None   # UTC; the UI shows it in WIB
+    filename: str
+    file_kind: Literal["pdf", "docx"]
+    checker_name: Optional[str] = None
+    mode: str
+    excel_files: List[str] = Field(default_factory=list)
+    reference_files: List[str] = Field(default_factory=list)
+    n_facts: int = 0
+    n_match: int = 0
+    n_mismatch: int = 0
+    n_unverified: int = 0
+    n_typos: int = 0
+    n_charts: int = 0
+    duration_s: float = 0.0
+    tokens_in: int = 0
+    tokens_out: int = 0
+
+
+class CheckHistoryListResponse(BaseModel):
+    items: List[CheckSummary]
+    has_more: bool
