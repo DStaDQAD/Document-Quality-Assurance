@@ -91,6 +91,7 @@ from pdf_extraction import (
     extract_text_from_pdf_vision_async,
 )
 from schemas import (
+    CheckHistoryListResponse,
     CheckSummary,
     ClaimRequest,
     CoverageGap,
@@ -1017,6 +1018,42 @@ async def verify_paired_stream_endpoint(
         # point. These ask the proxy to pass chunks through as they are produced.
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+_HISTORY_UNAVAILABLE = "Riwayat tidak dapat dibuka saat ini: database riwayat tidak terhubung."
+
+
+@app.get("/api/history", response_model=CheckHistoryListResponse)
+async def list_history_endpoint(limit: int = 50, offset: int = 0, q: str = "") -> CheckHistoryListResponse:
+    """The shared check history, newest first, without the stored results.
+
+    q: matches the document's file name or the checker's name, case-insensitively.
+    limit: page size, 1-100. has_more says whether another page follows.
+    """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    try:
+        items, has_more = await asyncio.to_thread(check_history.list_checks, limit, offset, q)
+    except Exception as exc:
+        logger.warning("History list failed", exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+    return CheckHistoryListResponse(items=items, has_more=has_more)
+
+
+@app.get("/api/history/{check_id}")
+async def get_history_endpoint(check_id: str) -> JSONResponse:
+    """One stored check: its summary, and its full result exactly as /api/verify-paired returned
+    it (history_id set). The result is sent as stored, not re-validated against today's schema,
+    so an old entry still opens after the response model has grown."""
+    try:
+        entry = await asyncio.to_thread(check_history.get_check, check_id)
+    except Exception as exc:
+        logger.warning("History read failed for %s", check_id, exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
+    summary, result = entry
+    return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
 
 
 @app.get("/api/tables", response_model=TableListResponse)
