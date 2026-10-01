@@ -91,8 +91,8 @@ perlu dicek ulang saat membuat project).
 - **Titik simpan:** akhir `_run_paired_pipeline` di `main.py`, setelah `log_perf(...)` dan
   setelah response final dirakit. Kedua endpoint (`/api/verify-paired` dan
   `/api/verify-paired-stream`) memakai fungsi ini, jadi keduanya tersimpan tanpa duplikasi.
-- **Input baru:** form field opsional `checker_name: str = ""` pada kedua endpoint, diteruskan
-  ke `_run_paired_pipeline`. Di-strip dan dipotong 80 karakter; string kosong → `NULL`.
+- **Input baru:** query param opsional `checker_name: str = ""` pada kedua endpoint (sejalan
+  dengan `mode`, `check_charts`, dst. yang juga query param), diteruskan ke `_run_paired_pipeline`. Di-strip dan dipotong 80 karakter; string kosong → `NULL`.
 - **Yang disimpan:** hanya pengecekan yang berhasil. Error (exception) dan pembatalan
   (task di-cancel karena klien putus) tidak sampai ke titik simpan.
 - **Kegagalan simpan:** `save_check` dijalankan lewat `asyncio.to_thread`. Exception apa pun
@@ -111,9 +111,10 @@ perlu dicek ulang saat membuat project).
 - `GET /api/history?limit=50&offset=0&q=` → `{"items": [CheckSummary...], "has_more": bool}`,
   terbaru dulu, tanpa `result_gz`. `q` = pencarian case-insensitive pada `filename` dan
   `checker_name`. `limit` dibatasi maks. 100.
-- `GET /api/history/{id}` → JSON hasil lengkap (bentuk sama persis dengan response
-  `verify-paired`, `history_id` diisi), dikirim langsung dari data yang didekompres tanpa
-  validasi ulang Pydantic. Bila id tidak ada → 404.
+- `GET /api/history/{id}` → `{"summary": CheckSummary, "result": {...}}`. `result` berbentuk sama
+  persis dengan response `verify-paired` (`history_id` diisi), dikirim langsung dari data yang
+  didekompres tanpa validasi ulang Pydantic; `summary` memberi waktu & pemeriksa untuk banner,
+  sehingga tautan `#riwayat/<id>` bisa dibuka tanpa memanggil daftar. Bila id tidak ada → 404.
 - Bila database riwayat tidak bisa dihubungi → 503 dengan pesan yang jelas.
 
 ### UI (`static/index.html`)
