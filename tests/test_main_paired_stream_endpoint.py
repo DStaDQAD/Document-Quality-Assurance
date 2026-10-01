@@ -221,7 +221,9 @@ def test_stream_result_payload_is_identical_to_the_non_streaming_endpoint(
     streamed = [e for e in _read_events(client.post("/api/verify-paired-stream", files=_FILES))
                 if e["type"] == "result"][0]["data"]
 
-    assert streamed == plain
+    # Each run is stored in the history under its own id; everything else must be identical.
+    assert plain["history_id"] and streamed["history_id"]
+    assert ({**streamed, "history_id": None}) == ({**plain, "history_id": None})
 
 
 @patch("main.check_typos")

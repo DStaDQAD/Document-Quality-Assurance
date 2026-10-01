@@ -10,28 +10,36 @@ through the pipeline: it just observes each stage's first "running" and its "don
 
 import logging
 from time import perf_counter
-from typing import Dict, Mapping, Optional
+from typing import Dict, Mapping, Optional, Tuple
 
 logger = logging.getLogger("fact-checker")
 
 STAGE_ORDER = ["pdf", "excel", "extract", "compare", "typo"]
 
 
+def usage_totals(usage_metadata: Optional[Mapping[str, Mapping]]) -> Tuple[int, int]:
+    """Input and output tokens summed across every model a run touched; (0, 0) when none were
+    reported (providers that don't report usage, e.g. Ollama, and every mocked test run).
+
+    The handler keys its totals by model name and a run may touch two models (a vision/primary
+    plus a text fallback), so the counts are summed across them — the per-model split is not
+    what we are tuning against.
+    """
+    if not usage_metadata:
+        return 0, 0
+    total_in = sum(int(u.get("input_tokens", 0) or 0) for u in usage_metadata.values())
+    total_out = sum(int(u.get("output_tokens", 0) or 0) for u in usage_metadata.values())
+    return total_in, total_out
+
+
 def format_usage(usage_metadata: Optional[Mapping[str, Mapping]]) -> str:
     """Render a UsageMetadataCallbackHandler's per-model totals as ``in=… out=…``.
 
     Token counts are what make a prompt-size change provable, so they ride the same log
-    line as the durations. The handler keys its totals by model name and a run may touch
-    two models (a vision/primary plus a text fallback), so the counts are summed across
-    them — the per-model split is not what we are tuning against.
-
-    Returns "" when nothing was recorded, so the log line simply omits the section
-    (providers that don't report usage, e.g. Ollama, and every mocked test run).
+    line as the durations. Returns "" when nothing was recorded, so the log line simply
+    omits the section.
     """
-    if not usage_metadata:
-        return ""
-    total_in = sum(int(u.get("input_tokens", 0) or 0) for u in usage_metadata.values())
-    total_out = sum(int(u.get("output_tokens", 0) or 0) for u in usage_metadata.values())
+    total_in, total_out = usage_totals(usage_metadata)
     if not total_in and not total_out:
         return ""
     return f"in={total_in:,} out={total_out:,}".replace(",", ".")

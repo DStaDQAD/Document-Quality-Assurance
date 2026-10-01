@@ -232,6 +232,9 @@ class PairedVerificationResponse(BaseModel):
     chart_checks: List[ChartCheck] = Field(default_factory=list)
     chart_label_count: int = 0
     chart_pages_unread: List[int] = Field(default_factory=list)
+    # The id this check was stored under in the history (Riwayat), or None when storing it
+    # failed — the check itself still succeeded. See check_history.
+    history_id: Optional[str] = None
 
 
 class TableListResponse(BaseModel):

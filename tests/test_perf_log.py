@@ -1,6 +1,6 @@
 import logging
 
-from perf_log import StageTimer, log_perf
+from perf_log import StageTimer, log_perf, usage_totals
 
 
 def test_stage_timer_records_first_running_to_done():
@@ -78,3 +78,13 @@ def test_log_perf_omits_tokens_when_the_provider_reports_none(caplog):
 
     assert "in=" not in caplog.text
     assert "perf a.pdf" in caplog.text
+
+
+def test_usage_totals_sums_every_model_and_is_zero_when_none_reported():
+    usage = {
+        "gemini-2.5-flash": {"input_tokens": 1000, "output_tokens": 200},
+        "openai/gpt-oss-120b": {"input_tokens": 50, "output_tokens": None},
+    }
+    assert usage_totals(usage) == (1050, 200)
+    assert usage_totals(None) == (0, 0)
+    assert usage_totals({}) == (0, 0)

@@ -74,11 +74,12 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
+import check_history
 from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
 from excel_parser_bi import list_sheet_names
 from excel_ingestion import ingest_bytes
 from llm_provider import get_llm, get_vision_llm
-from perf_log import StageTimer, log_perf
+from perf_log import StageTimer, log_perf, usage_totals
 from orchestrator import verify_document
 from paired_verifier import verify_paired
 from pdf_chart_extraction import ChartReading, extract_charts_from_pdf
@@ -90,6 +91,7 @@ from pdf_extraction import (
     extract_text_from_pdf_vision_async,
 )
 from schemas import (
+    CheckSummary,
     ClaimRequest,
     CoverageGap,
     DocumentRequest,
@@ -108,6 +110,7 @@ from word_extraction import is_legacy_word_document, is_word_document, read_word
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fact-checker")
+check_history.warn_if_ephemeral()
 
 _PAGE_MARKER_RE = re.compile(r'\[== Halaman \d+ ==\]')
 
@@ -529,6 +532,52 @@ async def _read_paired_uploads(
     return pdf_bytes, (pdf_file.filename or "report.pdf"), excel_sources, references
 
 
+async def _record_in_history(
+    response: PairedVerificationResponse,
+    *,
+    pdf_filename: str,
+    file_kind: str,
+    mode: str,
+    checker_name: str,
+    excel_sources: List[Tuple[bytes, str, str]],
+    reference_pdfs: List[Tuple[bytes, str]],
+    timer: StageTimer,
+    usage_metadata: Optional[Dict[str, Any]],
+) -> PairedVerificationResponse:
+    """Store a finished check in the shared history and return the response with its id.
+
+    The check already cost minutes and tokens, so the history never fails it: any error is
+    logged and the response goes out with history_id None, which the UI reports as "not saved".
+    """
+    tokens_in, tokens_out = usage_totals(usage_metadata)
+    summary = CheckSummary(
+        filename=pdf_filename,
+        file_kind=file_kind,
+        checker_name=checker_name,
+        mode=mode,
+        # One workbook is uploaded once per selected sheet; list each file once.
+        excel_files=list(dict.fromkeys(name for _, _, name in excel_sources)),
+        reference_files=[name for _, name in reference_pdfs],
+        n_facts=response.total_facts,
+        n_match=response.entailed_count,
+        n_mismatch=response.refuted_count,
+        n_unverified=response.inconclusive_count,
+        n_typos=response.typo_check.total_issues if response.typo_check else 0,
+        n_charts=len(response.chart_checks),
+        duration_s=timer.total(),
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+    )
+    try:
+        check_id = await asyncio.to_thread(
+            check_history.save_check, summary, response.model_dump(mode="json")
+        )
+    except Exception:
+        logger.warning("History save failed for %s", pdf_filename, exc_info=True)
+        return response
+    return response.model_copy(update={"history_id": check_id})
+
+
 async def _run_paired_pipeline(
     pdf_bytes: bytes,
     pdf_filename: str,
@@ -538,6 +587,7 @@ async def _run_paired_pipeline(
     run_typo_check: bool = True,
     reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
     check_charts: bool = False,
+    checker_name: str = "",
 ) -> PairedVerificationResponse:
     """Run the full verification and return the merged fact + typo response.
 
@@ -554,6 +604,7 @@ async def _run_paired_pipeline(
     fallback. `run_typo_check=False` skips the spelling/grammar pass and leaves typo_check null.
     `check_charts=True` also reads the labels printed on the PDF's charts and checks each one
     against the tables (see pdf_chart_extraction); it needs a vision model.
+    `checker_name` is stored with the check in the history (see _record_in_history).
     """
     # Observe every stage event for timing, then forward to the real sink (if any). This
     # single recording callback is passed to both this function's _emit and verify_paired's
@@ -776,13 +827,24 @@ async def _run_paired_pipeline(
         # Same for a failed extraction chunk: its "page" is a block number (the UI then says
         # "sebagian teks" instead of naming a page).
         coverage_gaps = [g.model_copy(update={"pages": []}) for g in coverage_gaps]
-    return fact_result.model_copy(update={
+    response = fact_result.model_copy(update={
         "typo_check": typo_result,
         "number_format_notice": notice,
         "coverage_gaps": coverage_gaps,
         "unread_tables": (word.unread_tables
                           if word is not None and mode in ("internal", "both") else []),
     })
+    return await _record_in_history(
+        response,
+        pdf_filename=pdf_filename,
+        file_kind="docx" if word is not None else "pdf",
+        mode=mode,
+        checker_name=checker_name,
+        excel_sources=excel_sources,
+        reference_pdfs=reference_pdfs or [],
+        timer=timer,
+        usage_metadata=usage_handler.usage_metadata,
+    )
 
 
 _VERIFICATION_MODES = ("excel", "internal", "both", "none")
@@ -832,6 +894,7 @@ async def verify_paired_endpoint(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
     check_charts: bool = False,
+    checker_name: str = "",
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF report against a pool of reference tables.
 
@@ -853,6 +916,8 @@ async def verify_paired_endpoint(
     check_charts: set true to also read the numbers printed on the PDF's charts and check each
     against the tables; those results carry checked_item="chart".
 
+    checker_name: optional; stored with the check in the history (GET /api/history).
+
     Returns the whole response in one shot. For live progress during the (typically 40s+)
     run, use /api/verify-paired-stream instead — same inputs, same final payload.
     """
@@ -864,7 +929,7 @@ async def verify_paired_endpoint(
     try:
         return await _run_paired_pipeline(
             pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check,
-            reference_pdfs=references, check_charts=check_charts,
+            reference_pdfs=references, check_charts=check_charts, checker_name=checker_name,
         )
     except Exception as exc:
         logger.exception("Paired verification failed")
@@ -882,8 +947,11 @@ async def verify_paired_stream_endpoint(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
     check_charts: bool = False,
+    checker_name: str = "",
 ) -> StreamingResponse:
     """Same as /api/verify-paired, but streams progress while the pipeline runs.
+
+    checker_name: optional; stored with the check in the history (GET /api/history).
 
     The response is NDJSON (one JSON object per line), not SSE: the request is a multipart
     upload, which EventSource cannot send, and the browser reads this fine via fetch() +
@@ -910,7 +978,7 @@ async def verify_paired_stream_endpoint(
                 return await _run_paired_pipeline(
                     pdf_bytes, pdf_name, excel_sources, emit=queue.put_nowait,
                     mode=mode, run_typo_check=run_typo_check, reference_pdfs=references,
-                    check_charts=check_charts,
+                    check_charts=check_charts, checker_name=checker_name,
                 )
             finally:
                 # Unblocks the drain loop below on success AND on failure; the exception
