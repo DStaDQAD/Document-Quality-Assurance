@@ -207,6 +207,27 @@ select { cursor: pointer; }
 .cancel-btn:hover:not(:disabled) { color: #DC2626; border-color: #DC2626; }
 .cancel-btn:disabled { opacity: 0.5; cursor: default; }
 .cancel-btn .material-symbols-outlined { font-size: 16px; }
+/* Optional name stored with the check in the shared history (Riwayat). margin-right:auto
+   pushes it to the left of the footer, away from the action buttons. */
+.checker-field {
+  margin-right: auto; display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--white);
+  padding: 0 10px; color: var(--text-400);
+}
+.checker-field:focus-within { border-color: var(--blue-400); }
+.checker-field .material-symbols-outlined { font-size: 16px; }
+.checker-field input {
+  border: none; outline: none; background: transparent; font-family: inherit;
+  font-size: 13px; padding: 7px 0; width: 200px; color: var(--text-900);
+}
+/* Above each finished result: whether it made it into the history. */
+.history-note {
+  display: flex; align-items: center; gap: 6px; margin-bottom: 10px;
+  font-size: 12px; color: var(--text-400);
+}
+.history-note .material-symbols-outlined { font-size: 16px; }
+.history-note.is-saved { color: #15803D; }
+.history-note.is-unsaved { color: #B45309; }
 
 /* ── Dropzones ── */
 .dz-sub   {
@@ -991,6 +1012,11 @@ body.auth-locked .app {
               </fieldset>
             </div>
             <div class="card-footer">
+              <label class="checker-field" title="Nama ini ikut tersimpan di riwayat pengecekan">
+                <span class="material-symbols-outlined">person</span>
+                <input type="text" id="checker-name" maxlength="80" autocomplete="name"
+                       placeholder="Nama pemeriksa (opsional)">
+              </label>
               <button type="button" class="cancel-btn" id="cancel-btn" hidden>
                 <span class="material-symbols-outlined">close</span>
                 Batalkan
@@ -2062,6 +2088,25 @@ body.auth-locked .app {
     applyFilters();
   }
 
+  // ══ Check history: checker name + "saved" note ══════════════════════
+  // The checker's name is remembered per browser so it is typed once. Storage can be
+  // unavailable (private window, blocked site data); that must never break the form.
+  const CHECKER_NAME_KEY = "dqa.checkerName";
+  const checkerNameEl = document.getElementById("checker-name");
+  try { checkerNameEl.value = localStorage.getItem(CHECKER_NAME_KEY) || ""; } catch (_) {}
+  checkerNameEl.addEventListener("change", () => {
+    try { localStorage.setItem(CHECKER_NAME_KEY, checkerNameEl.value.trim()); } catch (_) {}
+  });
+
+  function renderHistoryNote(result) {
+    if (result.history_id) {
+      return `<div class="history-note is-saved">
+        <span class="material-symbols-outlined">history</span>Tersimpan di riwayat</div>`;
+    }
+    return `<div class="history-note is-unsaved">
+      <span class="material-symbols-outlined">warning</span>Hasil ini tidak tersimpan di riwayat</div>`;
+  }
+
   // ══ Paired verification with streamed progress ══════════════════════
   // The paired check takes 40s+, so it talks to /api/verify-paired-stream and reports each
   // pipeline stage as it happens instead of showing one opaque spinner. Rows are listed in
@@ -2150,7 +2195,7 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, withCharts, signal) {
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, signal) {
     resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo, crossPdf, withCharts));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
@@ -2164,7 +2209,8 @@ body.auth-locked .app {
     try {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
-          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}`,
+          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}` +
+          `&checker_name=${encodeURIComponent(checkerName)}`,
         { method: "POST", body: formData, signal },
         (ev) => {
           if (ev.type === "stage") updateProgressStage(resultEl, ev);
@@ -2194,7 +2240,7 @@ body.auth-locked .app {
       return;
     }
 
-    resultEl.innerHTML = renderPairedResponse(result);
+    resultEl.innerHTML = renderHistoryNote(result) + renderPairedResponse(result);
     document.getElementById("paired-container").classList.add("has-results");
     document.getElementById("panel-paired").classList.add("has-results");
     attachPairedHandlers(resultEl);
@@ -2209,6 +2255,7 @@ body.auth-locked .app {
     const withTypo = document.getElementById("rule-typo").checked;
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
     const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
+    const checkerName = checkerNameEl.value.trim();
     if (!pdfFiles.length) {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF atau Word terlebih dahulu.</div>`;
       return;
@@ -2274,7 +2321,7 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, controller.signal);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, controller.signal);
       }
     }).finally(() => {
       cancelBtn.hidden = true;
