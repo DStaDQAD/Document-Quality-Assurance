@@ -243,6 +243,7 @@ select { cursor: pointer; }
 .history-counts .is-mismatch { color: #DC2626; }
 .history-counts .is-unverified { color: #B45309; }
 .history-empty { padding: 18px 22px; }
+.history-busy { margin: 10px 18px 0; }
 /* display:flex on .card-footer would otherwise beat the hidden attribute. */
 .card-footer[hidden] { display: none; }
 .history-more-btn {
@@ -1077,6 +1078,7 @@ body.auth-locked .app {
           <span class="material-symbols-outlined">search</span>
           <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa">
         </div>
+        <div class="error-banner history-busy" id="history-busy" hidden></div>
         <div id="history-list"></div>
         <div class="card-footer" id="history-more-row" hidden>
           <button type="button" class="history-more-btn" id="history-more">Muat lagi</button>
@@ -2169,6 +2171,9 @@ body.auth-locked .app {
   let historyQuery = "";
   let historyRequest = 0;  // a newer search makes an older answer still in flight stale
   let historySearchTimer = null;
+  // True while the Verifikasi button's run is in flight (set by its click handler). An entry
+  // opened meanwhile would replace #paired-result, where that run is still writing.
+  let pairedRunActive = false;
 
   function formatWib(iso) {
     return new Date(iso).toLocaleString("id-ID", {
@@ -2256,6 +2261,16 @@ body.auth-locked .app {
   }
 
   async function openHistoryEntry(id) {
+    if (pairedRunActive) {
+      // Its progress and result would land in a node nobody sees, and a multi-file run would
+      // append the next reports under this old one.
+      const busy = document.getElementById("history-busy");
+      busy.textContent = "Pengecekan sedang berjalan. Tunggu sampai selesai atau batalkan dulu, " +
+        "lalu buka riwayat ini lagi.";
+      busy.hidden = false;
+      if (!document.getElementById("panel-history").classList.contains("active")) showTab("history");
+      return;
+    }
     showTab("paired");
     const resultEl = document.getElementById("paired-result");
     resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
@@ -2507,6 +2522,7 @@ body.auth-locked .app {
 
     // A new run replaces whatever entry from the history was open, so its link no longer applies.
     clearHistoryHash();
+    pairedRunActive = true;
     withDisabledButton(e.currentTarget, async () => {
       resultEl.innerHTML = "";
       for (let idx = 0; idx < pdfFiles.length && !controller.signal.aborted; idx++) {
@@ -2528,6 +2544,8 @@ body.auth-locked .app {
         await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, controller.signal);
       }
     }).finally(() => {
+      pairedRunActive = false;
+      document.getElementById("history-busy").hidden = true;
       cancelBtn.hidden = true;
       cancelBtn.removeEventListener("click", onCancel);
     });

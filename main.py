@@ -550,26 +550,28 @@ async def _record_in_history(
     The check already cost minutes and tokens, so the history never fails it: any error is
     logged and the response goes out with history_id None, which the UI reports as "not saved".
     """
-    tokens_in, tokens_out = usage_totals(usage_metadata)
-    summary = CheckSummary(
-        filename=pdf_filename,
-        file_kind=file_kind,
-        checker_name=checker_name,
-        mode=mode,
-        # One workbook is uploaded once per selected sheet; list each file once.
-        excel_files=list(dict.fromkeys(name for _, _, name in excel_sources)),
-        reference_files=[name for _, name in reference_pdfs],
-        n_facts=response.total_facts,
-        n_match=response.entailed_count,
-        n_mismatch=response.refuted_count,
-        n_unverified=response.inconclusive_count,
-        n_typos=response.typo_check.total_issues if response.typo_check else 0,
-        n_charts=len(response.chart_checks),
-        duration_s=timer.total(),
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-    )
     try:
+        # Building the summary is inside the try too: odd usage metadata from a provider must
+        # cost the history entry, not the finished check.
+        tokens_in, tokens_out = usage_totals(usage_metadata)
+        summary = CheckSummary(
+            filename=pdf_filename,
+            file_kind=file_kind,
+            checker_name=checker_name,
+            mode=mode,
+            # One workbook is uploaded once per selected sheet; list each file once.
+            excel_files=list(dict.fromkeys(name for _, _, name in excel_sources)),
+            reference_files=[name for _, name in reference_pdfs],
+            n_facts=response.total_facts,
+            n_match=response.entailed_count,
+            n_mismatch=response.refuted_count,
+            n_unverified=response.inconclusive_count,
+            n_typos=response.typo_check.total_issues if response.typo_check else 0,
+            n_charts=len(response.chart_checks),
+            duration_s=timer.total(),
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+        )
         check_id = await asyncio.to_thread(
             check_history.save_check, summary, response.model_dump(mode="json")
         )

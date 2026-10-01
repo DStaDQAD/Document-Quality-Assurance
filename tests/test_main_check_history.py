@@ -118,6 +118,25 @@ def test_a_failed_save_still_returns_the_result(mock_vision, mock_extract, mock_
     assert "History save failed" in caplog.text
 
 
+
+@patch("main.usage_totals", side_effect=ValueError("unexpected usage metadata"))
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_a_summary_that_cannot_be_built_still_returns_the_result(
+    mock_vision, mock_extract, mock_verify, _usage, caplog
+):
+    _mock_pipeline(mock_vision, mock_extract, mock_verify)
+
+    response = client.post(
+        "/api/verify-paired", params={"run_typo_check": "false"}, files=[_PDF, _XLS]
+    )
+
+    assert response.status_code == 200
+    assert response.json()["total_facts"] == 3
+    assert response.json()["history_id"] is None
+    assert "History save failed" in caplog.text
+
 @patch("main.verify_paired")
 @patch("main.extract_narrative_text")
 @patch("main.get_vision_llm")
