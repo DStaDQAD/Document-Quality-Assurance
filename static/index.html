@@ -228,6 +228,39 @@ select { cursor: pointer; }
 .history-note .material-symbols-outlined { font-size: 16px; }
 .history-note.is-saved { color: #15803D; }
 .history-note.is-unsaved { color: #B45309; }
+/* ── Riwayat (check history) ── */
+.history-toolbar { display: flex; align-items: center; gap: 8px; padding: 12px 18px; }
+.history-toolbar .material-symbols-outlined { font-size: 18px; color: var(--text-400); }
+.history-toolbar input {
+  flex: 1; border: none; outline: none; background: transparent;
+  font-family: inherit; font-size: 13px; color: var(--text-900);
+}
+.history-table-wrap { overflow-x: auto; }
+.history-row { cursor: pointer; }
+.history-row:focus { outline: 2px solid var(--blue-400); outline-offset: -2px; }
+.history-file { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.history-counts .is-match { color: #15803D; }
+.history-counts .is-mismatch { color: #DC2626; }
+.history-counts .is-unverified { color: #B45309; }
+.history-empty { padding: 18px 22px; }
+/* display:flex on .card-footer would otherwise beat the hidden attribute. */
+.card-footer[hidden] { display: none; }
+.history-more-btn {
+  background: var(--white); color: var(--text-500);
+  border: 1px solid var(--border); border-radius: var(--r);
+  padding: 7px 14px; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.history-more-btn:hover { color: var(--blue-400); border-color: var(--blue-400); }
+.history-banner {
+  display: flex; align-items: center; gap: 8px; padding: 9px 14px; margin-bottom: 12px;
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--blue-50);
+  font-size: 13px; color: var(--text-900);
+}
+.history-banner .material-symbols-outlined { font-size: 18px; color: var(--blue-400); }
+.history-back {
+  margin-left: auto; border: none; background: none; cursor: pointer;
+  color: var(--blue-400); font-family: inherit; font-size: 13px; font-weight: 600;
+}
 
 /* ── Dropzones ── */
 .dz-sub   {
@@ -919,6 +952,10 @@ body.auth-locked .app {
       <span class="material-symbols-outlined">compare_arrows</span>
       <span class="nav-text">Verifikasi</span>
     </a>
+    <a class="nav-item inactive-nav" data-tab="history" title="Riwayat">
+      <span class="material-symbols-outlined">history</span>
+      <span class="nav-text">Riwayat</span>
+    </a>
     <!-- "Lihat Data" browses /api/tables (the ground-truth SQLite DB). That DB is
          not shipped to the deployment (only synthetic sample data), so the tab is
          hidden here. Uncomment to restore it for local development. -->
@@ -1032,6 +1069,21 @@ body.auth-locked .app {
       </div>
     </div>
 
+    <!-- Panel: Riwayat. Every successful check, shared by everyone signed in (GET /api/history).
+         Opening a row renders the stored result on the Verifikasi panel. -->
+    <div class="panel" id="panel-history">
+      <div class="card">
+        <div class="card-header history-toolbar">
+          <span class="material-symbols-outlined">search</span>
+          <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa">
+        </div>
+        <div id="history-list"></div>
+        <div class="card-footer" id="history-more-row" hidden>
+          <button type="button" class="history-more-btn" id="history-more">Muat lagi</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Panel: Lihat Data -->
     <div class="panel" id="panel-data">
       <div class="panel-wrap-wide">
@@ -1089,25 +1141,28 @@ body.auth-locked .app {
 </div>
 
 <script>
-  const PANEL_TITLES = { paired: "Verifikasi", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi", history: "Riwayat", data: "Lihat Data" };
+
+  // Also called from code (opening a history entry, its back button), not only from the nav.
+  function showTab(tab) {
+    document.querySelectorAll(".nav-item[data-tab]").forEach((n) => {
+      const active = n.dataset.tab === tab;
+      n.classList.toggle("active-nav", active);
+      n.classList.toggle("inactive-nav", !active);
+    });
+    document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+    document.getElementById(`panel-${tab}`).classList.add("active");
+    document.getElementById("header-title").textContent = PANEL_TITLES[tab] || tab;
+    if (tab === "data" && !tableListLoaded) {
+      tableListLoaded = true;
+      loadTableList();
+    }
+    // Reloaded on every visit, so a check finished a moment ago is already listed.
+    if (tab === "history") loadHistory(true);
+  }
 
   document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
-    item.addEventListener("click", () => {
-      const tab = item.dataset.tab;
-      document.querySelectorAll(".nav-item[data-tab]").forEach((n) => {
-        n.classList.remove("active-nav");
-        n.classList.add("inactive-nav");
-      });
-      item.classList.remove("inactive-nav");
-      item.classList.add("active-nav");
-      document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
-      document.getElementById(`panel-${tab}`).classList.add("active");
-      document.getElementById("header-title").textContent = PANEL_TITLES[tab] || tab;
-      if (tab === "data" && !tableListLoaded) {
-        tableListLoaded = true;
-        loadTableList();
-      }
-    });
+    item.addEventListener("click", () => showTab(item.dataset.tab));
   });
 
   function escapeHtml(str) {
@@ -2107,6 +2162,153 @@ body.auth-locked .app {
       <span class="material-symbols-outlined">warning</span>Hasil ini tidak tersimpan di riwayat</div>`;
   }
 
+  // ══ Riwayat panel ═══════════════════════════════════════════════════
+  const HISTORY_PAGE = 50;
+  const MODE_LABELS = { excel: "Excel", internal: "Intra-file", both: "Excel + intra-file", none: "Antar-file" };
+  let historyItems = [];   // the summaries listed, by position; a row's data-idx points here
+  let historyQuery = "";
+  let historyRequest = 0;  // a newer search makes an older answer still in flight stale
+  let historySearchTimer = null;
+
+  function formatWib(iso) {
+    return new Date(iso).toLocaleString("id-ID", {
+      timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric",
+      hour: "2-digit", minute: "2-digit",
+    }) + " WIB";
+  }
+
+  function formatDuration(seconds) {
+    const s = Math.round(seconds);
+    return s < 60 ? `${s} dtk` : `${Math.floor(s / 60)} mnt ${s % 60} dtk`;
+  }
+
+  async function fetchJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      let detail = `Server membalas ${res.status}.`;
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  function renderHistoryRow(item, idx) {
+    const who = item.checker_name ? escapeHtml(item.checker_name) : `<span class="muted-text">—</span>`;
+    return `<tr class="history-row" data-idx="${idx}" tabindex="0">
+      <td>${escapeHtml(formatWib(item.created_at))}</td>
+      <td class="history-file" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</td>
+      <td>${who}</td>
+      <td>${escapeHtml(MODE_LABELS[item.mode] || item.mode)}</td>
+      <td class="history-counts">
+        <span class="is-match">✓ ${item.n_match}</span>
+        <span class="is-mismatch">✗ ${item.n_mismatch}</span>
+        <span class="is-unverified">? ${item.n_unverified}</span>
+      </td>
+      <td>${escapeHtml(formatDuration(item.duration_s))}</td>
+    </tr>`;
+  }
+
+  async function loadHistory(reset) {
+    const listEl = document.getElementById("history-list");
+    const moreRow = document.getElementById("history-more-row");
+    const request = ++historyRequest;
+    if (reset) {
+      historyItems = [];
+      listEl.innerHTML = `<p class="muted-text history-empty">Memuat riwayat…</p>`;
+    }
+    const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
+    let page;
+    try {
+      page = await fetchJson(`/api/history?${params}`);
+    } catch (err) {
+      if (request !== historyRequest) return;
+      const banner = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
+      // A failed "Muat lagi" keeps the rows already listed.
+      if (reset) listEl.innerHTML = banner; else listEl.insertAdjacentHTML("beforeend", banner);
+      moreRow.hidden = true;
+      return;
+    }
+    if (request !== historyRequest) return;
+    historyItems = historyItems.concat(page.items);
+    moreRow.hidden = !page.has_more;
+    if (!historyItems.length) {
+      listEl.innerHTML = `<p class="muted-text history-empty">${historyQuery
+        ? "Tidak ada pengecekan yang cocok." : "Belum ada pengecekan yang tersimpan."}</p>`;
+      return;
+    }
+    listEl.innerHTML = `<div class="history-table-wrap"><table class="data-table history-table">
+      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th></tr></thead>
+      <tbody>${historyItems.map(renderHistoryRow).join("")}</tbody>
+    </table></div>`;
+  }
+
+  function renderHistoryBanner(summary) {
+    const who = summary.checker_name ? ` · oleh ${escapeHtml(summary.checker_name)}` : "";
+    return `<div class="history-banner">
+      <span class="material-symbols-outlined">history</span>
+      <span>Dari riwayat · ${escapeHtml(formatWib(summary.created_at))}${who}</span>
+      <button type="button" class="history-back">← Kembali ke riwayat</button>
+    </div>`;
+  }
+
+  function clearHistoryHash() {
+    window.history.replaceState(null, "", window.location.pathname + window.location.search);
+  }
+
+  async function openHistoryEntry(id) {
+    showTab("paired");
+    const resultEl = document.getElementById("paired-result");
+    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
+    let entry;
+    try {
+      entry = await fetchJson(`/api/history/${encodeURIComponent(id)}`);
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    // replaceState, not location.hash: it does not fire hashchange, so this cannot loop.
+    window.history.replaceState(null, "", `#riwayat/${id}`);
+    // A fresh element per entry: attachPairedHandlers adds listeners to the element it is
+    // given, and reusing #paired-result across several opened entries would stack them (a
+    // chart thumbnail would then zoom and un-zoom on a single click).
+    const body = document.createElement("div");
+    body.innerHTML = renderHistoryBanner(entry.summary) + renderPairedResponse(entry.result);
+    resultEl.replaceChildren(body);
+    document.getElementById("paired-container").classList.add("has-results");
+    document.getElementById("panel-paired").classList.add("has-results");
+    attachPairedHandlers(body);
+    body.querySelector(".history-back").addEventListener("click", () => {
+      clearHistoryHash();
+      showTab("history");
+    });
+  }
+
+  // A shared link (…/#riwayat/<id>) opens its entry: on load once signed in (see unlock() in
+  // the login gate) and when the hash changes in an open tab.
+  function openFromHash() {
+    const m = /^#riwayat\/([0-9a-f-]{36})$/i.exec(window.location.hash);
+    if (m) openHistoryEntry(m[1]);
+  }
+  window.addEventListener("hashchange", openFromHash);
+
+  const historyListEl = document.getElementById("history-list");
+  historyListEl.addEventListener("click", (e) => {
+    const row = e.target.closest(".history-row");
+    if (row) openHistoryEntry(historyItems[Number(row.dataset.idx)].id);
+  });
+  historyListEl.addEventListener("keydown", (e) => {
+    const row = e.target.closest(".history-row");
+    if (row && e.key === "Enter") openHistoryEntry(historyItems[Number(row.dataset.idx)].id);
+  });
+  document.getElementById("history-more").addEventListener("click", () => loadHistory(false));
+  document.getElementById("history-search").addEventListener("input", (e) => {
+    clearTimeout(historySearchTimer);
+    historySearchTimer = setTimeout(() => {
+      historyQuery = e.target.value.trim();
+      loadHistory(true);
+    }, 300);
+  });
+
   // ══ Paired verification with streamed progress ══════════════════════
   // The paired check takes 40s+, so it talks to /api/verify-paired-stream and reports each
   // pipeline stage as it happens instead of showing one opaque spinner. Rows are listed in
@@ -2303,6 +2505,8 @@ body.auth-locked .app {
     cancelBtn.hidden = false;
     cancelBtn.addEventListener("click", onCancel, { once: true });
 
+    // A new run replaces whatever entry from the history was open, so its link no longer applies.
+    clearHistoryHash();
     withDisabledButton(e.currentTarget, async () => {
       resultEl.innerHTML = "";
       for (let idx = 0; idx < pdfFiles.length && !controller.signal.aborted; idx++) {
@@ -2350,6 +2554,7 @@ body.auth-locked .app {
       document.body.classList.remove("auth-locked");
       gate.style.opacity = "0";
       setTimeout(() => { gate.hidden = true; }, 350);
+      openFromHash();
     }
     function showForm() {
       gate.classList.remove("is-checking");
