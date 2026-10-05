@@ -319,6 +319,15 @@ select { cursor: pointer; }
 .rule-hint { font-size: 11px; color: var(--text-400); }
 .rule-check.is-disabled { opacity: 0.45; cursor: not-allowed; }
 .rule-check.is-disabled input { cursor: not-allowed; }
+.rules-group-label {
+  clear: both; display: block; margin-bottom: 8px;
+  font-size: 11px; font-weight: 600; color: var(--text-500);
+}
+.pending-pill {
+  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
+  background: var(--border); color: var(--text-500);
+  font-size: 9px; letter-spacing: 0.04em; vertical-align: 1px;
+}
 /* Excel column dimmed (not removed) while it holds files but its rule is unchecked: the files
    stay selected, so checking the rule again does not lose the user's picks. */
 .upload-field.is-muted { opacity: 0.45; }
@@ -1009,6 +1018,26 @@ body.auth-locked .app {
                   </button>
                 </div>
               </div>
+              <!-- Jenis publikasi: placeholder only. Each type will get its own document set and
+                   checks once the spec is known; nothing reads these boxes yet. -->
+              <fieldset class="rules" id="publication-types">
+                <legend class="upload-label">Jenis publikasi <span class="pending-pill">Belum aktif</span></legend>
+                <span class="rules-group-label">Publikasi disertai Siaran Pers</span>
+                <div class="rules-grid">
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="uang-beredar"><span class="rule-title">Uang Beredar</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="uang-primer-m0"><span class="rule-title">Uang Primer (M0) Adjusted</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="npi"><span class="rule-title">Neraca Pembayaran Indonesia</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="pii"><span class="rule-title">Posisi Investasi Internasional Indonesia</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="cadangan-devisa"><span class="rule-title">Cadangan Devisa</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sulni"><span class="rule-title">Statistik Utang Luar Negeri (SULNI)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sk"><span class="rule-title">Survei Konsumen (SK)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="spe"><span class="rule-title">Survei Penjualan Eceran (SPE)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="skdu"><span class="rule-title">Laporan Survei Kegiatan Dunia Usaha (SKDU)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="pmi"><span class="rule-title">Prompt Manufacturing Index (PMI)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sbank"><span class="rule-title">Survei Perbankan (SBank)</span></label>
+                  <label class="rule-check"><input type="checkbox" name="publication-type" value="shpr"><span class="rule-title">Survei Harga Properti Residensial (SHPR)</span></label>
+                </div>
+              </fieldset>
               <fieldset class="rules" id="check-rules">
                 <legend class="upload-label">Aturan pemeriksaan</legend>
                 <div class="rules-grid">
