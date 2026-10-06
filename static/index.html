@@ -320,9 +320,9 @@ select { cursor: pointer; }
 .rule-check.is-disabled { opacity: 0.45; cursor: not-allowed; }
 .rule-check.is-disabled input { cursor: not-allowed; }
 .rule-check[hidden], .rules-note[hidden] { display: none; }
-/* Under a publication the rules are fixed: shown, not clickable */
+/* The rules follow the publication: shown, mostly not clickable */
 .rules-note { clear: both; margin: -4px 0 10px; font-size: 11px; color: var(--text-400); }
-.rules.is-fixed .rule-check, .rules.is-fixed .rule-check input { cursor: default; }
+.rule-check:has(input:disabled), .rule-check input:disabled { cursor: default; }
 /* Aturan pemeriksaan folds under one summary line, closed on load */
 .rules-details { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .rules-details summary {
@@ -346,8 +346,6 @@ select { cursor: pointer; }
 @media (max-width: 560px) { .upload-row.has-three { grid-template-columns: 1fr; } }
 /* Excel column dimmed (not removed) while it holds files but its rule is unchecked: the files
    stay selected, so checking the rule again does not lose the user's picks. */
-.upload-field.is-muted { opacity: 0.45; }
-.upload-field.is-muted .dropzone-sm, .upload-field.is-muted .add-excel-btn { pointer-events: none; }
 
 /* ── Verdict badges ── */
 .badge {
@@ -1021,14 +1019,7 @@ body.auth-locked .app {
           <div class="card" style="margin-bottom:0">
             <div class="card-header">
               <div class="upload-row" id="upload-row">
-                <div class="upload-field" id="general-upload-field">
-                  <span class="upload-label">Laporan (PDF / Word)</span>
-                  <div id="pdf-sources-container"></div>
-                  <button type="button" id="add-pdf-btn" class="add-excel-btn">
-                    <span class="material-symbols-outlined">add</span> Tambah file
-                  </button>
-                </div>
-                <div class="upload-field" id="press-upload-field" hidden>
+                <div class="upload-field" id="press-upload-field">
                   <span class="upload-label">Siaran Pers</span>
                   <div id="press-source-container"></div>
                 </div>
@@ -1044,20 +1035,20 @@ body.auth-locked .app {
                   </button>
                 </div>
               </div>
-              <!-- Jenis publikasi picks the upload columns above it: a publication asks for its own
-                   documents (Siaran Pers, plus Laporan when it has one), "Umum" keeps the free
-                   column. The radios after "Umum" are built from PUBLICATIONS in the script. -->
+              <!-- Jenis publikasi picks the upload columns above it: every publication has a
+                   Siaran Pers, plus a Laporan when it has one. The options are built from
+                   PUBLICATIONS in the script; nothing is chosen on load. -->
               <fieldset class="rules" id="publication-types">
                 <legend class="upload-label">Jenis publikasi</legend>
-                <div class="rules-grid" id="publication-grid">
-                  <label class="rule-check"><input type="radio" name="publication-type" value="" checked><span class="rule-title">Umum (dokumen bebas)</span></label>
-                </div>
+                <select id="publication-select" aria-label="Jenis publikasi">
+                  <option value="" disabled selected>Pilih jenis publikasi…</option>
+                </select>
               </fieldset>
               <!-- Aturan pemeriksaan starts folded; the summary line opens it. -->
               <details class="rules-details" id="rules-details">
                 <summary class="upload-label" id="check-rules-legend">Aturan pemeriksaan</summary>
               <fieldset class="rules" id="check-rules" aria-labelledby="check-rules-legend">
-                <div class="rules-note" id="rules-fixed-note" hidden>Ditetapkan untuk publikasi ini, tidak perlu dicentang.</div>
+                <div class="rules-note" id="rules-fixed-note">Pilih jenis publikasi untuk melihat aturannya.</div>
                 <div class="rules-grid">
                   <label class="rule-check">
                     <input type="checkbox" id="rule-intra" checked>
@@ -1239,7 +1230,6 @@ body.auth-locked .app {
   // ── Multi-Excel source management ──────────────────────────────────────────
   const EXCEL_ACCEPT = ".xls,.xlsx,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
   let excelSources = []; // [{container, inp, picker}]
-  let excelWasPresent = false; // syncRules() state; up here because Excel entries call syncRules()
 
   const isPdfFile   = (f) => f.type === "application/pdf" || /\.pdf$/i.test(f.name);
   const isExcelFile = (f) => /\.xlsx?$/i.test(f.name);
@@ -1494,64 +1484,6 @@ body.auth-locked .app {
   addExcelSource(); // initialize with one source
   document.getElementById("add-excel-btn").addEventListener("click", addExcelSource);
 
-  // ── Multi-PDF source management (mirrors the Excel pattern; each entry = one PDF) ──
-  // Every PDF is verified in its own request against the same Excel sources; with the
-  // "Konsistensi antar-file" rule on, the other PDFs ride along as reference_pdf.
-  // pdfSources are the free "Umum" column; the submit handler reads activeReportSources().
-  let pdfSources = []; // [{container, inp}]
-  let severalPdfsWerePresent = false; // syncRules() state, like excelWasPresent
-  let tablesWereChosen = true;       // syncRules() state for the chart rule; intra starts checked
-
-  function updatePdfRemoveButtons() {
-    pdfSources.forEach((src) => {
-      src.container.querySelector(".remove-excel-btn").style.visibility =
-        pdfSources.length > 1 ? "visible" : "hidden";
-    });
-  }
-
-  function addPdfSource() {
-    const uid = Date.now() + pdfSources.length;
-    const container = document.createElement("div");
-    container.className = "excel-source-entry";
-    container.innerHTML = `
-      <div class="source-entry-header">
-        <div class="dropzone-sm" id="pdf-dz-${uid}">
-          <span class="material-symbols-outlined">picture_as_pdf</span>
-          <div class="dz-sub" id="pdf-fn-${uid}">Pilih file PDF atau Word (.docx)</div>
-          <input type="file" id="pdf-inp-${uid}" accept="application/pdf,.pdf,.docx,${WORD_MIME}" multiple style="display:none">
-        </div>
-        <button type="button" class="remove-excel-btn" title="Hapus" style="visibility:hidden">
-          <span class="material-symbols-outlined">close</span>
-        </button>
-      </div>`;
-    const inp = container.querySelector(`#pdf-inp-${uid}`);
-    const fn  = container.querySelector(`#pdf-fn-${uid}`);
-    const dz  = container.querySelector(`#pdf-dz-${uid}`);
-    const removeBtn = container.querySelector(".remove-excel-btn");
-    const assign = attachDropzoneBehavior(dz, inp, fn, {
-      placeholder: "Pilih file PDF atau Word (.docx)",
-      accepts: isReportFile,
-      rejectText: "File selain PDF atau Word diabaikan",
-      onFile: () => syncRules(),
-      addEntry: addPdfSource,
-    });
-    removeBtn.addEventListener("click", () => {
-      if (pdfSources.length <= 1) return;
-      pdfSources = pdfSources.filter(s => s.container !== container);
-      container.remove();
-      updatePdfRemoveButtons();
-      syncRules();
-    });
-    const src = { container, inp, assign };
-    pdfSources.push(src);
-    document.getElementById("pdf-sources-container").appendChild(container);
-    updatePdfRemoveButtons();
-    return src;
-  }
-
-  addPdfSource(); // initialize with one PDF field
-  document.getElementById("add-pdf-btn").addEventListener("click", addPdfSource);
-
   // ── Jenis publikasi. Each publication has a press release; `report` says whether BI also
   // publishes a narrative report for it. `excel` records where its Excel tables come from (empty
   // when unknown; not shown in the UI). The keys are what the server stores in the history (check_history.PUBLICATIONS).
@@ -1575,14 +1507,13 @@ body.auth-locked .app {
     "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
   };
 
-  document.getElementById("publication-grid").insertAdjacentHTML("beforeend",
-    Object.entries(PUBLICATIONS).map(([key, p]) => `<label class="rule-check">
-      <input type="radio" name="publication-type" value="${key}">
-      <span class="rule-title">${escapeHtml(p.label)}</span></label>`).join(""));
+  const publicationSelect = document.getElementById("publication-select");
+  publicationSelect.insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
+    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
 
-  // "" for Umum.
+  // "" until a publication is chosen.
   function currentPublication() {
-    return document.querySelector('input[name="publication-type"]:checked')?.value || "";
+    return publicationSelect.value || "";
   }
 
   // A fixed, single-file slot for one of a publication's documents.
@@ -1608,23 +1539,21 @@ body.auth-locked .app {
   const pressSlot  = makeReportSlot("press-source-container", "Siaran Pers");
   const reportSlot = makeReportSlot("publication-report-container", "Laporan");
 
-  // The documents the next run checks. Files in a hidden column stay picked but are not sent,
-  // so switching back to a publication does not lose them.
+  // The documents the next run checks. Each is verified in its own request; with the antar-file
+  // rule on, the other one rides along as reference_pdf. A Laporan picked under a publication
+  // that has one stays picked, but is not sent, when a publication without one is chosen.
   function activeReportSources() {
     const pub = PUBLICATIONS[currentPublication()];
-    if (!pub) return pdfSources;
-    return pub.report ? [pressSlot, reportSlot] : [pressSlot];
+    return pub?.report ? [pressSlot, reportSlot] : [pressSlot];
   }
 
   function applyPublication() {
     const pub = PUBLICATIONS[currentPublication()];
-    document.getElementById("general-upload-field").hidden = !!pub;
-    document.getElementById("press-upload-field").hidden = !pub;
     document.getElementById("publication-report-field").hidden = !pub?.report;
     document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report);
     syncRules();
   }
-  document.getElementById("publication-types").addEventListener("change", applyPublication);
+  publicationSelect.addEventListener("change", applyPublication);
 
   // A drop that misses a dropzone would make the browser open the file in place of the app,
   // throwing away every pick made so far. Outside a dropzone, show "not allowed" instead.
@@ -1649,105 +1578,55 @@ body.auth-locked .app {
     return null;
   }
 
-  // A rule whose inputs are missing is disabled and cleared; it checks itself the moment they
-  // arrive, like a default. The explanation says what is missing until then.
-  function followInputs(box, hint, present, wasPresent, explanation, missing) {
-    if (present && !wasPresent) box.checked = true;
-    if (!present) box.checked = false;
-    box.disabled = !present;
-    box.closest(".rule-check").classList.toggle("is-disabled", !present);
-    hint.textContent = present ? explanation : `${explanation} · ${missing}`;
-  }
-
   const RULE_BOXES = {
     intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", charts: "rule-charts", typo: "rule-typo",
   };
-  const CHARTS_HINT = "Label angka pada grafik dibaca AI, lalu dicek terhadap tabel";
-  let rulesFixed = false;   // whether the boxes currently show a publication's fixed rules
+  const RULE_HINTS = {
+    intra: ["Narasi vs tabel di dokumen yang sama"],
+    cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
+    excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
+    charts: ["Label angka pada grafik dibaca AI, lalu dicek terhadap tabel · opsional"],
+  };
+  // Cek grafik is the one rule a checker may switch off (it costs AI calls). The choice is kept
+  // when another publication is picked.
+  let chartsWanted = true;
+  document.getElementById("rule-charts").addEventListener("change", (e) => { chartsWanted = e.target.checked; });
 
-  // Under a publication the boxes only display its `rules`: each one runs as soon as its
-  // documents are there, cannot be unticked, and a rule the publication does not use is hidden.
-  // The submit handler reads the boxes either way, so the request is built the same as under Umum.
-  function applyFixedRules(pub, excelPresent, severalPdfs) {
-    const ready = { excel: excelPresent, cross: severalPdfs };
-    const hints = {
-      intra: ["Narasi vs tabel di dokumen yang sama"],
-      cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
-      excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
-      charts: [CHARTS_HINT],
+  // The boxes display the chosen publication's `rules`: each one runs as soon as its documents
+  // are there and cannot be unticked, except cek grafik; a rule the publication does not use is
+  // hidden, and with no publication chosen none is shown. The submit handler reads the boxes.
+  // Declared as a function (hoisted) because the file entries call it on every change.
+  function syncRules() {
+    const pub = PUBLICATIONS[currentPublication()];
+    const ready = {
+      excel: excelSources.some((s) => s.inp.files.length > 0),
+      cross: activeReportSources().filter((s) => s.inp.files.length > 0).length >= 2,
     };
     for (const [key, id] of Object.entries(RULE_BOXES)) {
       const box = document.getElementById(id);
       const label = box.closest(".rule-check");
-      const used = pub.rules.includes(key);
+      const used = !!pub && pub.rules.includes(key);
       const runs = used && ready[key] !== false;
+      const optional = key === "charts";
       label.hidden = !used;
-      box.checked = runs;
-      box.disabled = true;
+      box.checked = runs && (!optional || chartsWanted);
+      box.disabled = !(optional && runs);
       label.classList.toggle("is-disabled", used && !runs);
       const hint = document.getElementById(`${id}-hint`);
-      if (hint && hints[key]) {
-        const [text, missing] = hints[key];
+      if (hint && RULE_HINTS[key]) {
+        const [text, missing] = RULE_HINTS[key];
         hint.textContent = runs || !missing ? text : `${text} · ${missing}`;
       }
     }
-    document.getElementById("check-rules-legend").textContent = `Aturan untuk ${pub.label}`;
+    document.getElementById("check-rules-legend").textContent =
+      pub ? `Aturan untuk ${pub.label}` : "Aturan pemeriksaan";
+    document.getElementById("rules-fixed-note").textContent = !pub
+      ? "Pilih jenis publikasi untuk melihat aturannya."
+      : pub.rules.includes("charts")
+        ? "Ditetapkan untuk publikasi ini. Cek grafik boleh dimatikan."
+        : "Ditetapkan untuk publikasi ini, tidak perlu dicentang.";
   }
 
-  // Back to Umum: every box clickable again, with the same defaults as on page load.
-  function resetRuleDefaults() {
-    for (const id of Object.values(RULE_BOXES)) {
-      const box = document.getElementById(id);
-      box.disabled = false;
-      box.closest(".rule-check").hidden = false;
-      box.closest(".rule-check").classList.remove("is-disabled");
-    }
-    for (const id of ["rule-intra", "rule-typo", "rule-charts"]) document.getElementById(id).checked = true;
-    document.getElementById("rule-intra-hint").textContent = "Narasi vs tabel di PDF yang sama";
-    document.getElementById("check-rules-legend").textContent = "Aturan pemeriksaan";
-    // followInputs below then ticks Excel / antar-file again if their files are there
-    excelWasPresent = false;
-    severalPdfsWerePresent = false;
-  }
-
-  // The Excel rule follows the Excel files and the cross-file rule the number of PDFs.
-  // Declared as a function (hoisted) because the file entries call it on every change.
-  function syncRules() {
-    const pub = PUBLICATIONS[currentPublication()];
-    const ruleExcel = document.getElementById("rule-excel");
-    const present = excelSources.some((s) => s.inp.files.length > 0);
-    const severalPdfs = activeReportSources().filter((s) => s.inp.files.length > 0).length >= 2;
-    document.getElementById("check-rules").classList.toggle("is-fixed", !!pub);
-    document.getElementById("rules-fixed-note").hidden = !pub;
-    if (pub) {
-      applyFixedRules(pub, present, severalPdfs);
-    } else {
-      if (rulesFixed) resetRuleDefaults();
-      followInputs(ruleExcel, document.getElementById("rule-excel-hint"), present, excelWasPresent,
-        "Narasi vs tabel Excel", "unggah file Excel untuk mengaktifkan");
-      followInputs(document.getElementById("rule-cross-pdf"),
-        document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
-        "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
-      // Chart labels are checked against tables, so the rule needs a rule that brings some.
-      const tablesChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
-      followInputs(document.getElementById("rule-charts"),
-        document.getElementById("rule-charts-hint"), tablesChosen, tablesWereChosen,
-        CHARTS_HINT, "centang konsistensi intra-file atau Excel untuk mengaktifkan");
-    }
-    rulesFixed = !!pub;
-    excelWasPresent = present;
-    severalPdfsWerePresent = severalPdfs;
-    tablesWereChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
-    // Dimmed only when files are there but unused. With no files the column must stay live,
-    // since uploading is exactly what switches the Excel rule on.
-    const muted = present && !ruleExcel.checked;
-    document.getElementById("excel-upload-field").classList.toggle("is-muted", muted);
-    document.getElementById("excel-upload-label").textContent =
-      muted ? "Tabel Excel (tidak dipakai)" : "Tabel Excel";
-  }
-
-  document.getElementById("rule-excel").addEventListener("change", syncRules);
-  document.getElementById("rule-intra").addEventListener("change", syncRules);
   syncRules();
 
   // Browse table
@@ -2667,12 +2546,12 @@ body.auth-locked .app {
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
     const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
     const checkerName = checkerNameEl.value.trim();
-    if (!pdfFiles.length) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF atau Word terlebih dahulu.</div>`;
+    if (!publication) {
+      resultEl.innerHTML = `<div class="error-banner">Pilih jenis publikasi terlebih dahulu.</div>`;
       return;
     }
-    if (!mode) {
-      resultEl.innerHTML = `<div class="error-banner">Pilih minimal satu aturan pemeriksaan angka: konsistensi intra-file, antar-file, atau terhadap Excel.</div>`;
+    if (!pdfFiles.length) {
+      resultEl.innerHTML = `<div class="error-banner">Pilih file PDF atau Word terlebih dahulu.</div>`;
       return;
     }
     // Internal mode compares against the PDF's own tables, so the Excel column is ignored
