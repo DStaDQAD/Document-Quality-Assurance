@@ -1557,17 +1557,14 @@ body.auth-locked .app {
   // when unknown; not shown in the UI). The keys are what the server stores in the history (check_history.PUBLICATIONS).
   // `rules` is the publication's fixed set of checks, which replaces the Aturan pemeriksaan
   // checkboxes (see syncRules). A press release alone has no second document to cross-check and
-  // as a rule no charts, so those publications skip both. The chart rule reads the values printed
-  // on a chart, so it is left out where the report's charts carry none: Uang Beredar (time-series
-  // lines) and PII (unlabelled stacked bars), surveyed on the 2026 editions.
+  // as a rule no charts, so those publications skip both.
   const WITH_REPORT_RULES = ["intra", "cross", "excel", "charts", "typo"];
-  const REPORT_NO_CHART_RULES = ["intra", "cross", "excel", "typo"];
   const PRESS_ONLY_RULES = ["intra", "excel", "typo"];
   const PUBLICATIONS = {
-    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A", rules: REPORT_NO_CHART_RULES },
+    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A", rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2", rules: PRESS_ONLY_RULES },
     "npi":             { label: "Neraca Pembayaran Indonesia", report: true, excel: "SEKI Tabel V.1", rules: WITH_REPORT_RULES },
-    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39", rules: REPORT_NO_CHART_RULES },
+    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39", rules: WITH_REPORT_RULES },
     "cadangan-devisa": { label: "Cadangan Devisa", report: false, excel: "SEKI Tabel V.9", rules: PRESS_ONLY_RULES },
     "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, excel: "Tabel SULNI (zip di halaman SULNI)", rules: PRESS_ONLY_RULES },
     "sk":              { label: "Survei Konsumen (SK)", report: true, excel: "SK.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
