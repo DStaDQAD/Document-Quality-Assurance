@@ -540,6 +540,7 @@ async def _record_in_history(
     file_kind: str,
     mode: str,
     checker_name: str,
+    publication: str,
     excel_sources: List[Tuple[bytes, str, str]],
     reference_pdfs: List[Tuple[bytes, str]],
     timer: StageTimer,
@@ -558,6 +559,7 @@ async def _record_in_history(
             filename=pdf_filename,
             file_kind=file_kind,
             checker_name=checker_name,
+            publication=publication,
             mode=mode,
             # One workbook is uploaded once per selected sheet; list each file once.
             excel_files=list(dict.fromkeys(name for _, _, name in excel_sources)),
@@ -591,6 +593,7 @@ async def _run_paired_pipeline(
     reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
     check_charts: bool = False,
     checker_name: str = "",
+    publication: str = "",
 ) -> PairedVerificationResponse:
     """Run the full verification and return the merged fact + typo response.
 
@@ -607,7 +610,8 @@ async def _run_paired_pipeline(
     fallback. `run_typo_check=False` skips the spelling/grammar pass and leaves typo_check null.
     `check_charts=True` also reads the labels printed on the PDF's charts and checks each one
     against the tables (see pdf_chart_extraction); it needs a vision model.
-    `checker_name` is stored with the check in the history (see _record_in_history).
+    `checker_name` and `publication` are stored with the check in the history (see
+    _record_in_history).
     """
     # Observe every stage event for timing, then forward to the real sink (if any). This
     # single recording callback is passed to both this function's _emit and verify_paired's
@@ -843,6 +847,7 @@ async def _run_paired_pipeline(
         file_kind="docx" if word is not None else "pdf",
         mode=mode,
         checker_name=checker_name,
+        publication=publication,
         excel_sources=excel_sources,
         reference_pdfs=reference_pdfs or [],
         timer=timer,
@@ -898,6 +903,7 @@ async def verify_paired_endpoint(
     ),
     check_charts: bool = False,
     checker_name: str = "",
+    publication: str = "",
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF report against a pool of reference tables.
 
@@ -921,6 +927,9 @@ async def verify_paired_endpoint(
 
     checker_name: optional; stored with the check in the history (GET /api/history).
 
+    publication: optional publication type ("sk", "uang-primer-m0", ...; see
+    check_history.PUBLICATIONS), stored with the check in the history. Unknown values are dropped.
+
     Returns the whole response in one shot. For live progress during the (typically 40s+)
     run, use /api/verify-paired-stream instead — same inputs, same final payload.
     """
@@ -933,6 +942,7 @@ async def verify_paired_endpoint(
         return await _run_paired_pipeline(
             pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check,
             reference_pdfs=references, check_charts=check_charts, checker_name=checker_name,
+            publication=publication,
         )
     except Exception as exc:
         logger.exception("Paired verification failed")
@@ -951,10 +961,11 @@ async def verify_paired_stream_endpoint(
     ),
     check_charts: bool = False,
     checker_name: str = "",
+    publication: str = "",
 ) -> StreamingResponse:
     """Same as /api/verify-paired, but streams progress while the pipeline runs.
 
-    checker_name: optional; stored with the check in the history (GET /api/history).
+    checker_name, publication: optional; stored with the check in the history (GET /api/history).
 
     The response is NDJSON (one JSON object per line), not SSE: the request is a multipart
     upload, which EventSource cannot send, and the browser reads this fine via fetch() +
@@ -982,6 +993,7 @@ async def verify_paired_stream_endpoint(
                     pdf_bytes, pdf_name, excel_sources, emit=queue.put_nowait,
                     mode=mode, run_typo_check=run_typo_check, reference_pdfs=references,
                     check_charts=check_charts, checker_name=checker_name,
+                    publication=publication,
                 )
             finally:
                 # Unblocks the drain loop below on success AND on failure; the exception

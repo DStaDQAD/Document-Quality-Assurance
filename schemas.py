@@ -262,6 +262,7 @@ class CheckSummary(BaseModel):
     filename: str
     file_kind: Literal["pdf", "docx"]
     checker_name: Optional[str] = None
+    publication: Optional[str] = None       # a check_history.PUBLICATIONS key; None = "Umum"
     mode: str
     excel_files: List[str] = Field(default_factory=list)
     reference_files: List[str] = Field(default_factory=list)

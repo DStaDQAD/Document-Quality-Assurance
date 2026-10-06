@@ -84,6 +84,24 @@ def test_stream_saves_the_check_too(mock_vision, mock_extract, mock_verify):
     items, _ = check_history.list_checks()
     assert [i.id for i in items] == [result["history_id"]]
     assert items[0].checker_name is None
+    assert items[0].publication is None
+
+
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_both_endpoints_store_the_publication(mock_vision, mock_extract, mock_verify):
+    _mock_pipeline(mock_vision, mock_extract, mock_verify)
+
+    client.post("/api/verify-paired",
+                params={"run_typo_check": "false", "publication": "uang-beredar"},
+                files=[_PDF, _XLS])
+    client.post("/api/verify-paired-stream",
+                params={"run_typo_check": "false", "publication": "shpr"},
+                files=[_PDF, _XLS])
+
+    items, _ = check_history.list_checks()
+    assert sorted(i.publication for i in items) == ["shpr", "uang-beredar"]
 
 
 @patch("main.verify_paired")

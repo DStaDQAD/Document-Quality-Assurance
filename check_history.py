@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, LargeBinary, MetaData, String, Table, Text,
-    create_engine, func, or_, select,
+    create_engine, func, inspect, or_, select, text,
 )
 from sqlalchemy.engine import Engine
 
@@ -33,6 +33,13 @@ logger = logging.getLogger("fact-checker")
 LOCAL_DB_PATH = Path(__file__).parent / "history.db"
 CHECKER_NAME_MAX_CHARS = 80
 
+# The publication types the upload card offers (its "Jenis publikasi" radios use these values;
+# the UI holds the labels). A check run under "Umum" has no publication.
+PUBLICATIONS = (
+    "uang-beredar", "uang-primer-m0", "npi", "pii", "cadangan-devisa", "sulni",
+    "sk", "spe", "skdu", "pmi", "sbank", "shpr",
+)
+
 _metadata = MetaData()
 checks = Table(
     "checks", _metadata,
@@ -41,6 +48,7 @@ checks = Table(
     Column("filename", String(512), nullable=False),
     Column("file_kind", String(8), nullable=False),
     Column("checker_name", String(CHECKER_NAME_MAX_CHARS)),
+    Column("publication", String(32)),
     Column("mode", String(16), nullable=False),
     Column("excel_files", Text, nullable=False),       # JSON list of names
     Column("reference_files", Text, nullable=False),   # JSON list of names
@@ -98,8 +106,22 @@ def _get_engine() -> Engine:
                 connect_args = {"connect_timeout": 10}
             engine = create_engine(url, pool_pre_ping=True, connect_args=connect_args)
             _metadata.create_all(engine)
+            _add_missing_columns(engine)
             _engine = engine
         return _engine
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    """Bring a table made by an earlier release up to date; create_all never alters one.
+
+    Only nullable columns are ever added after the first release, so old rows simply read None.
+    """
+    present = {c["name"] for c in inspect(engine).get_columns(checks.name)}
+    with engine.begin() as conn:
+        for column in checks.columns:
+            if column.name not in present:
+                ddl_type = column.type.compile(dialect=engine.dialect)
+                conn.execute(text(f"ALTER TABLE {checks.name} ADD COLUMN {column.name} {ddl_type}"))
 
 
 def reset_engine() -> None:
@@ -126,6 +148,12 @@ def normalize_checker_name(raw: Optional[str]) -> Optional[str]:
     return name or None
 
 
+def normalize_publication(raw: Optional[str]) -> Optional[str]:
+    """A known publication key, or None for "Umum" and anything unrecognised."""
+    key = (raw or "").strip().lower()
+    return key if key in PUBLICATIONS else None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -135,6 +163,7 @@ def save_check(summary: CheckSummary, result: Dict[str, Any]) -> str:
     check_id = str(uuid.uuid4())
     row = summary.model_dump(exclude={"id", "created_at"})
     row["checker_name"] = normalize_checker_name(row["checker_name"])
+    row["publication"] = normalize_publication(row["publication"])
     row["excel_files"] = json.dumps(row["excel_files"], ensure_ascii=False)
     row["reference_files"] = json.dumps(row["reference_files"], ensure_ascii=False)
     blob = gzip.compress(json.dumps(result, ensure_ascii=False).encode("utf-8"))

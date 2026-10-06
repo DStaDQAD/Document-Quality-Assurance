@@ -319,15 +319,20 @@ select { cursor: pointer; }
 .rule-hint { font-size: 11px; color: var(--text-400); }
 .rule-check.is-disabled { opacity: 0.45; cursor: not-allowed; }
 .rule-check.is-disabled input { cursor: not-allowed; }
-.rules-group-label {
-  clear: both; display: block; margin-bottom: 8px;
-  font-size: 11px; font-weight: 600; color: var(--text-500);
+/* Jenis publikasi sits above the upload columns, since it decides which ones show */
+.rules.is-first {
+  border-top: none; border-bottom: 1px solid var(--border);
+  margin: 0 0 14px; padding: 0 0 14px;
 }
-.pending-pill {
-  margin-left: 6px; padding: 1px 6px; border-radius: 999px;
-  background: var(--border); color: var(--text-500);
-  font-size: 9px; letter-spacing: 0.04em; vertical-align: 1px;
+.upload-field[hidden], .upload-hint[hidden] { display: none; }
+.upload-hint { font-size: 11px; color: var(--text-400); }
+/* A publication with a report shows three columns: Siaran Pers, Laporan, Excel */
+.upload-row.has-three { grid-template-columns: repeat(3, 1fr); }
+@media (max-width: 760px) {
+  .upload-row.has-three { grid-template-columns: 1fr 1fr; }
+  .upload-row.has-three #excel-upload-field { grid-column: 1 / -1; }
 }
+@media (max-width: 560px) { .upload-row.has-three { grid-template-columns: 1fr; } }
 /* Excel column dimmed (not removed) while it holds files but its rule is unchecked: the files
    stay selected, so checking the rule again does not lose the user's picks. */
 .upload-field.is-muted { opacity: 0.45; }
@@ -805,6 +810,8 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .paired-container.has-results .upload-row {
   gap: 8px;
 }
+.paired-container.has-results .upload-row.has-three { grid-template-columns: 1fr 1fr; }
+.paired-container.has-results .upload-row.has-three #excel-upload-field { grid-column: 1 / -1; }
 .paired-container.has-results .paired-form-area {
   padding: 20px;
   overflow-y: auto;
@@ -1002,13 +1009,30 @@ body.auth-locked .app {
         <div class="paired-form-area">
           <div class="card" style="margin-bottom:0">
             <div class="card-header">
-              <div class="upload-row">
-                <div class="upload-field">
+              <!-- Jenis publikasi picks the upload columns: a publication asks for its own
+                   documents (Siaran Pers, plus Laporan when it has one), "Umum" keeps the free
+                   column. The radios after "Umum" are built from PUBLICATIONS in the script. -->
+              <fieldset class="rules is-first" id="publication-types">
+                <legend class="upload-label">Jenis publikasi</legend>
+                <div class="rules-grid" id="publication-grid">
+                  <label class="rule-check"><input type="radio" name="publication-type" value="" checked><span class="rule-title">Umum (dokumen bebas)</span></label>
+                </div>
+              </fieldset>
+              <div class="upload-row" id="upload-row">
+                <div class="upload-field" id="general-upload-field">
                   <span class="upload-label">Laporan (PDF / Word)</span>
                   <div id="pdf-sources-container"></div>
                   <button type="button" id="add-pdf-btn" class="add-excel-btn">
                     <span class="material-symbols-outlined">add</span> Tambah file
                   </button>
+                </div>
+                <div class="upload-field" id="press-upload-field" hidden>
+                  <span class="upload-label">Siaran Pers</span>
+                  <div id="press-source-container"></div>
+                </div>
+                <div class="upload-field" id="publication-report-field" hidden>
+                  <span class="upload-label">Laporan</span>
+                  <div id="publication-report-container"></div>
                 </div>
                 <div class="upload-field" id="excel-upload-field">
                   <span class="upload-label" id="excel-upload-label">Tabel Excel</span>
@@ -1016,28 +1040,9 @@ body.auth-locked .app {
                   <button type="button" id="add-excel-btn" class="add-excel-btn">
                     <span class="material-symbols-outlined">add</span> Tambah Tabel
                   </button>
+                  <span class="upload-hint" id="excel-source-hint" hidden></span>
                 </div>
               </div>
-              <!-- Jenis publikasi: placeholder only. Each type will get its own document set and
-                   checks once the spec is known; nothing reads these boxes yet. -->
-              <fieldset class="rules" id="publication-types">
-                <legend class="upload-label">Jenis publikasi <span class="pending-pill">Belum aktif</span></legend>
-                <span class="rules-group-label">Publikasi disertai Siaran Pers</span>
-                <div class="rules-grid">
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="uang-beredar"><span class="rule-title">Uang Beredar</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="uang-primer-m0"><span class="rule-title">Uang Primer (M0) Adjusted</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="npi"><span class="rule-title">Neraca Pembayaran Indonesia</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="pii"><span class="rule-title">Posisi Investasi Internasional Indonesia</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="cadangan-devisa"><span class="rule-title">Cadangan Devisa</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sulni"><span class="rule-title">Statistik Utang Luar Negeri (SULNI)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sk"><span class="rule-title">Survei Konsumen (SK)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="spe"><span class="rule-title">Survei Penjualan Eceran (SPE)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="skdu"><span class="rule-title">Laporan Survei Kegiatan Dunia Usaha (SKDU)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="pmi"><span class="rule-title">Prompt Manufacturing Index (PMI)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="sbank"><span class="rule-title">Survei Perbankan (SBank)</span></label>
-                  <label class="rule-check"><input type="checkbox" name="publication-type" value="shpr"><span class="rule-title">Survei Harga Properti Residensial (SHPR)</span></label>
-                </div>
-              </fieldset>
               <fieldset class="rules" id="check-rules">
                 <legend class="upload-label">Aturan pemeriksaan</legend>
                 <div class="rules-grid">
@@ -1266,8 +1271,9 @@ body.auth-locked .app {
         return;
       }
       assign(valid[0]);
-      valid.slice(1).forEach((f) => addEntry().assign(f));
-      if (valid.length < files.length) flashRejected();
+      // A fixed slot (no addEntry) holds exactly one file; the rest of a drop is ignored.
+      if (addEntry) valid.slice(1).forEach((f) => addEntry().assign(f));
+      if (valid.length < files.length || (!addEntry && valid.length > 1)) flashRejected();
     }
 
     dz.addEventListener("click", () => inp.click());
@@ -1477,7 +1483,7 @@ body.auth-locked .app {
   // ── Multi-PDF source management (mirrors the Excel pattern; each entry = one PDF) ──
   // Every PDF is verified in its own request against the same Excel sources; with the
   // "Konsistensi antar-file" rule on, the other PDFs ride along as reference_pdf.
-  // pdfSources is the source of truth the submit handler reads.
+  // pdfSources are the free "Umum" column; the submit handler reads activeReportSources().
   let pdfSources = []; // [{container, inp}]
   let severalPdfsWerePresent = false; // syncRules() state, like excelWasPresent
   let tablesWereChosen = true;       // syncRules() state for the chart rule; intra starts checked
@@ -1532,6 +1538,78 @@ body.auth-locked .app {
   addPdfSource(); // initialize with one PDF field
   document.getElementById("add-pdf-btn").addEventListener("click", addPdfSource);
 
+  // ── Jenis publikasi. Each publication has a press release; `report` says whether BI also
+  // publishes a narrative report for it. `excel` names where its Excel tables come from (empty
+  // when unknown). The keys are what the server stores in the history (check_history.PUBLICATIONS).
+  const PUBLICATIONS = {
+    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A" },
+    "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2" },
+    "npi":             { label: "Neraca Pembayaran Indonesia", report: true, excel: "SEKI Tabel V.1" },
+    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39" },
+    "cadangan-devisa": { label: "Cadangan Devisa", report: false, excel: "SEKI Tabel V.9" },
+    "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, excel: "Tabel SULNI (zip di halaman SULNI)" },
+    "sk":              { label: "Survei Konsumen (SK)", report: true, excel: "SK.zip dari halaman Laporan BI" },
+    "spe":             { label: "Survei Penjualan Eceran (SPE)", report: true, excel: "spe.zip dari halaman Laporan BI" },
+    "skdu":            { label: "Laporan Survei Kegiatan Dunia Usaha (SKDU)", report: true, excel: "SKDU.zip dari halaman Laporan BI" },
+    "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, excel: "" },
+    "sbank":           { label: "Survei Perbankan (SBank)", report: true, excel: "SBank.zip dari halaman Laporan BI" },
+    "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI" },
+  };
+
+  document.getElementById("publication-grid").insertAdjacentHTML("beforeend",
+    Object.entries(PUBLICATIONS).map(([key, p]) => `<label class="rule-check">
+      <input type="radio" name="publication-type" value="${key}">
+      <span class="rule-title">${escapeHtml(p.label)}</span></label>`).join(""));
+
+  // "" for Umum.
+  function currentPublication() {
+    return document.querySelector('input[name="publication-type"]:checked')?.value || "";
+  }
+
+  // A fixed, single-file slot for one of a publication's documents.
+  function makeReportSlot(containerId, role) {
+    const uid = `${containerId}-${Date.now()}`;
+    const container = document.getElementById(containerId);
+    container.className = "excel-source-entry";
+    container.innerHTML = `
+      <div class="dropzone-sm" id="dz-${uid}">
+        <span class="material-symbols-outlined">picture_as_pdf</span>
+        <div class="dz-sub" id="fn-${uid}">Pilih file PDF atau Word (.docx)</div>
+        <input type="file" id="inp-${uid}" accept="application/pdf,.pdf,.docx,${WORD_MIME}" style="display:none">
+      </div>`;
+    const inp = container.querySelector(`#inp-${uid}`);
+    attachDropzoneBehavior(container.querySelector(`#dz-${uid}`), inp, container.querySelector(`#fn-${uid}`), {
+      placeholder: "Pilih file PDF atau Word (.docx)",
+      accepts: isReportFile,
+      rejectText: "Satu file PDF atau Word saja; file lain diabaikan",
+      onFile: () => syncRules(),
+    });
+    return { container, inp, role };
+  }
+  const pressSlot  = makeReportSlot("press-source-container", "Siaran Pers");
+  const reportSlot = makeReportSlot("publication-report-container", "Laporan");
+
+  // The documents the next run checks. Files in a hidden column stay picked but are not sent,
+  // so switching back to a publication does not lose them.
+  function activeReportSources() {
+    const pub = PUBLICATIONS[currentPublication()];
+    if (!pub) return pdfSources;
+    return pub.report ? [pressSlot, reportSlot] : [pressSlot];
+  }
+
+  function applyPublication() {
+    const pub = PUBLICATIONS[currentPublication()];
+    document.getElementById("general-upload-field").hidden = !!pub;
+    document.getElementById("press-upload-field").hidden = !pub;
+    document.getElementById("publication-report-field").hidden = !pub?.report;
+    document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report);
+    const hint = document.getElementById("excel-source-hint");
+    hint.hidden = !pub?.excel;
+    hint.textContent = pub?.excel ? `Sumber: ${pub.excel}` : "";
+    syncRules();
+  }
+  document.getElementById("publication-types").addEventListener("change", applyPublication);
+
   // A drop that misses a dropzone would make the browser open the file in place of the app,
   // throwing away every pick made so far. Outside a dropzone, show "not allowed" instead.
   document.addEventListener("dragover", (e) => {
@@ -1574,7 +1652,7 @@ body.auth-locked .app {
       "Narasi vs tabel Excel", "unggah file Excel untuk mengaktifkan");
     excelWasPresent = present;
 
-    const severalPdfs = pdfSources.filter((s) => s.inp.files.length > 0).length >= 2;
+    const severalPdfs = activeReportSources().filter((s) => s.inp.files.length > 0).length >= 2;
     followInputs(document.getElementById("rule-cross-pdf"),
       document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
       "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
@@ -2226,11 +2304,20 @@ body.auth-locked .app {
     return res.json();
   }
 
+  // A publication key from the history as its label; a check without one ran under "Umum".
+  function publicationLabel(key) {
+    return key ? (PUBLICATIONS[key]?.label || key) : "Umum";
+  }
+
   function renderHistoryRow(item, idx) {
     const who = item.checker_name ? escapeHtml(item.checker_name) : `<span class="muted-text">—</span>`;
+    const pub = item.publication
+      ? escapeHtml(publicationLabel(item.publication))
+      : `<span class="muted-text">Umum</span>`;
     return `<tr class="history-row" data-idx="${idx}" tabindex="0">
       <td>${escapeHtml(formatWib(item.created_at))}</td>
       <td class="history-file" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</td>
+      <td>${pub}</td>
       <td>${who}</td>
       <td>${escapeHtml(MODE_LABELS[item.mode] || item.mode)}</td>
       <td class="history-counts">
@@ -2271,16 +2358,17 @@ body.auth-locked .app {
       return;
     }
     listEl.innerHTML = `<div class="history-table-wrap"><table class="data-table history-table">
-      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th></tr></thead>
+      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th></tr></thead>
       <tbody>${historyItems.map(renderHistoryRow).join("")}</tbody>
     </table></div>`;
   }
 
   function renderHistoryBanner(summary) {
     const who = summary.checker_name ? ` · oleh ${escapeHtml(summary.checker_name)}` : "";
+    const pub = summary.publication ? ` · ${escapeHtml(publicationLabel(summary.publication))}` : "";
     return `<div class="history-banner">
       <span class="material-symbols-outlined">history</span>
-      <span>Dari riwayat · ${escapeHtml(formatWib(summary.created_at))}${who}</span>
+      <span>Dari riwayat · ${escapeHtml(formatWib(summary.created_at))}${pub}${who}</span>
       <button type="button" class="history-back">← Kembali ke riwayat</button>
     </div>`;
   }
@@ -2441,7 +2529,7 @@ body.auth-locked .app {
     if (buf.trim()) onEvent(JSON.parse(buf));
   }
 
-  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, signal) {
+  async function runPairedVerification(resultEl, formData, sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, publication, signal) {
     resultEl.innerHTML = renderProgressShell(stagesFor(mode, withTypo, crossPdf, withCharts));
     const elapsedEl = resultEl.querySelector(".progress-elapsed");
     const startedAt = Date.now();
@@ -2456,7 +2544,7 @@ body.auth-locked .app {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
           `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}` +
-          `&checker_name=${encodeURIComponent(checkerName)}`,
+          `&checker_name=${encodeURIComponent(checkerName)}&publication=${encodeURIComponent(publication)}`,
         { method: "POST", body: formData, signal },
         (ev) => {
           if (ev.type === "stage") updateProgressStage(resultEl, ev);
@@ -2494,7 +2582,10 @@ body.auth-locked .app {
 
   document.querySelector('[data-action="paired"]').addEventListener("click", (e) => {
     const resultEl = document.getElementById("paired-result");
-    const pdfFiles = pdfSources.map(s => s.inp.files[0]).filter(Boolean);
+    const filled = activeReportSources().filter((s) => s.inp.files.length > 0);
+    const pdfFiles = filled.map((s) => s.inp.files[0]);
+    const roles = filled.map((s) => s.role || "");   // "Siaran Pers" / "Laporan" under a publication
+    const publication = currentPublication();
     // Snapshot the settings for the whole run, so flipping a checkbox mid-run cannot make one
     // PDF in the loop use different settings from the next.
     const mode = currentMode();
@@ -2561,7 +2652,7 @@ body.auth-locked .app {
           section.className = "pdf-report-section";
           section.innerHTML = `<div class="pdf-report-header">
             <span class="material-symbols-outlined">picture_as_pdf</span>
-            <span class="pdf-report-name">${escapeHtml(pdfFiles[idx].name)}</span>
+            <span class="pdf-report-name">${roles[idx] ? `${escapeHtml(roles[idx])} · ` : ""}${escapeHtml(pdfFiles[idx].name)}</span>
             <span class="pdf-report-count">${idx + 1}/${pdfFiles.length}</span>
           </div>`;
           section.appendChild(body);
@@ -2570,7 +2661,7 @@ body.auth-locked .app {
         } else {
           resultEl.appendChild(body);
         }
-        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, controller.signal);
+        await runPairedVerification(body, buildFormData(pdfFiles[idx]), sheetNames, mode, withTypo, crossPdf, withCharts, checkerName, publication, controller.signal);
       }
     }).finally(() => {
       pairedRunActive = false;

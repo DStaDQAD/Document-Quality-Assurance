@@ -4,7 +4,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import create_engine, select, text
 
 import check_history
 from schemas import CheckSummary
@@ -132,6 +132,44 @@ def test_checker_name_is_collapsed_capped_and_blank_becomes_none(clock):
     assert by_file["a.pdf"] == "Ivan Jehuda"
     assert by_file["b.pdf"] == "x" * 80
     assert by_file["c.pdf"] is None
+
+
+def test_publication_is_stored_and_unknown_or_blank_becomes_none(clock):
+    _save("a.pdf", publication="uang-primer-m0")
+    _save("b.pdf", publication=" SK ")
+    _save("c.pdf", publication="bukan-publikasi")
+    _save("d.pdf", publication="")
+    _save("e.pdf")
+
+    by_file = {i.filename: i.publication for i in check_history.list_checks()[0]}
+
+    assert by_file == {"a.pdf": "uang-primer-m0", "b.pdf": "sk", "c.pdf": None,
+                       "d.pdf": None, "e.pdf": None}
+    check_id = _save("f.pdf", publication="cadangan-devisa")
+    assert check_history.get_check(check_id)[0].publication == "cadangan-devisa"
+
+
+def test_a_table_created_before_publication_existed_gets_the_column(tmp_path, monkeypatch):
+    # Production's Neon table was created by the first history release, without this column;
+    # create_all never alters an existing table.
+    url = f"sqlite:///{(tmp_path / 'old.db').as_posix()}"
+    engine = create_engine(url)
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE checks (id VARCHAR(36) PRIMARY KEY, created_at DATETIME NOT NULL, "
+            "filename VARCHAR(512) NOT NULL, file_kind VARCHAR(8) NOT NULL, "
+            "checker_name VARCHAR(80), mode VARCHAR(16) NOT NULL, excel_files TEXT NOT NULL, "
+            "reference_files TEXT NOT NULL, n_facts INTEGER NOT NULL, n_match INTEGER NOT NULL, "
+            "n_mismatch INTEGER NOT NULL, n_unverified INTEGER NOT NULL, n_typos INTEGER NOT NULL, "
+            "n_charts INTEGER NOT NULL, duration_s FLOAT NOT NULL, tokens_in INTEGER NOT NULL, "
+            "tokens_out INTEGER NOT NULL, result_gz BLOB NOT NULL)"))
+    engine.dispose()
+    monkeypatch.setenv("HISTORY_DATABASE_URL", url)
+    check_history.reset_engine()
+
+    _save("lama.pdf", publication="sulni")
+
+    assert [i.publication for i in check_history.list_checks()[0]] == ["sulni"]
 
 
 @pytest.mark.parametrize("raw, expected", [
