@@ -319,6 +319,10 @@ select { cursor: pointer; }
 .rule-hint { font-size: 11px; color: var(--text-400); }
 .rule-check.is-disabled { opacity: 0.45; cursor: not-allowed; }
 .rule-check.is-disabled input { cursor: not-allowed; }
+.rule-check[hidden], .rules-note[hidden] { display: none; }
+/* Under a publication the rules are fixed: shown, not clickable */
+.rules-note { clear: both; margin: -4px 0 10px; font-size: 11px; color: var(--text-400); }
+.rules.is-fixed .rule-check, .rules.is-fixed .rule-check input { cursor: default; }
 /* Jenis publikasi sits above the upload columns, since it decides which ones show */
 .rules.is-first {
   border-top: none; border-bottom: 1px solid var(--border);
@@ -1044,13 +1048,14 @@ body.auth-locked .app {
                 </div>
               </div>
               <fieldset class="rules" id="check-rules">
-                <legend class="upload-label">Aturan pemeriksaan</legend>
+                <legend class="upload-label" id="check-rules-legend">Aturan pemeriksaan</legend>
+                <div class="rules-note" id="rules-fixed-note" hidden>Ditetapkan untuk publikasi ini, tidak perlu dicentang.</div>
                 <div class="rules-grid">
                   <label class="rule-check">
                     <input type="checkbox" id="rule-intra" checked>
                     <span class="rule-text">
                       <span class="rule-title">Konsistensi intra-file</span>
-                      <span class="rule-hint">Narasi vs tabel di PDF yang sama</span>
+                      <span class="rule-hint" id="rule-intra-hint">Narasi vs tabel di PDF yang sama</span>
                     </span>
                   </label>
                   <label class="rule-check">
@@ -1541,19 +1546,24 @@ body.auth-locked .app {
   // ── Jenis publikasi. Each publication has a press release; `report` says whether BI also
   // publishes a narrative report for it. `excel` names where its Excel tables come from (empty
   // when unknown). The keys are what the server stores in the history (check_history.PUBLICATIONS).
+  // `rules` is the publication's fixed set of checks, which replaces the Aturan pemeriksaan
+  // checkboxes (see syncRules). A press release alone has no second document to cross-check and
+  // as a rule no charts, so those publications skip both.
+  const WITH_REPORT_RULES = ["intra", "cross", "excel", "charts", "typo"];
+  const PRESS_ONLY_RULES = ["intra", "excel", "typo"];
   const PUBLICATIONS = {
-    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A" },
-    "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2" },
-    "npi":             { label: "Neraca Pembayaran Indonesia", report: true, excel: "SEKI Tabel V.1" },
-    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39" },
-    "cadangan-devisa": { label: "Cadangan Devisa", report: false, excel: "SEKI Tabel V.9" },
-    "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, excel: "Tabel SULNI (zip di halaman SULNI)" },
-    "sk":              { label: "Survei Konsumen (SK)", report: true, excel: "SK.zip dari halaman Laporan BI" },
-    "spe":             { label: "Survei Penjualan Eceran (SPE)", report: true, excel: "spe.zip dari halaman Laporan BI" },
-    "skdu":            { label: "Laporan Survei Kegiatan Dunia Usaha (SKDU)", report: true, excel: "SKDU.zip dari halaman Laporan BI" },
-    "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, excel: "" },
-    "sbank":           { label: "Survei Perbankan (SBank)", report: true, excel: "SBank.zip dari halaman Laporan BI" },
-    "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI" },
+    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A", rules: WITH_REPORT_RULES },
+    "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2", rules: PRESS_ONLY_RULES },
+    "npi":             { label: "Neraca Pembayaran Indonesia", report: true, excel: "SEKI Tabel V.1", rules: WITH_REPORT_RULES },
+    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39", rules: WITH_REPORT_RULES },
+    "cadangan-devisa": { label: "Cadangan Devisa", report: false, excel: "SEKI Tabel V.9", rules: PRESS_ONLY_RULES },
+    "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, excel: "Tabel SULNI (zip di halaman SULNI)", rules: PRESS_ONLY_RULES },
+    "sk":              { label: "Survei Konsumen (SK)", report: true, excel: "SK.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
+    "spe":             { label: "Survei Penjualan Eceran (SPE)", report: true, excel: "spe.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
+    "skdu":            { label: "Laporan Survei Kegiatan Dunia Usaha (SKDU)", report: true, excel: "SKDU.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
+    "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, excel: "", rules: WITH_REPORT_RULES },
+    "sbank":           { label: "Survei Perbankan (SBank)", report: true, excel: "SBank.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
+    "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
   };
 
   document.getElementById("publication-grid").insertAdjacentHTML("beforeend",
@@ -1643,27 +1653,85 @@ body.auth-locked .app {
     hint.textContent = present ? explanation : `${explanation} · ${missing}`;
   }
 
+  const RULE_BOXES = {
+    intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", charts: "rule-charts", typo: "rule-typo",
+  };
+  const CHARTS_HINT = "Label angka pada grafik dibaca AI, lalu dicek terhadap tabel";
+  let rulesFixed = false;   // whether the boxes currently show a publication's fixed rules
+
+  // Under a publication the boxes only display its `rules`: each one runs as soon as its
+  // documents are there, cannot be unticked, and a rule the publication does not use is hidden.
+  // The submit handler reads the boxes either way, so the request is built the same as under Umum.
+  function applyFixedRules(pub, excelPresent, severalPdfs) {
+    const ready = { excel: excelPresent, cross: severalPdfs };
+    const hints = {
+      intra: ["Narasi vs tabel di dokumen yang sama"],
+      cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
+      excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
+      charts: [CHARTS_HINT],
+    };
+    for (const [key, id] of Object.entries(RULE_BOXES)) {
+      const box = document.getElementById(id);
+      const label = box.closest(".rule-check");
+      const used = pub.rules.includes(key);
+      const runs = used && ready[key] !== false;
+      label.hidden = !used;
+      box.checked = runs;
+      box.disabled = true;
+      label.classList.toggle("is-disabled", used && !runs);
+      const hint = document.getElementById(`${id}-hint`);
+      if (hint && hints[key]) {
+        const [text, missing] = hints[key];
+        hint.textContent = runs || !missing ? text : `${text} · ${missing}`;
+      }
+    }
+    document.getElementById("check-rules-legend").textContent = `Aturan untuk ${pub.label}`;
+  }
+
+  // Back to Umum: every box clickable again, with the same defaults as on page load.
+  function resetRuleDefaults() {
+    for (const id of Object.values(RULE_BOXES)) {
+      const box = document.getElementById(id);
+      box.disabled = false;
+      box.closest(".rule-check").hidden = false;
+      box.closest(".rule-check").classList.remove("is-disabled");
+    }
+    for (const id of ["rule-intra", "rule-typo", "rule-charts"]) document.getElementById(id).checked = true;
+    document.getElementById("rule-intra-hint").textContent = "Narasi vs tabel di PDF yang sama";
+    document.getElementById("check-rules-legend").textContent = "Aturan pemeriksaan";
+    // followInputs below then ticks Excel / antar-file again if their files are there
+    excelWasPresent = false;
+    severalPdfsWerePresent = false;
+  }
+
   // The Excel rule follows the Excel files and the cross-file rule the number of PDFs.
   // Declared as a function (hoisted) because the file entries call it on every change.
   function syncRules() {
+    const pub = PUBLICATIONS[currentPublication()];
     const ruleExcel = document.getElementById("rule-excel");
     const present = excelSources.some((s) => s.inp.files.length > 0);
-    followInputs(ruleExcel, document.getElementById("rule-excel-hint"), present, excelWasPresent,
-      "Narasi vs tabel Excel", "unggah file Excel untuk mengaktifkan");
-    excelWasPresent = present;
-
     const severalPdfs = activeReportSources().filter((s) => s.inp.files.length > 0).length >= 2;
-    followInputs(document.getElementById("rule-cross-pdf"),
-      document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
-      "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
+    document.getElementById("check-rules").classList.toggle("is-fixed", !!pub);
+    document.getElementById("rules-fixed-note").hidden = !pub;
+    if (pub) {
+      applyFixedRules(pub, present, severalPdfs);
+    } else {
+      if (rulesFixed) resetRuleDefaults();
+      followInputs(ruleExcel, document.getElementById("rule-excel-hint"), present, excelWasPresent,
+        "Narasi vs tabel Excel", "unggah file Excel untuk mengaktifkan");
+      followInputs(document.getElementById("rule-cross-pdf"),
+        document.getElementById("rule-cross-pdf-hint"), severalPdfs, severalPdfsWerePresent,
+        "Narasi vs tabel di PDF lain", "unggah minimal 2 PDF untuk mengaktifkan");
+      // Chart labels are checked against tables, so the rule needs a rule that brings some.
+      const tablesChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
+      followInputs(document.getElementById("rule-charts"),
+        document.getElementById("rule-charts-hint"), tablesChosen, tablesWereChosen,
+        CHARTS_HINT, "centang konsistensi intra-file atau Excel untuk mengaktifkan");
+    }
+    rulesFixed = !!pub;
+    excelWasPresent = present;
     severalPdfsWerePresent = severalPdfs;
-    // Chart labels are checked against tables, so the rule needs a rule that brings some.
-    const tablesChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
-    followInputs(document.getElementById("rule-charts"),
-      document.getElementById("rule-charts-hint"), tablesChosen, tablesWereChosen,
-      "Label angka pada grafik dibaca AI, lalu dicek terhadap tabel",
-      "centang konsistensi intra-file atau Excel untuk mengaktifkan");
-    tablesWereChosen = tablesChosen;
+    tablesWereChosen = document.getElementById("rule-intra").checked || ruleExcel.checked;
     // Dimmed only when files are there but unused. With no files the column must stay live,
     // since uploading is exactly what switches the Excel rule on.
     const muted = present && !ruleExcel.checked;
