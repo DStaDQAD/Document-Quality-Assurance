@@ -6,7 +6,15 @@
     "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx": {
       "T1 Kegiatan Usaha": {"year": 2026, "period": "Q3"},
       "T2 Kapasitas Produksi": {"year": 2026, "period": "Q2"},
-      "T4 Penggunaan Tenaga Kerja": {"year": 2026, "period": "Q3"}
+      "T3 Keuangan dan Akses Kredit": {"year": 2026, "period": "Q2"},
+      "T4 Penggunaan Tenaga Kerja": {"year": 2026, "period": "Q3"},
+      "T5 Harga Jual": {"year": 2026, "period": "Q3"},
+      "T6 Perkiraan Inflasi": {"year": 2026, "period": "Q2"},
+      "T7 Investasi Triwulanan": {"year": 2026, "period": "Q3"},
+      "T7b Investasi Semesteran": {"year": 2026, "period": "Q2"},
+      "T8 Perkembangan Upah": {"year": 2026, "period": "Q1"},
+      "T9 Upah Rata-rata": {"year": 2026, "period": "Q1"},
+      "T10 Margin Usaha": {"year": 2026, "period": "Q1"}
     }
   },
   "values": [
