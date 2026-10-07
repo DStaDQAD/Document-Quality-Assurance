@@ -1038,3 +1038,32 @@ def test_extract_async_reports_which_pages_a_failed_chunk_covered():
     ))
 
     assert gaps == [([2], "503 overloaded")]
+
+
+# ---------------------------------------------------------------------------
+# Prompt rules for growth kinds and changes in a level
+# ---------------------------------------------------------------------------
+
+def _system_prompt_text() -> str:
+    from structured_extractor import _EXTRACTION_PROMPT
+
+    messages = _EXTRACTION_PROMPT.format_messages(row_labels_block="-", narrative_text="-")
+    return messages[0].content
+
+
+def test_prompt_keeps_month_on_month_and_quarterly_growth_out_of_yoy():
+    # SPE E2E: "terkontraksi sebesar 0,1% (mtm)" was extracted as yoy_growth and checked
+    # against a yoy figure computed from the index — eleven false Tidak Sesuai in one report.
+    prompt = _system_prompt_text()
+
+    assert "(mtm)" in prompt and "(qtq)" in prompt
+    assert "NOT yoy" in prompt
+
+
+def test_prompt_turns_a_stated_change_in_a_level_into_a_diff():
+    # PII E2E: "modal ekuitas yang turun sebesar 16,8 miliar dolar AS" was extracted as a value
+    # and compared with the level 250,3.
+    prompt = _system_prompt_text()
+
+    assert "turun sebesar" in prompt
+    assert "operation='diff'" in prompt

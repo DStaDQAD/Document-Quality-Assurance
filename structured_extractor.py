@@ -279,6 +279,24 @@ IMPORTANT RULES:
    APRIL's — the month the report is about — and the previous month's values are not stated at
    all. Only a phrase that puts the number directly after the earlier period ('pada Maret 2026
    sebesar 8,4%', 'bulan sebelumnya sebesar 8,4%') dates it to that earlier month.
+2e. MONTH-ON-MONTH AND QUARTER-ON-QUARTER GROWTH IS NOT yoy. A rate marked '(mtm)', '(qtq)' or
+   '(ctc)' — or described as 'secara bulanan' / 'secara triwulanan' — is operation='value' with
+   unit='persen', NOT yoy_growth: the report's tables hold these rates as cells of their own
+   (e.g. a '%, mtm' table), and a yoy computed from levels answers a different question. The
+   contraction rule 2b still applies to the sign:
+     'penjualan eceran ... terkontraksi sebesar 0,1% (mtm)'   → value, '-0,1', unit 'persen'
+     'harga rumah tipe menengah tumbuh sebesar 0,40% (qtq)'    → value, '0,40', unit 'persen'
+   Only a rate marked '(yoy)' or described as 'secara tahunan' is yoy_growth.
+2f. A STATED CHANGE IN A LEVEL IS A diff, NOT A value. When the text says a level rose or fell BY
+   an amount in a level unit ('naik sebesar', 'turun sebesar', 'meningkat sebesar', 'menurun
+   sebesar', 'bertambah', 'berkurang' + 'X miliar/triliun ...'), the number is the DIFFERENCE
+   between the previous period and the current one, not the level itself: use operation='diff'
+   with periods = [previous period, current period] of that metric, and a MINUS SIGN on
+   claimed_value_raw for a fall ('turun', 'menurun', 'berkurang'):
+     'posisi modal ekuitas yang turun sebesar 16,8 miliar dolar AS' (report on Q2 2026)
+         → diff, periods [Q1 2026, Q2 2026], '-16,8'
+   A percentage change stays a growth rate (rules 2, 2b, 2e); a sentence that states the new
+   level itself ('naik menjadi 145,6 miliar') is a value.
 3. For each metric that has both an absolute value AND a growth rate in the same sentence, create
    TWO separate entries: one operation='value', one operation='yoy_growth' — each with its own
    short anchor_quote covering just its own number (e.g. 'sebesar Rp10.355,1 triliun' vs
