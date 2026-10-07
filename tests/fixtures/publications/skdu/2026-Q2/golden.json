@@ -1,0 +1,40 @@
+{
+  "publication": "skdu",
+  "data_period": "2026-Q2",
+  "release": "Laporan Survei Kegiatan Dunia Usaha Triwulan II 2026 (laporan.pdf)",
+  "sheets": {
+    "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx": {
+      "T1 Kegiatan Usaha": {"year": 2026, "period": "Q3"},
+      "T2 Kapasitas Produksi": {"year": 2026, "period": "Q2"},
+      "T4 Penggunaan Tenaga Kerja": {"year": 2026, "period": "Q3"}
+    }
+  },
+  "values": [
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
+     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
+     "expected": 12.97, "quote": "Saldo Bersih Tertimbang (SBT) sebesar 12,97%"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
+     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q1", "kind": "value", "decimals": 2,
+     "expected": 10.11, "quote": "lebih tinggi dari 10,11%"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
+     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q3", "kind": "value", "decimals": 2,
+     "expected": 11.75, "quote": "Pada triwulan III 2026, responden memprakirakan kegiatan usaha tetap terjaga dengan SBT 11,75%"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
+     "label": "PERTANIAN, KEHUTANAN DAN PERIKANAN", "year": 2026, "period": "Q2", "kind": "value",
+     "decimals": 2, "expected": 1.74, "quote": "LU Pertanian, Kehutanan, dan Perikanan (SBT 1,74%)"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
+     "label": "KONSTRUKSI", "year": 2026, "period": "Q2", "kind": "value",
+     "decimals": 2, "expected": 0.81, "quote": "LU Konstruksi (SBT 0,81%)"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T2 Kapasitas Produksi",
+     "label": "PENGADAAN AIR, PENGELOLAAN SAMPAH, LIMBAH DAN DAUR ULANG > TOTAL", "year": 2026,
+     "period": "Q2", "kind": "value", "decimals": 2, "expected": 73.80,
+     "quote": "kapasitas produksi terpakai pada triwulan II 2026 tercatat sebesar 73,80%"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T2 Kapasitas Produksi",
+     "label": "PENGADAAN AIR, PENGELOLAAN SAMPAH, LIMBAH DAN DAUR ULANG > TOTAL", "year": 2026,
+     "period": "Q1", "kind": "value", "decimals": 2, "expected": 73.33,
+     "quote": "dibandingkan 73,33% pada triwulan I 2026"},
+    {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T4 Penggunaan Tenaga Kerja",
+     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
+     "expected": 0.14, "quote": "SBT tenaga kerja tercatat tetap tumbuh sebesar 0,14%"}
+  ]
+}

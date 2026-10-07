@@ -68,3 +68,42 @@ def test_sulni_covers_only_its_time_series_sheets(sheet, expected):
 ])
 def test_npi_and_pii_cover_their_seki_sheets(publication, sheet, expected):
     assert covers(publication, sheet) is expected
+
+
+@pytest.mark.parametrize("publication, sheet, expected", [
+    ("sk", "Tabel 1", True), ("sk", "Tabel 9", True), ("sk", "Tabel 10", False),
+    ("skdu", "T1 Kegiatan Usaha", True), ("skdu", "T7b Investasi Semesteran", True),
+    ("skdu", "T10 Margin Usaha", True), ("skdu", "Tabel 1", False),
+])
+def test_sk_and_skdu_cover_their_survey_sheets(publication, sheet, expected):
+    assert covers(publication, sheet) is expected
+
+
+@patch("publication_parsers._common.parse_generic_table")
+def test_survey_wrapper_keeps_the_indonesian_half_of_the_unit(mock_generic):
+    mock_generic.return_value = TableData(
+        title="t", unit="Rp)  / (IDR", row_labels=["Mandor"], _data={("Mandor", 2026, "Q1"): 1.0},
+    )
+
+    assert parse_for_publication("skdu", b"bytes", "T9 Upah Rata-rata").unit == "Rp"
+
+
+@patch("publication_parsers._common.parse_generic_table")
+def test_survey_wrapper_fills_in_the_unit_a_consumer_survey_sheet_leaves_out(mock_generic):
+    mock_generic.side_effect = lambda data, sheet: TableData(
+        title="t", unit="", row_labels=["IKK"], _data={("IKK", 2026, "Aug"): 120.0},
+    )
+
+    assert parse_for_publication("sk", b"bytes", "Tabel 1").unit == "Indeks"
+    assert parse_for_publication("sk", b"bytes", "Tabel 5").unit == "%"
+
+
+@patch("publication_parsers._common.parse_generic_table")
+def test_survey_wrapper_rejects_a_table_that_is_not_a_time_series(mock_generic):
+    mock_generic.return_value = TableData(
+        title="t", unit="", row_labels=["IKK"], axis_type="categorical",
+        _data={("IKK", "Nilai"): 1.0},
+    )
+
+    with pytest.raises(PublicationParseError, match="deret waktu"):
+        parse_for_publication("sk", b"bytes", "Tabel 1")
