@@ -76,7 +76,9 @@ def test_parse_year_period(raw, expected):
     ("Semarang **", "Semarang"),
     ("Pinjaman yang Diberikan 2)", "Pinjaman yang Diberikan"),
     ("Aset", "Aset"),
-    ("1.", ""), ("  2.1 ", ""), ("a.", ""), ("-", ""), (3, ""), (None, ""),
+    ("- 3 bulan yang akan datang", "3 bulan yang akan datang"),
+    ("17 Lapangan Usaha", "17 Lapangan Usaha"),
+    ("1.", ""), ("  2.1 ", ""), ("a.", ""), ("-", ""), (3, ""), ("12", ""), (None, ""),
 ])
 def test_clean_label(raw, expected):
     assert clean_label(raw) == expected

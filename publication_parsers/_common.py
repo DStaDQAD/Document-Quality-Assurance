@@ -81,9 +81,11 @@ def parse_year_period(value) -> Optional[Tuple[int, str]]:
 
 # Outline markers at the start of a label: 'I.' / 'V.1.' (roman, optionally with a number),
 # 'A.' / 'a.' (a single letter — never the first letter of an acronym such as 'A.D.B'),
-# '1.' / '2.1.1.' (numbers), '-' (dash items).
+# '1.' / '2.1' / '2.1.1.' (numbers with a dot — a bare '3' starts '3 bulan yang akan datang'),
+# '-' (dash items). A cell that is only a number is a row number.
 _LEADING_NUMBERING = re.compile(
-    r"(?:[IVX]+\.(?:\d+\.)*(?=\s|$)|[A-Za-z]\.(?=\s|$)|\d+(?:\.\d+)*\.?(?=\s|$)|-+)\s*"
+    r"(?:[IVX]+\.(?:\d+\.)*(?=\s|$)|[A-Za-z]\.(?=\s|$)|\d+(?:\.\d+)+\.?(?=\s|$)|\d+\.(?=\s|$)"
+    r"|\d+$|-+)\s*"
 )
 _FORMULA_SUFFIX = re.compile(r"\s*\(\s*(?:[\dIVX]+\s*[+-]\s*)+[\dIVX]+\s*\)$")
 _BILINGUAL_SPLIT = re.compile(r"\s+/\s*|\s*/\s+")
