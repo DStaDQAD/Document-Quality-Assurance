@@ -1,7 +1,8 @@
 # Parser Khusus per Publikasi — Design
 
 Tanggal: 2026-10-07
-Status: disetujui pengguna 2026-10-07. Rencana implementasi:
+Status: diimplementasikan 2026-10-07 di branch publication-parsers; hasil uji ujung-ke-ujung:
+`docs/publication-parsers-e2e.md`. Disetujui pengguna 2026-10-07. Rencana implementasi:
 `docs/superpowers/plans/2026-10-07-publication-parsers.md`. Bagian "Kondisi awal", "Arsitektur",
 "Sampel dan angka emas" dan "Cakupan sheet" diperbarui setelah semua sampel terkumpul dan
 prototipe pembaca dicoba pada sheet asli (lihat catatan "Pembaruan" di tiap bagian).
