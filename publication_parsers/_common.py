@@ -13,9 +13,11 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import re
-from collections import OrderedDict
-from typing import Dict, List, Optional, Tuple
+from collections import Counter, OrderedDict
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Sequence, Tuple
 
+from table_model import QUAL_SEP, TableData
 from table_parser_generic import _bare_period_token, _parse_period, load_workbook_grids
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
@@ -166,3 +168,248 @@ def load_label_indents(data: bytes, sheet_name: str, col: int) -> Dict[int, int]
         r: int(wb.xf_list[ws.cell_xf_index(r, col)].alignment.indent_level or 0)
         for r in range(ws.nrows)
     }
+
+
+# ---------------------------------------------------------------------------
+# The time-series sheet engine
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SheetSpec:
+    """Where a sheet keeps its labels and how its rows nest.
+
+    label_cols: the Indonesian label columns, left to right (English mirror columns left out).
+      A text repeated across them by a merge counts once; the earlier texts name the row's group.
+    header: "two_rows" (a year row over a period row) or "combined" (one 'Q1-2026' row).
+    hierarchy: how a row finds its parent inside its group —
+      "flat"       no nesting beyond the label columns themselves;
+      "indent"     the label cell's indent level (SEKI .xls tables);
+      "numbering"  the label's own numbering ('2.1.1.' sits under '2.1');
+      "first_col"  the label column the text starts in (a later column is a child);
+      "sections"   a label row without figures heads the rows below it.
+    bands: the row above the year row splits the columns into bands ('TRIWULANAN (QTQ)' vs
+      'TAHUNAN (YOY)'); the band becomes the outermost label level.
+    unit: replaces the unit read from the title block.
+    """
+    label_cols: Tuple[int, ...]
+    header: str = "two_rows"
+    hierarchy: str = "flat"
+    bands: bool = False
+    unit: Optional[str] = None
+
+
+_FOOTER = re.compile(r"\s*(\*|(keterangan|catatan|sumber|note|source)\s*:)", re.IGNORECASE)
+_NUMBER_TEXT = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+_UNIT_CELL = re.compile(r"\((.*)\)")
+_TABLE_NUMBER = re.compile(r"(tabel|table)\s+[\w.]+", re.IGNORECASE)
+
+
+def _cell(row: Sequence, c: int):
+    return row[c] if c < len(row) else None
+
+
+def _blank(value) -> bool:
+    return value is None or (isinstance(value, str) and not value.strip())
+
+
+def _number(value) -> Optional[float]:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str) and _NUMBER_TEXT.fullmatch(value.strip()):
+        return float(value.strip())
+    return None
+
+
+def _header_rows(grid: List[List], spec: SheetSpec, first_col: int) -> List[int]:
+    """Every row that heads a block of figures (a sheet may stack several blocks)."""
+    rows = []
+    for r, row in enumerate(grid):
+        if spec.header == "combined":
+            hit = sum(1 for c in range(first_col, len(row)) if parse_year_period(row[c])) >= 2
+        else:
+            below = grid[r + 1] if r + 1 < len(grid) else []
+            hit = any(parse_year(row[c]) and parse_period(_cell(below, c))
+                      for c in range(first_col, len(row)))
+        if hit:
+            rows.append(r)
+    if not rows:
+        raise PublicationParseError("baris tahun/periode tidak ditemukan")
+    return rows
+
+
+def _period_columns(
+    grid: List[List], spec: SheetSpec, header_row: int, first_col: int
+) -> Dict[int, Tuple[str, int, str]]:
+    """{column: (band, year, period)} for every monthly/quarterly column, leftmost copy only."""
+    head = grid[header_row]
+    below = grid[header_row + 1] if spec.header == "two_rows" else []
+    band_row = grid[header_row - 1] if spec.bands and header_row > 0 else []
+    columns: Dict[int, Tuple[str, int, str]] = {}
+    seen = set()
+    year: Optional[int] = None
+    band = ""
+    for c in range(first_col, max(len(head), len(below), len(band_row))):
+        if not _blank(_cell(band_row, c)):
+            band = clean_label(_cell(band_row, c))
+        if spec.header == "combined":
+            parsed = parse_year_period(_cell(head, c))
+            if parsed is None:
+                continue
+            col_year, period = parsed
+        else:
+            if not _blank(_cell(head, c)):
+                year = parse_year(_cell(head, c))  # non-year text ('ITEMS') ends the run
+            col_year, period = year, parse_period(_cell(below, c))
+            if col_year is None or period is None:
+                continue  # annual column, mirror heading, 'Perubahan' block
+        key = (band, col_year, period)
+        if key in seen:
+            continue  # the English mirror repeats periods already read: leftmost wins
+        seen.add(key)
+        columns[c] = key
+    return columns
+
+
+def _title_and_unit(rows: List[List]) -> Tuple[str, str]:
+    title = unit = ""
+    for row in rows:
+        for value in row:
+            if not isinstance(value, str) or not value.strip():
+                continue
+            text = " ".join(value.split())
+            match = _UNIT_CELL.fullmatch(text)
+            if match:
+                unit = unit or match.group(1).split(" / ")[0].strip(" ()")
+            elif not title and not _TABLE_NUMBER.fullmatch(text):
+                title = clean_label(text)
+    return title, unit
+
+
+def _depth(spec: SheetSpec, r: int, row: List, raw: List, own: int, has_data: bool,
+           indents: Optional[Dict[int, int]]) -> int:
+    if spec.hierarchy == "indent":
+        return (indents or {}).get(r, 0)
+    first_col = next(i for i, c in enumerate(spec.label_cols) if not _blank(_cell(row, c)))
+    if spec.hierarchy == "numbering":
+        # '2.1.1.' says its own depth; 'a.' / '-' items and unnumbered rows nest by the
+        # column they start in, one level below a '1.' that starts in the same column.
+        depth = numbering_depth(raw[own])
+        if not depth and own > 0 and not clean_label(raw[own - 1]):
+            depth = numbering_depth(raw[own - 1])
+        return depth or first_col + 1
+    if spec.hierarchy == "first_col":
+        return first_col
+    if spec.hierarchy == "sections":
+        return 1 if has_data else 0
+    return 0
+
+
+def _shortest_unique_names(paths: Sequence[Sequence[str]]) -> List[str]:
+    """Each row's name: its own label, lengthened with ancestors only while it stays ambiguous."""
+    names = [p[-1] for p in paths]
+    for depth in range(2, max(len(p) for p in paths) + 1):
+        counts = Counter(names)
+        if all(n == 1 for n in counts.values()):
+            break
+        names = [
+            QUAL_SEP.join(p[-depth:]) if counts[name] > 1 else name
+            for p, name in zip(paths, names)
+        ]
+    return names
+
+
+def parse_series_sheet(
+    grid: List[List], spec: SheetSpec, indents: Optional[Dict[int, int]] = None
+) -> TableData:
+    """Read one time-series sheet laid out as `spec` describes into a temporal TableData."""
+    first_col = max(spec.label_cols) + 1
+    header_rows = _header_rows(grid, spec, first_col)
+    blocks = {r: _period_columns(grid, spec, r, first_col) for r in header_rows}
+    header_like = set(header_rows)
+    if spec.header == "two_rows":
+        header_like |= {r + 1 for r in header_rows}
+    # Column headings ('Periode', 'Jenis Valuta', ...) repeat in the label cells of every
+    # header row a block has, including extra ones such as 'Prakiraan 2026' under the periods.
+    headings = {
+        tuple(clean_label(_cell(grid[r], c)) for c in spec.label_cols)
+        for r in header_like if r < len(grid)
+    }
+    title, unit = _title_and_unit(grid[:header_rows[0]])
+
+    entries: List[Tuple[List[str], Dict[Tuple[int, str], float]]] = []
+    columns: Dict[int, Tuple[str, int, str]] = {}
+    stack: List[Tuple[int, str]] = []
+    group: Optional[Tuple[str, ...]] = None
+    for r in range(header_rows[0], len(grid)):
+        if r in blocks:
+            columns, stack, group = blocks[r], [], None
+        if r in header_like:
+            continue
+        row = grid[r]
+        raw: List = []
+        for c in spec.label_cols:
+            value = _cell(row, c)
+            if not _blank(value) and not (raw and value == raw[-1]):
+                raw.append(value)
+        texts = [clean_label(v) for v in raw]
+        if not any(texts):
+            continue
+        if isinstance(raw[0], str) and _FOOTER.match(raw[0]):
+            break
+        if tuple(clean_label(_cell(row, c)) for c in spec.label_cols) in headings:
+            continue
+        own = max(i for i, t in enumerate(texts) if t)
+        ancestors = tuple(t for t in texts[:own] if t)
+        by_band: Dict[str, Dict[Tuple[int, str], float]] = {}
+        for c, (band, year, period) in columns.items():
+            value = _number(_cell(row, c))
+            if value is not None:
+                by_band.setdefault(band, {})[(year, period)] = value
+        depth = _depth(spec, r, row, raw, own, bool(by_band), indents)
+        if ancestors != group:
+            stack, group = [], ancestors
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        path = list(ancestors) + [label for _, label in stack] + [texts[own]]
+        stack.append((depth, texts[own]))
+        for band, values in by_band.items():
+            entries.append(([band] + path if band else path, values))
+    if not entries:
+        raise PublicationParseError("tidak ada baris berisi angka di bawah baris tahun")
+
+    table = TableData(title=title, unit=spec.unit or unit, row_labels=[])
+    for name, (_, values) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
+        if name in table.row_labels:
+            continue  # identical path twice in one sheet: first occurrence wins
+        table.row_labels.append(name)
+        for (year, period), value in values.items():
+            table._data[(name, year, period)] = value
+    return table
+
+
+# ---------------------------------------------------------------------------
+# Glue for the publication modules
+# ---------------------------------------------------------------------------
+
+def sheet_matches(pattern: str, sheet_name: str) -> bool:
+    return re.fullmatch(pattern, sheet_name.strip(), re.IGNORECASE) is not None
+
+
+def spec_for(sheet_name: str, specs: Sequence[Tuple[str, SheetSpec]]) -> SheetSpec:
+    for pattern, spec in specs:
+        if sheet_matches(pattern, sheet_name):
+            return spec
+    raise PublicationParseError(f"sheet '{sheet_name}' tidak dikenal parser ini")
+
+
+def parse_with_specs(
+    data: bytes, sheet_name: str, specs: Sequence[Tuple[str, SheetSpec]]
+) -> TableData:
+    spec = spec_for(sheet_name, specs)
+    indents = (
+        load_label_indents(data, sheet_name, spec.label_cols[-1])
+        if spec.hierarchy == "indent" else None
+    )
+    return parse_series_sheet(load_grid(data, sheet_name), spec, indents)
