@@ -112,6 +112,26 @@ Uji ulang dengan Gemini:
 Jumlah klaim berubah antar-run (ekstraksi LLM tidak deterministik), jadi angka sebelum/sesudah
 adalah perbandingan kasar; semua klaim yang terselamatkan dicek manual dan benar.
 
+### 2. Persen vs level indeks (`paired_verifier`, `_is_plain_index`)
+
+Klaim nilai dalam persen tidak lagi dibandingkan dengan sheet indeks tanpa tanda % (`Indeks`,
+`Indeks (2018=100)`); PMI memakai satuan sheet-nya sendiri `%, Indeks` sehingga "52,03%" tetap
+dibandingkan. SHPR: enam klaim qtq per tipe rumah yang tadinya Tidak Sesuai (0,40 vs 114,01) kini
+Tidak Cukup Data; Sesuai 15 → 21.
+
+### 3. Tabel pertumbuhan menyebut jenis pertumbuhannya
+
+SPE Tabel 2/4/6/8 `%, yoy`, Tabel 3/7 `%, mtm`; SHPR Tabel 3 `%, qtq & yoy` (pita di label baris
+menentukan jenisnya). Klaim yoy membaca sel tabel yoy langsung, dan tidak dijawab sel mtm/qtq.
+
+| Publikasi | Tidak Sesuai sebelum (awal → sesudah no. 2) | sesudah no. 3 | Sesuai |
+|---|---|---|---|
+| shpr | 6 → 8 | **0** | 23 |
+| spe | 9 → 14 | 11 | 30 |
+
+Sisa 11 di SPE satu pola: ekstraktor memberi label yoy pada klaim "(mtm)", lalu pertumbuhan yoy
+dihitung dari indeks. Perbaikannya ada di prompt ekstraktor (belum dikerjakan).
+
 ## Tindak lanjut (di luar parser)
 
 1. **Kata arah pada angka:** "defisit X", "kewajiban neto X", "terkontraksi X" → −X, dan sisi debit
