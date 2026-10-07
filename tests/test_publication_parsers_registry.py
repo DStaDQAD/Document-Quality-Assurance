@@ -160,3 +160,19 @@ def test_pmi_tables_say_their_index_is_read_in_percent(monkeypatch):
     monkeypatch.setattr(_common, "load_grid", lambda data, sheet: grid)
 
     assert parse_for_publication("pmi", b"bytes", "T1 PMI").unit == "%, Indeks"
+
+
+@pytest.mark.parametrize("publication, sheet, unit", [
+    ("spe", "Tabel 1", "Indeks"), ("spe", "Tabel 5", "Indeks"), ("spe", "Tabel 9", "Indeks"),
+    ("spe", "Tabel 2", "%, yoy"), ("spe", "Tabel 4", "%, yoy"),
+    ("spe", "Tabel 6", "%, yoy"), ("spe", "Tabel 8", "%, yoy"),
+    ("spe", "Tabel 3", "%, mtm"), ("spe", "Tabel 7", "%, mtm"),
+    ("shpr", "TABEL 1", "Indeks (2018=100)"), ("shpr", "TABEL 3", "%, qtq & yoy"),
+])
+def test_growth_tables_say_which_growth_they_hold(publication, sheet, unit):
+    # The verifier reads a '%, yoy' cell as the answer to a yoy claim instead of computing growth
+    # over it, and keeps a yoy claim off an mtm / qtq table (paired_verifier._growth_kind).
+    from publication_parsers import PARSERS
+    from publication_parsers._common import spec_for
+
+    assert spec_for(sheet, PARSERS[publication].SPECS).unit == unit

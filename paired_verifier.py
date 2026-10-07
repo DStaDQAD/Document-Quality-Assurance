@@ -554,6 +554,35 @@ def _is_growth_series(unit: Optional[str]) -> bool:
     return bool(unit and re.search(r'\byoy\b', unit, re.IGNORECASE))
 
 
+_GROWTH_KIND_RE = re.compile(r"\b(yoy|mtm|qtq|ctc)\b", re.IGNORECASE)
+
+
+def _growth_kind(unit: Optional[str], label: str) -> Optional[str]:
+    """Which growth a matched cell holds — 'yoy', 'mtm', 'qtq', 'ctc' — or None for a level.
+
+    The row label wins when it names one (SHPR Tabel 3 carries a 'TRIWULANAN (QTQ)' and a
+    'TAHUNAN (YOY)' band under one unit '%, qtq & yoy'); otherwise the table unit must name
+    exactly one kind. A mixed unit with no band in the label is 'mixed' — not knowably yoy.
+    """
+    in_label = {k.lower() for k in _GROWTH_KIND_RE.findall(label or "")}
+    if len(in_label) == 1:
+        return in_label.pop()
+    in_unit = {k.lower() for k in _GROWTH_KIND_RE.findall(unit or "")}
+    if not in_unit:
+        return None
+    return in_unit.pop() if len(in_unit) == 1 else "mixed"
+
+
+def _not_a_yoy_cell(fact: ExtractedFact, label: str, src: "_ExcelSource") -> Optional[str]:
+    """The growth kind of a cell a yoy claim landed on, when it is NOT a yoy figure.
+
+    SPE Tabel 3 is in '%, mtm': computing yoy over it gave growth of a growth, and reading it
+    would answer a yoy question with an mtm figure. Either way the cell does not hold the answer.
+    """
+    kind = _growth_kind(src.table.unit, label)
+    return kind if kind not in (None, "yoy") else None
+
+
 def _is_percent_unit(unit: Optional[str]) -> bool:
     return bool(unit and (unit.strip().lower().startswith("persen") or "%" in unit))
 
@@ -732,6 +761,17 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     matched_source = src.label
     prior_year = p.year - 1
     current_period = PeriodResult(metric_label=matched_label, year=p.year, month=p.month, excel_value=round(curr_raw, 4))
+
+    other_kind = _not_a_yoy_cell(fact, matched_label, src)
+    if other_kind:
+        return _make_result(
+            fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None,
+            "persen_yoy", None, "Inconclusive",
+            reasoning=(
+                f"Excel [{matched_source}] ({matched_label}) berisi pertumbuhan {other_kind} "
+                f"('{src.table.unit}'), bukan yoy — tidak menjawab klaim {fact.claimed_value}% yoy."
+            ),
+        )
 
     if _is_growth_series(src.table.unit):
         # The cell already holds the answer, so read it instead of computing one (the same
@@ -1380,6 +1420,16 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         if missing:
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
+            continue
+        other_kind = (
+            _not_a_yoy_cell(fact, resolved[0][0], src) if fact.operation == "yoy_growth" else None
+        )
+        if other_kind:
+            if best_reason is None:
+                best_reason = (
+                    f"Excel [{src.label}] ({resolved[0][0]}) berisi pertumbuhan {other_kind} "
+                    f"('{src.table.unit}'), bukan yoy — tidak menjawab klaim yoy ini."
+                )
             continue
         if not _can_answer(fact, resolved, src):
             if best_reason is None:

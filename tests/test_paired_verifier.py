@@ -1908,6 +1908,61 @@ def test_yoy_claim_reads_a_growth_table_instead_of_computing_over_it():
     assert len(result.periods) == 1
 
 
+def test_yoy_claim_is_not_answered_by_a_month_on_month_table():
+    # SPE Tabel 3 holds mtm growth. A yoy claim computed over it gave growth OF an mtm growth
+    # (97,6%) — and reading the cell would answer a yoy question with an mtm figure.
+    table = _make_table(
+        title="Tabel 3. Pertumbuhan Bulanan Indeks Penjualan Riil (%, mtm)", unit="%, mtm",
+        data={("INDEKS TOTAL", 2026, "Jul"): -0.1, ("INDEKS TOTAL", 2025, "Jul"): -4.1},
+    )
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=-0.1, unit="persen_yoy",
+        periods=[_make_period(metric_label="INDEKS TOTAL", month="Jul")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+    assert "mtm" in result.reasoning
+
+
+def _band_table():
+    # SHPR Tabel 3: one sheet, a qtq band and a yoy band, the band named in every row label.
+    return _make_table(
+        title="Tabel 3. Pertumbuhan Harga Properti Residensial", unit="%, qtq & yoy",
+        data={
+            ("TRIWULANAN (QTQ) > BANJARMASIN > TOTAL", 2026, "Q2"): 1.28,
+            ("TRIWULANAN (QTQ) > BANJARMASIN > TOTAL", 2025, "Q2"): 0.51,
+            ("TAHUNAN (YOY) > BANJARMASIN > TOTAL", 2026, "Q2"): 1.29,
+            ("TAHUNAN (YOY) > BANJARMASIN > TOTAL", 2025, "Q2"): 2.25,
+        },
+    )
+
+
+def test_yoy_claim_reads_the_yoy_band_of_a_mixed_growth_table():
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=1.29, unit="persen_yoy",
+        periods=[_make_period(metric_label="TAHUNAN (YOY) > BANJARMASIN > TOTAL", month="Q2")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(_band_table())])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == 1.29
+
+
+def test_yoy_claim_is_not_answered_by_the_qtq_band_of_a_mixed_growth_table():
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=1.29, unit="persen_yoy",
+        periods=[_make_period(metric_label="TRIWULANAN (QTQ) > BANJARMASIN > TOTAL", month="Q2")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(_band_table())])
+
+    assert result.verdict == "Inconclusive"
+    assert "qtq" in result.reasoning
+
+
 def test_yoy_claim_against_a_levels_table_still_computes_growth():
     table = _make_table(
         unit="triliun Rp",
