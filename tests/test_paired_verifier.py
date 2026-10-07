@@ -479,6 +479,55 @@ def test_evaluate_ratio_inconclusive_when_denominator_zero():
     assert "tidak terdefinisi" in result.reasoning
 
 
+def _npi_exports_table():
+    return _make_table(
+        title="Neraca Pembayaran Indonesia : Ringkasan", unit="Juta USD",
+        data={
+            ("Nonmigas > Ekspor", 2026, "Q2"): 70459.06, ("Nonmigas > Ekspor", 2025, "Q2"): 64165.87,
+            ("Nonmigas > Impor", 2026, "Q2"): -58322.94, ("Nonmigas > Impor", 2025, "Q2"): -48487.59,
+        },
+    )
+
+
+def _yoy_fact(label, claimed):
+    return _make_fact(
+        operation="yoy_growth", claimed_value=claimed, unit="persen_yoy",
+        periods=[_make_period(metric_label=label, month="Q2")],
+    )
+
+
+@pytest.mark.parametrize("label, missing", [
+    # NPI E2E: "ekspor nonmigas ke Tiongkok tumbuh 18,7% (yoy)" was answered by the all-country
+    # 'Nonmigas > Ekspor' row (9,8%) and reported Tidak Sesuai — Tabel V.1 has no country rows.
+    ("Ekspor nonmigas ke Tiongkok", "tiongkok"),
+    # ... and "impor barang konsumsi" by the all-goods import row.
+    ("impor nonmigas barang konsumsi", "konsumsi"),
+])
+def test_a_breakdown_the_table_does_not_hold_is_not_answered_by_its_parent_row(label, missing):
+    result = _evaluate_fact(_yoy_fact(label, 18.7), [_make_source(_npi_exports_table())])
+
+    assert result.verdict == "Inconclusive"
+    assert missing in result.reasoning.lower()
+
+
+def test_a_claim_the_table_does_hold_is_still_answered():
+    result = _evaluate_fact(_yoy_fact("Ekspor nonmigas", 9.8), [_make_source(_npi_exports_table())])
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_word_the_table_spells_with_another_prefix_counts_as_present():
+    # "kredit kepemilikan rumah" in the prose, "Kredit Pemilikan Rumah" in the sheet.
+    table = _make_table(
+        title="Perkembangan Kredit", unit="triliun Rp",
+        data={("Kredit Pemilikan Rumah", 2026, "Q2"): 110.0, ("Kredit Pemilikan Rumah", 2025, "Q2"): 100.0},
+    )
+
+    result = _evaluate_fact(_yoy_fact("kredit kepemilikan rumah", 10.0), [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
 def test_a_tie_goes_to_the_source_whose_title_names_the_claim_not_one_with_a_lookalike_row():
     # SULNI E2E: "ULN pemerintah ... Jasa Kesehatan (22,0% dari total ULN pemerintah)" against
     # the private-debt sector table (uploaded first) and the government one. The private table

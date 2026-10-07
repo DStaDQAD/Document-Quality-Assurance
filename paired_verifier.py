@@ -39,7 +39,7 @@ from cell_pointer import (
 from excel_parser_bi import BITableData, parse_bi_table
 from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
-from table_model import QUAL_SEP, _expand_report_terms, _sig_words, label_match_score
+from table_model import QUAL_SEP, _expand_report_terms, _same_root, _sig_words, label_match_score
 from publication_parsers import load_grid as _load_grid
 from publication_parsers import parse_for_publication
 from table_parser_generic import (
@@ -581,6 +581,36 @@ def _not_a_yoy_cell(fact: ExtractedFact, label: str, src: "_ExcelSource") -> Opt
     """
     kind = _growth_kind(src.table.unit, label)
     return kind if kind not in (None, "yoy") else None
+
+
+def _breakdown_the_table_lacks(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], src: "_ExcelSource"
+) -> List[str]:
+    """Words that narrow the claim to a breakdown this table does not hold, else [].
+
+    "Ekspor nonmigas ke Tiongkok" against SEKI Tabel V.1 (no country rows) was answered by the
+    all-country 'Nonmigas > Ekspor' row and reported Tidak Sesuai. A word counts when the table
+    never mentions it (TableData.words_absent) AND it comes after the last claim word the
+    matched row accounts for — the same reading as _is_narrower_than_the_claim: a trailing word
+    narrows the series ('… ke Tiongkok', 'impor barang konsumsi'), while one in the middle only
+    rewords it ('Uang Beredar Luas (M2)' for a row 'Uang Beredar (M2)').
+    """
+    narrowing: List[str] = []
+    for point, (label, _) in zip(fact.periods, resolved):
+        absent = src.table.words_absent(point.metric_label)
+        if not absent:
+            continue
+        claim_tokens = [t.lower() for t in re.findall(r"\w+", point.metric_label)]
+        row_tokens = {t.lower() for t in re.findall(r"\w+", label)}
+        covered = [
+            i for i, t in enumerate(claim_tokens)
+            if any(_same_root(t, r) for r in row_tokens)
+        ]
+        last = covered[-1] if covered else -1
+        narrowing += [
+            t for i, t in enumerate(claim_tokens) if i > last and t in absent and t not in narrowing
+        ]
+    return narrowing
 
 
 def _is_percent_unit(unit: Optional[str]) -> bool:
@@ -1528,6 +1558,14 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 best_reason = (
                     f"Sumber [{src.label}] hanya memuat rinciannya per kelompok "
                     f"('{resolved[0][0]}'), bukan angka '{fact.display_label}' itu sendiri."
+                )
+            continue
+        absent = _breakdown_the_table_lacks(fact, resolved, src)
+        if absent:
+            if best_reason is None:
+                best_reason = (
+                    f"Sumber [{src.label}] tidak memuat '{', '.join(absent)}' — "
+                    f"rincian '{fact.display_label}' tidak ada di tabel ini."
                 )
             continue
         coverage = _coverage_score(fact.periods, resolved, src)

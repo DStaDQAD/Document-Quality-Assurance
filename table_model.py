@@ -437,6 +437,34 @@ class TableData:
             for w in q_words
         )
 
+    def _scope_words(self, query: str) -> set:
+        """The claim's significant words — what query_coverage and words_absent weigh."""
+        return {
+            w for w in _sig_words(
+                self._normalise_query(query).lower().replace("dana pihak ketiga", "dpk")
+            )
+            if w not in self._TITLE_STOP_WORDS and not w.isdigit()
+        }
+
+    def words_absent(self, query: str) -> set:
+        """The claim's significant words that appear NOWHERE in this table — title or any row.
+
+        Such a word names something the table does not hold: "ekspor nonmigas ke Tiongkok"
+        against SEKI Tabel V.1, which has no country rows, was answered by the all-country
+        'Nonmigas > Ekspor' row and reported Tidak Sesuai. A word counts as present in a
+        synonym (_SUBJECT_SYNONYMS) or with another derivational prefix ('kepemilikan' in the
+        prose, 'Pemilikan' in the sheet).
+        """
+        known = _label_words(self.title)
+        for row in self.row_labels:
+            known |= _label_words(row)
+        return {
+            w for w in self._scope_words(query)
+            if w not in known
+            and not (self._SUBJECT_SYNONYMS.get(w, frozenset()) & known)
+            and not any(_same_root(w, k) for k in known)
+        }
+
     def query_coverage(self, query: str, matched_label: str, broken_out: bool = True) -> float:
         """Share of a claim's significant words this table accounts for, title AND row together.
 
@@ -457,12 +485,7 @@ class TableData:
         "covers" pemerintah only through its 'Administrasi Pemerintah' sector row, while the
         government-debt table says pemerintah in its title.
         """
-        q_words = {
-            w for w in _sig_words(
-                self._normalise_query(query).lower().replace("dana pihak ketiga", "dpk")
-            )
-            if w not in self._TITLE_STOP_WORDS and not w.isdigit()
-        }
+        q_words = self._scope_words(query)
         if not q_words:
             return 1.0
         known = _label_words(matched_label) | _label_words(self.title)
