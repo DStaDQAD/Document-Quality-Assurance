@@ -1,7 +1,10 @@
 # Parser Khusus per Publikasi — Design
 
 Tanggal: 2026-10-07
-Status: disetujui per bagian dalam brainstorming, menunggu review spec
+Status: disetujui pengguna 2026-10-07. Rencana implementasi:
+`docs/superpowers/plans/2026-10-07-publication-parsers.md`. Bagian "Kondisi awal", "Arsitektur",
+"Sampel dan angka emas" dan "Cakupan sheet" diperbarui setelah semua sampel terkumpul dan
+prototipe pembaca dicoba pada sheet asli (lihat catatan "Pembaruan" di tiap bagian).
 
 ## Tujuan
 
@@ -41,13 +44,18 @@ Agustus 2025 alih-alih Juli 2025.
 
 | Publikasi | Sampel | Tier yang membaca hari ini |
 |---|---|---|
-| Uang Beredar | SEKI `TABEL1_1.xls`, sheet I.1 | bi |
+| Uang Beredar | SEKI `TABEL1_1.xls` (I.1), `TABEL1_1_1.xls` (I.1A) | bi |
+| Uang Primer (M0) | SEKI `TABEL1_2.xls` (I.2) | bi |
 | Cadangan Devisa | SEKI `TABEL5_9.xls`, sheet 5.9 | bi |
-| Survei Konsumen | `Tabel Series SK Juni 2026.xlsx` (9 sheet) | generic (semua) |
-| Survei Perbankan | `Data Series Survei Perbankan Tw II 2026.xlsx` (5 sheet) | generic (label dwibahasa panjang) |
-| PMI | `Tabel PMI-BI Tw II 2026.xlsx` (2 sheet) | generic |
+| NPI | SEKI `TABEL5_1.xls` (5.1), triwulanan | generic, label bernomor ("1.0 > I. Transaksi Berjalan") |
+| PII | SEKI `TABEL5_39.xls` (5.39), triwulanan | generic, label bernomor |
+| Survei Konsumen | `Tabel Series Survei Konsumen Agustus 2026.xlsx` (9 sheet) | generic (semua) |
+| SKDU | `Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx` (11 sheet) | generic (semua) |
+| Survei Perbankan | `Data Series Survei Perbankan … Triwulan II 2026.xlsx` (5 sheet) | generic, label Indonesia+Inggris tergabung |
+| PMI | `PMI-Triwulan-I-2026.xlsx` (2 sheet) | generic, label tergabung |
+| SPE | `Tabel Series SPE - Juli 2026.xlsx` (9 sheet) | bi, label rusak (angka) |
+| SHPR | `SHPR_Tw_II_2026.xlsx` (3 sheet) | **gagal semua** |
 | SULNI | zip SULNI September 2026 (3 workbook, 25 sheet) | **gagal semua**, 15–20 detik/sheet |
-| M0, NPI, PII, SPE, SKDU, SHPR | belum ada | belum diketahui |
 
 ## Arsitektur
 
@@ -67,23 +75,46 @@ Kunci publikasi sama dengan `PUBLICATIONS` di `static/index.html` dan
 
 Setiap modul:
 
-- `SHEETS`: daftar (atau pola) nama sheet yang dicakup.
-- `parse(workbook, sheet_name) -> TableData` — mengembalikan model tabel yang sudah dipakai
+- `SHEET_PATTERNS`: pola regex nama sheet yang dicakup (dicocokkan utuh, tanpa beda huruf
+  besar/kecil, spasi tepi diabaikan). Pola, bukan daftar nama, karena BI kadang mengganti nama
+  sheet antaredisi (PMI: `T1 - Komponen PMI` → `T1 PMI`).
+- `parse(data, sheet_name) -> TableData` — mengembalikan model tabel yang sudah dipakai
   pipeline (`table_model.TableData`, sumbu temporal: (label, tahun, bulan/`Q1`..`Q4`) → nilai,
   plus satuan). Melempar `PublicationParseError` dengan pesan spesifik bila format tidak sesuai.
-- Untuk UB dan Cadev: membungkus `excel_parser_bi.parse_bi_table` yang sudah terbukti; perilaku
-  tidak berubah.
+- **Pembaruan — tiga cara membaca, dipilih per publikasi:**
+  - UB, M0, Cadev membungkus `excel_parser_bi.parse_bi_table` (tabel SEKI bulanan); perilaku
+    tidak berubah, hanya hasilnya diperiksa utuh (ada angka, tidak ada label kembar).
+  - SK dan SKDU membungkus `table_parser_generic.parse_generic_table`, yang sudah membaca
+    keduanya dengan benar; hasilnya diperiksa berupa deret waktu.
+  - NPI, PII, SULNI, SPE, SBank, SHPR, PMI memakai satu mesin pembaca deret waktu di
+    `_common.py`; modulnya hanya menyatakan `SheetSpec` per pola sheet: kolom label, bentuk
+    header (baris tahun di atas baris periode, atau satu baris `Q1-2026`), cara hierarki
+    disimpan (indentasi sel — NPI/PII; penomoran `2.1.1.` — SULNI; kolom tempat teks mulai —
+    SULNI TabI.7; baris judul seksi tanpa angka — SHPR, SPE Tabel 9), dan pita kolom
+    (SHPR Tabel 3: `TRIWULANAN (QTQ)` vs `TAHUNAN (YOY)`).
 
 `_common.py` berisi potongan yang memang sama di banyak format, agar tiap parser tetap pendek:
 
-- membaca workbook sekali (xls via xlrd, xlsx via openpyxl read-only, nilai terhitung) dan
-  menyimpannya per isi file selama satu pemeriksaan;
+- membaca workbook sekali: **pembaruan** — openpyxl harus memuat seluruh .xlsx untuk melihat
+  sel gabungan (±9 detik untuk satu workbook SULNI), sedangkan mengubah sheet yang sudah dimuat
+  menjadi grid hampir gratis. Maka pembukaan pertama sebuah workbook mengubah semua sheet-nya
+  sekaligus dan menyimpannya di memori (per isi file); sheet berikutnya, dan grid untuk
+  *cell-pointer* yang dibaca `verify_paired` setelah parsing, diambil dari memori;
 - normalisasi periode: bulan Indonesia/Inggris, tanda `*`/`**` dibuang, triwulan
-  (`Tw II`, `Q2`, `II`, `Triwulan II`) → `Q2`, tahun berupa angka, teks, atau tanggal;
-- pembersihan label: penomoran (`1.`, `2.1`, `-`) dibuang; label dwibahasa `Indonesia / English`
-  diambil bagian Indonesianya; label yang berulang di beberapa induk diberi awalan induknya
-  (`Lembaga Keuangan > Bank`), seperti parser BI;
-- satuan dari judul tabel (`Juta USD`, `Miliar Rp`, `Indeks`, `%`).
+  (`Tw II`, `Q2`, `QII`, `II`, `Triwulan II`) → `Q2`, tahun berupa angka, teks, atau tanggal;
+  **kolom tahunan (tahun tanpa bulan/triwulan) dilewati**; tahun yang hanya tertulis di kolom
+  pertama sebuah tahun diteruskan ke kanan; kolom cermin bahasa Inggris di kanan yang mengulang
+  periode yang sama diabaikan (yang paling kiri menang); sheet yang menumpuk beberapa blok
+  dengan header sendiri (SBank Tabel 3–4) dibaca per blok;
+- pembersihan label: penomoran (`I.`, `A.`, `a.`, `1.`, `2.1.1.`, `-`) dibuang tanpa merusak
+  singkatan (`A.D.B`, `I.B.R.D`); label dwibahasa `Indonesia / English` diambil bagian
+  Indonesianya; rujukan rumus (`TOTAL (1+2)`) dan tanda catatan kaki (`*`, `¹`, `2)`) dibuang;
+  label yang berulang diberi awalan induk **seperlunya saja**: satu tingkat
+  (`Barang > Ekspor`), atau lebih bila masih kembar
+  (`Utang Jangka Pendek > Pemerintah dan Bank Sentral > Pemerintah`); label unik tetap polos,
+  seperti parser BI;
+- satuan dari sel berkurung di atas header (`(Juta USD / Million of USD)` → `Juta USD`), atau
+  ditetapkan modul bila sheet tidak mencantumkannya (SHPR, SBank, PMI, SPE).
 
 ### Pemilihan parser saat pemeriksaan
 
@@ -107,8 +138,24 @@ tidak cukup, dukungan alias di `TableData` menjadi pekerjaan terpisah.
 
 Setiap parser menangani **semua sheet deret waktu** di workbook publikasinya. Sheet bukan
 deret waktu (mis. SULNI Tbl II.7 jadwal pembayaran, Tbl II.8 daftar seri SBN) dicatat di luar
-cakupan dan memakai rantai lama. Daftar final per publikasi dicantumkan di rencana
-implementasi setelah sampel terkumpul.
+cakupan dan memakai rantai lama.
+
+**Pembaruan — daftar final (prototipe membaca semuanya dari sampel):**
+
+| Publikasi | Sheet yang dicakup |
+|---|---|
+| Uang Beredar | `I.1`, `I.1A` (sheet historis `Th 1985-1992` dst. tidak) |
+| Uang Primer (M0) | `I.2` |
+| Cadangan Devisa | `5.9` |
+| NPI | `5.1` |
+| PII | `5.39` |
+| SULNI | `TabI.1`–`TabI.7`, `Tbl II.1`–`Tbl II.6`, `Tbl III.1`–`Tbl III.10` (bukan `Tbl II.7`, `Tbl II.8`) |
+| SK | `Tabel 1`–`Tabel 9` |
+| SKDU | `T1 …`–`T10 …`, `T7b …` |
+| SPE | `Tabel 1`–`Tabel 9` |
+| SBank | `Tabel1`–`Tabel4`, `Tabel 5 (disc)` |
+| SHPR | `TABEL 1`–`TABEL 3` |
+| PMI | `T1 …`, `T2 …` |
 
 ## Sampel dan angka emas
 
@@ -120,12 +167,17 @@ yang di-commit.
 ```
 tests/fixtures/publications/
   <kunci-publikasi>/
-    <edisi YYYY-MM>/            # bulan rilis siaran pers
+    <periode data>/             # YYYY-MM atau YYYY-Qn: periode yang dibahas rilisnya
       <file Excel acuan, nama asli>
       siaran_pers.pdf           # halaman siaran pers dicetak ke PDF
       laporan.pdf               # bila publikasi punya laporan
       golden.json
 ```
+
+**Pembaruan:** folder dinamai menurut **periode data** yang dibahas rilis (ULN Juli 2026 →
+`sulni/2026-07`, NPI Tw II → `npi/2026-Q2`), bukan bulan rilis — satu rilis selalu membahas satu
+periode, sedangkan file Excel-nya bisa sudah berisi bulan sesudahnya (tabel M0 unduhan September
+memuat Juli yang dibahas laporan Juli).
 
 Sumber per publikasi:
 
@@ -138,22 +190,31 @@ Sumber per publikasi:
 | Cadangan Devisa | SEKI Tabel V.9 |
 | SULNI | zip SULNI (TABEL_INDONESIA, TABEL_PEMERINTAH, TABEL_SWASTA) |
 | SK, SPE, SKDU, SBank, SHPR | zip data series di halaman Laporan BI |
-| PMI | `Tabel PMI-BI` (sampel pengguna; sumber resmi di bi.go.id perlu dipastikan) |
+| PMI | zip `PMI-Triwulan-I-2026.zip` di halaman Laporan BI |
 
 ### `golden.json`
+
+**Pembaruan:** periode terakhir dicatat per sheet (satu workbook bisa bulanan dan triwulanan,
+mis. SPE Tabel 1 vs Tabel 4), dan setiap angka menyebut workbook-nya (UB dan SULNI punya
+beberapa workbook).
 
 ```json
 {
   "publication": "sulni",
-  "edition": "2026-09",
-  "latest_period": {"year": 2026, "period": "Jul"},
-  "sheets": {"TABEL_INDONESIA Sep26_value.xlsx": ["TabI.1", "TabI.2"]},
+  "data_period": "2026-07",
+  "release": "Siaran Pers No.28/188/DKom, 15 September 2026; zip SULNI edisi September 2026",
+  "sheets": {
+    "TABEL_INDONESIA Sep26_value.xlsx": {
+      "TabI.1": {"year": 2026, "period": "Jul"},
+      "TabI.7": {"year": 2026, "period": "Q2"}
+    }
+  },
   "values": [
-    {"sheet": "TabI.1", "label": "Total (1+2)", "query": "ULN Indonesia",
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "TOTAL",
      "year": 2026, "period": "Jul", "kind": "value", "scale": 0.001, "decimals": 1,
-     "expected": 454.8, "quote": "tercatat sebesar 454,8 miliar dolar AS"},
-    {"sheet": "TabI.1", "label": "Swasta", "query": "ULN swasta",
-     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1,
+     "expected": 454.8, "quote": "Posisi ULN Indonesia pada Juli 2026 tercatat sebesar 454,8 miliar dolar AS"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Swasta",
+     "query": "ULN swasta", "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1,
      "expected": -1.2, "quote": "mengalami kontraksi sebesar 1,2% (yoy)"}
   ]
 }
@@ -161,9 +222,12 @@ Sumber per publikasi:
 
 - `kind`: `value` (nilai di sel) atau `yoy` (dihitung dari periode yang sama tahun sebelumnya).
 - `scale` (opsional): pengali dari satuan tabel ke satuan narasi.
-- `decimals`: presisi angka di siaran pers; pembandingan memakai pembulatan ini.
+- `decimals`: presisi angka di siaran pers; cocok bila nilai tabel dibulatkan ke presisi itu
+  sama dengan angka rilis (selisih ≤ setengah satuan terakhir).
+- `query` (opsional): frasa narasi yang harus mendarat di `label` lewat `lookup_fuzzy`.
 - `quote`: kutipan dari siaran pers/laporan, untuk penelusuran.
-- Target 5–15 angka per publikasi.
+- Target 5–15 angka per publikasi; Cadev hanya punya dua angka yang ada di tabel (posisi akhir
+  bulan ini dan bulan lalu), dan itu cukup.
 
 ### Tes (pytest, tanpa LLM)
 
@@ -192,16 +256,17 @@ tercakup tidak jatuh ke Tidak Cukup Data karena masalah parsing.
 
 ## Urutan pengerjaan
 
-Branch `publication-parsers`, commit per langkah:
+Branch `publication-parsers`, commit per langkah. **Pembaruan:** sampel ke-12 publikasi sudah
+terkumpul di `tests/fixtures/publications/` (belum di-commit); urutan rinci ada di rencana
+implementasi:
 
-1. **Fondasi:** aturan `.gitignore` untuk file BI di `tests/fixtures/publications/`, `_common.py`, registri, parameter `publication` diteruskan ke
-   `_parse_table_with_fallback`, cadangan ke rantai lama, workbook dibaca sekali; modul
-   `uang_beredar` dan `cadangan_devisa` (pembungkus parser BI) beserta angka emasnya.
-2. **SULNI:** parser + angka emas edisi 2026-09; ulangi uji siaran pers ULN Juli 2026.
-3. **Kumpulkan sampel** M0, NPI, PII, SPE, SKDU, SHPR, dan I.1.A (Excel + siaran pers/laporan).
-4. **Parser per publikasi** satu per satu (M0, NPI, PII, SK, SPE, SKDU, SBank, SHPR, PMI),
-   masing-masing langsung dengan angka emasnya.
-5. **Uji ujung-ke-ujung** ke-12 publikasi dan laporannya.
+1. **Fondasi:** pembacaan workbook sekali, `_common.py` (sel header, label, mesin deret waktu),
+   registri, parameter `publication` diteruskan ke `_parse_table_with_fallback`, cadangan ke
+   rantai lama; modul UB, M0, Cadev (pembungkus parser BI).
+2. **Tes angka emas:** aturan `.gitignore` untuk file BI, harness tes, angka emas UB, M0, Cadev.
+3. **SULNI**, lalu **NPI/PII**, **SK/SKDU**, **SPE**, **SBank**, **SHPR**, **PMI** — masing-masing
+   langsung dengan angka emasnya.
+4. **Uji ujung-ke-ujung** ke-12 publikasi dan laporannya.
 
 ## Risiko
 
