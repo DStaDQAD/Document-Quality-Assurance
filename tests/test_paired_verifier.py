@@ -366,6 +366,46 @@ def test_evaluate_ratio_inconclusive_when_denominator_zero():
     assert "tidak terdefinisi" in result.reasoning
 
 
+def test_a_tie_goes_to_the_source_whose_title_names_the_claim_not_one_with_a_lookalike_row():
+    # SULNI E2E: "ULN pemerintah ... Jasa Kesehatan (22,0% dari total ULN pemerintah)" against
+    # the private-debt sector table (uploaded first) and the government one. The private table
+    # also "covers" pemerintah — through its 'Administrasi Pemerintah, ...' SECTOR row — so both
+    # scored the same and upload order handed the claim to the wrong table.
+    swasta = _make_table(
+        title="Posisi Utang Luar Negeri (ULN) Swasta Menurut Sektor Ekonomi", unit="Juta USD",
+        data={
+            ("Jasa Kesehatan dan Kegiatan Sosial", 2026, "Jul"): 269.6,
+            ("Administrasi Pemerintah, Pertahanan, dan Jaminan Sosial Wajib", 2026, "Jul"): 0.0,
+            ("TOTAL", 2026, "Jul"): 194476.9,
+        },
+    )
+    pemerintah = _make_table(
+        title="Posisi Utang Luar Negeri (ULN) Pemerintah Menurut Sektor Ekonomi", unit="Juta USD",
+        data={
+            ("Jasa Kesehatan dan Kegiatan Sosial", 2026, "Jul"): 48110.0,
+            ("Administrasi Pemerintah, Pertahanan, dan Jaminan Sosial Wajib", 2026, "Jul"): 45200.0,
+            ("TOTAL", 2026, "Jul"): 218391.1,
+        },
+    )
+    fact = _make_fact(
+        operation="ratio",
+        periods=[
+            _make_period(metric_label="Jasa Kesehatan dan Kegiatan Sosial", month="Jul"),
+            _make_period(metric_label="total ULN pemerintah", month="Jul"),
+        ],
+        claimed_value=22.0,
+        unit="persen",
+    )
+
+    result = _evaluate_fact(fact, [
+        _make_source(swasta, filename="TABEL_SWASTA.xlsx", sheet="Tbl III.2"),
+        _make_source(pemerintah, filename="TABEL_PEMERINTAH.xlsx", sheet="Tbl II.2"),
+    ])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source == "TABEL_PEMERINTAH.xlsx / Tbl II.2"
+
+
 # ---------------------------------------------------------------------------
 # _evaluate_fact — operation="is_increasing" / "is_decreasing" / "is_stable"
 # ---------------------------------------------------------------------------

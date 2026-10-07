@@ -185,6 +185,9 @@ class _Candidate:
     # applied. Such a value is fine for a verdict but cannot be compared against another
     # source's (see _attach_source_comparison).
     unit_comparable: bool = True
+    # `coverage` counting only the title and the matched rows — breaks coverage ties in favour
+    # of the table whose own name says what the claim says (see TableData.query_coverage).
+    direct_coverage: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +395,8 @@ def _is_qualified(label: Optional[str]) -> bool:
 
 
 def _coverage_score(
-    periods: List[PeriodPoint], resolved: List[Tuple[str, float]], src: "_ExcelSource"
+    periods: List[PeriodPoint], resolved: List[Tuple[str, float]], src: "_ExcelSource",
+    broken_out: bool = True,
 ) -> float:
     """Mean TableData.query_coverage across a fact's data points.
 
@@ -401,7 +405,7 @@ def _coverage_score(
     name it found happens to read. See TableData.query_coverage for the cases.
     """
     scores = [
-        src.table.query_coverage(p.metric_label, label)
+        src.table.query_coverage(p.metric_label, label, broken_out=broken_out)
         for p, (label, _) in zip(periods, resolved)
     ]
     return sum(scores) / len(scores) if scores else 0.0
@@ -1415,6 +1419,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         candidates.append(_Candidate(
             score=_resolution_score(fact.periods, resolved),
             coverage=coverage,
+            direct_coverage=_coverage_score(fact.periods, resolved, src, broken_out=False),
             qualification=_qualification_rank(fact.periods, resolved),
             src=src, resolved=resolved, factor=factor, unit_comparable=unit_comparable,
         ))
@@ -1422,8 +1427,9 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     if not candidates:
         return _inconclusive_result(fact, best_missing, best_reason)
 
-    # Coverage first, then label quality. Stable sort, so ties keep source order as before.
-    candidates.sort(key=lambda c: (-c.coverage, c.qualification, -c.score))
+    # Coverage first (a tie goes to the source whose title and matched rows carry the claim's
+    # words themselves), then label quality. Stable sort, so ties keep source order as before.
+    candidates.sort(key=lambda c: (-c.coverage, -c.direct_coverage, c.qualification, -c.score))
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
     # the user chose decide whenever they can answer at all. So is a chart — its labels are read

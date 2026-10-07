@@ -437,7 +437,7 @@ class TableData:
             for w in q_words
         )
 
-    def query_coverage(self, query: str, matched_label: str) -> float:
+    def query_coverage(self, query: str, matched_label: str, broken_out: bool = True) -> float:
         """Share of a claim's significant words this table accounts for, title AND row together.
 
         Row labels alone cannot rank sources once a report's own tables are all in the pool:
@@ -451,6 +451,11 @@ class TableData:
         Scope words are load-bearing here, so this ranks ABOVE label quality in
         paired_verifier._evaluate_fact: a source that ignores 'UMKM' answers a different
         question, however well its row name reads.
+
+        broken_out=False counts only the title and the matched row — not words found in the
+        table's OTHER rows. paired_verifier breaks coverage ties with it: a private-debt table
+        "covers" pemerintah only through its 'Administrasi Pemerintah' sector row, while the
+        government-debt table says pemerintah in its title.
         """
         q_words = {
             w for w in _sig_words(
@@ -471,7 +476,7 @@ class TableData:
         # that name — 4,6 against 4,8. Only Lampiran 2 splits it into Rupiah and Valas rows, so
         # only Lampiran 2 is talking about the thing the claim named.
         residual = q_words - covered
-        if residual:
+        if residual and broken_out:
             broken_out = set()
             for row in self.row_labels:
                 broken_out |= _label_words(row)
