@@ -143,3 +143,20 @@ def test_every_publication_in_the_ui_has_its_own_parser():
     from publication_parsers import PARSERS
 
     assert sorted(PARSERS) == sorted(check_history.PUBLICATIONS)
+
+
+def test_pmi_tables_say_their_index_is_read_in_percent(monkeypatch):
+    # The report prints PMI-BI as "52,03%"; the verifier only compares a percent claim with an
+    # index whose unit carries the % (see paired_verifier._is_plain_index).
+    from publication_parsers import _common
+
+    grid = [
+        [None, "TABEL 1. PROMPT MANUFACTURING INDEX - BANK INDONESIA"],
+        [None, "(%, Indeks)  / (%, Index)"],
+        [None, "Komponen PMI", 2026],
+        [None, "Komponen PMI", "I"],
+        [None, "PMI - BI", 52.03125],
+    ]
+    monkeypatch.setattr(_common, "load_grid", lambda data, sheet: grid)
+
+    assert parse_for_publication("pmi", b"bytes", "T1 PMI").unit == "%, Indeks"

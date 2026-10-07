@@ -3,14 +3,15 @@
 T1: labels in column 1, years in row 4 over 'I'..'IV' in row 5. T2: Indonesian labels in
 column 2 (column 3 is English, column 4 a longer Indonesian name). BI renamed the first sheet
 between editions ('T1 - Komponen PMI' → 'T1 PMI'), hence the patterns. Values are diffusion
-indices (50 = no change).
+indices (50 = no change) that the report prints in percent ("52,03%"), hence the sheet's own
+unit '%, Indeks': the verifier compares percent claims only with an index that carries the %.
 """
 from publication_parsers._common import SheetSpec, parse_with_specs
 from table_model import TableData
 
 SPECS = (
-    (r"T1\b.*", SheetSpec(label_cols=(1,), unit="Indeks")),
-    (r"T2\b.*", SheetSpec(label_cols=(2,), unit="Indeks")),
+    (r"T1\b.*", SheetSpec(label_cols=(1,), unit="%, Indeks")),
+    (r"T2\b.*", SheetSpec(label_cols=(2,), unit="%, Indeks")),
 )
 SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 

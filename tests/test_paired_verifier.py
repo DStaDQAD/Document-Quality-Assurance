@@ -227,6 +227,56 @@ def test_a_deficit_word_does_not_excuse_a_positive_table_value():
     assert result.verdict == "Refuted"
 
 
+def _index_case(operation, claimed, unit, table_unit, data, label="TOTAL", month="Q2", periods=None):
+    table = _make_table(title="Indeks Harga Properti Residensial", unit=table_unit, data=data)
+    fact = _make_fact(
+        operation=operation,
+        periods=periods or [_make_period(metric_label=label, month=month)],
+        claimed_value=claimed, unit=unit,
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_a_percent_claim_is_not_compared_with_index_levels():
+    # SHPR: "harga rumah tipe menengah tumbuh sebesar 0,40% (qtq)" was checked against the
+    # index LEVEL 114,01 and reported Tidak Sesuai — a growth rate and a level are not the same
+    # quantity, so the honest answer from this sheet is "not enough data".
+    result = _index_case(
+        "value", 0.40, "persen", "Indeks (2018=100)", {("MENENGAH", 2026, "Q2"): 114.01},
+        label="MENENGAH",
+    )
+
+    assert result.verdict == "Inconclusive"
+    assert "indeks" in result.reasoning.lower()
+
+
+def test_a_yoy_growth_claim_is_still_computed_from_index_levels():
+    result = _index_case(
+        "yoy_growth", 0.69, "persen_yoy", "Indeks (2018=100)",
+        {("TOTAL", 2026, "Q2"): 110.89, ("TOTAL", 2025, "Q2"): 110.13},
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_percent_claim_still_compares_with_an_index_that_is_read_in_percent():
+    # PMI-BI is a diffusion index printed as "52,03%"; its sheet says '(%, Indeks)'.
+    result = _index_case(
+        "value", 52.03, "persen", "%, Indeks", {("PMI - BI", 2026, "Q1"): 52.03125},
+        label="PMI - BI", month="Q1",
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_an_index_claim_without_a_unit_still_compares_with_index_levels():
+    result = _index_case(
+        "value", 118.5, None, "Indeks", {("IKK", 2026, "Aug"): 118.5}, label="IKK", month="Aug",
+    )
+
+    assert result.verdict == "Entailed"
+
+
 def test_a_deficit_word_does_not_excuse_a_different_number():
     result = _signed_level_case(
         "defisit transaksi berjalan tercatat sebesar 12,5 miliar dolar AS", 12.5, -9.1,

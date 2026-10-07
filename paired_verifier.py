@@ -554,6 +554,16 @@ def _is_growth_series(unit: Optional[str]) -> bool:
     return bool(unit and re.search(r'\byoy\b', unit, re.IGNORECASE))
 
 
+def _is_percent_unit(unit: Optional[str]) -> bool:
+    return bool(unit and (unit.strip().lower().startswith("persen") or "%" in unit))
+
+
+def _is_plain_index(unit: Optional[str]) -> bool:
+    """True for an index read as a level ('Indeks', 'Indeks (2018=100)'), not one printed in
+    percent ('(%, Indeks)' — PMI-BI's diffusion index, reported as '52,03%')."""
+    return bool(unit and re.search(r'\b(indeks|index)\b', unit, re.IGNORECASE) and "%" not in unit)
+
+
 def _is_narrower_than_the_claim(
     fact: ExtractedFact, resolved: List[Tuple[str, float]]
 ) -> bool:
@@ -1403,6 +1413,18 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     best_reason = (
                         f"Sumber [{src.label}] bersatuan '{excel_unit}' (pertumbuhan), "
                         f"tidak bisa menjawab klaim nilai dalam '{fact.unit}'."
+                    )
+                continue
+            # The mirror case: an index sheet holds LEVELS, so a percent claim ('harga rumah
+            # tipe menengah tumbuh 0,40% (qtq)') compared with them reads 0,40 against 114,01.
+            # The dimensionless fallback below exists for PMI, whose sheet says '(%, Indeks)'
+            # and whose report prints the index itself as '52,03%' — so only an index without
+            # a % is turned away.
+            if _is_percent_unit(fact.unit) and _is_plain_index(excel_unit):
+                if best_reason is None:
+                    best_reason = (
+                        f"Sumber [{src.label}] berisi level indeks ('{excel_unit}'); klaim dalam "
+                        f"persen (pertumbuhan) tidak bisa dibandingkan langsung dengan level."
                     )
                 continue
             factor = _unit_factor(fact.unit, excel_unit)
