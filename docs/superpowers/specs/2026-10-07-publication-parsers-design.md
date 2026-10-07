@@ -21,11 +21,12 @@ Agustus 2025 alih-alih Juli 2025.
   Laporan, zip SULNI) — bukan file internal compiler.
 - **Pemilihan sheet tetap manual** oleh pemeriksa, seperti sekarang.
 - **Satu parser khusus per publikasi** (bukan memperluas parser generik).
-- **Bukti selesai:** tes angka emas per publikasi (tanpa LLM, jalan di CI) **ditambah** satu uji
+- **Bukti selesai:** tes angka emas per publikasi (tanpa LLM) **ditambah** satu uji
   ujung-ke-ujung dengan Gemini per publikasi.
-- **Sampel disimpan di repo**, rapi per folder publikasi. Ini menyimpang dari kebiasaan selama ini
-  (laporan asli BI di `sample_data/` sengaja di-gitignore); dapat diterima karena semua file
-  adalah publikasi publik bi.go.id. Perkiraan ukuran total 15–25 MB.
+- **Sampel disimpan di folder repo, rapi per publikasi, tetapi file BI tidak di-commit.**
+  Excel dan PDF siaran pers/laporan di `tests/fixtures/publications/` masuk `.gitignore`, sama
+  seperti kebiasaan `sample_data/`. Yang di-commit hanya `golden.json` (definisi tes buatan kita).
+- **Label dwibahasa:** cukup bagian Indonesia (lihat Arsitektur).
 
 ### Di luar cakupan (dicatat untuk nanti)
 
@@ -94,7 +95,7 @@ Setiap modul:
   rantai lama (bi → generic → llm → pointer-only) berjalan seperti sekarang, dan galatnya
   dicatat sebagai peringatan. Hasil tidak pernah lebih buruk dari hari ini.
 
-### Label dwibahasa (koreksi atas Bagian 3 brainstorming)
+### Label dwibahasa (koreksi atas Bagian 3 brainstorming, disetujui pengguna)
 
 `TableData` belum mendukung nama alternatif untuk label. Label disimpan **bagian Indonesia
 saja**; bagian Inggris dibuang. Ekstraksi klaim sudah memberi LLM daftar label baris, sehingga
@@ -112,6 +113,9 @@ implementasi setelah sampel terkumpul.
 ## Sampel dan angka emas
 
 ### Struktur folder
+
+File BI (Excel, PDF) ada di folder ini secara lokal tetapi di-gitignore; hanya `golden.json`
+yang di-commit.
 
 ```
 tests/fixtures/publications/
@@ -161,9 +165,12 @@ Sumber per publikasi:
 - `quote`: kutipan dari siaran pers/laporan, untuk penelusuran.
 - Target 5–15 angka per publikasi.
 
-### Tes (pytest, tanpa LLM, jalan di CI)
+### Tes (pytest, tanpa LLM)
 
 Tes menemukan semua folder edisi secara otomatis; edisi baru cukup ditambahkan sebagai folder.
+Karena file BI tidak di-commit, tes sebuah edisi **dilewati (skip) bila file Excel-nya tidak ada**
+— di GitHub Actions semuanya dilewati; tes ini dijalankan di lokal, dan wajib hijau sebelum
+merge. Tes unit `_common.py` memakai grid sintetis kecil sehingga tetap jalan di CI.
 
 1. **Terbaca oleh parser publikasi:** setiap sheet di `sheets` diparse oleh modul publikasinya
    tanpa jatuh ke rantai lama; tabel tidak kosong, satuan terisi, periode terakhir =
@@ -187,7 +194,7 @@ tercakup tidak jatuh ke Tidak Cukup Data karena masalah parsing.
 
 Branch `publication-parsers`, commit per langkah:
 
-1. **Fondasi:** `_common.py`, registri, parameter `publication` diteruskan ke
+1. **Fondasi:** aturan `.gitignore` untuk file BI di `tests/fixtures/publications/`, `_common.py`, registri, parameter `publication` diteruskan ke
    `_parse_table_with_fallback`, cadangan ke rantai lama, workbook dibaca sekali; modul
    `uang_beredar` dan `cadangan_devisa` (pembungkus parser BI) beserta angka emasnya.
 2. **SULNI:** parser + angka emas edisi 2026-09; ulangi uji siaran pers ULN Juli 2026.
@@ -200,7 +207,9 @@ Branch `publication-parsers`, commit per langkah:
 
 - **Format berubah antar edisi** (kolom/judul bergeser): tes emas gagal di edisi baru, dan
   di aplikasi parser publikasi melempar galat lalu jatuh ke rantai lama — terdeteksi, tidak diam.
-- **Ukuran repo** bertambah 15–25 MB oleh sampel; diterima oleh pengguna.
+- **Tes emas tidak jalan di CI** karena file BI tidak di-commit: perubahan parser yang merusak
+  sebuah publikasi baru ketahuan saat tes dijalankan di lokal. Mitigasi: menjalankan tes emas
+  lokal adalah syarat sebelum merge; tes unit `_common.py` dengan grid sintetis tetap di CI.
 - **PMI:** sumber Excel resmi belum pasti; bila berbeda dari sampel, parser PMI menyesuaikan.
 - **Label Inggris** di narasi: dijaga tes `query`; alias di `TableData` disiapkan sebagai
   pekerjaan lanjutan bila perlu.
