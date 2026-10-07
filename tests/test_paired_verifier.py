@@ -172,6 +172,69 @@ def test_evaluate_value_uses_first_matching_source_in_order():
     assert result.matched_excel_source == "b.xls / I.1"
 
 
+def _signed_level_case(quote, claimed, table_value, label="Transaksi Berjalan"):
+    """A value claim against a balance-of-payments style table, where deficits are negative."""
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="miliar dolar AS",
+        data={(label, 2026, "Q2"): table_value},
+    )
+    fact = _make_fact(
+        periods=[_make_period(metric_label=label, month="Q2")],
+        claimed_value=claimed, unit="miliar dolar AS", context_quote=quote,
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_a_deficit_printed_as_a_positive_number_matches_the_negative_table_value():
+    # NPI: "defisit transaksi berjalan ... tercatat sebesar 12,5 miliar dolar AS" — the report
+    # prints the size of the deficit; SEKI Tabel V.1 stores the balance, −12,49.
+    result = _signed_level_case(
+        "defisit transaksi berjalan pada triwulan II 2026 tercatat sebesar 12,5 miliar dolar AS",
+        12.5, -12.4874,
+    )
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(-12.4874)
+    assert "defisit" in result.reasoning
+
+
+def test_net_liabilities_printed_positive_match_a_negative_net_position():
+    # PII: "kewajiban neto sebesar 197,4 miliar dolar AS" against the net IIP, −197,43.
+    result = _signed_level_case(
+        "PII Indonesia mencatat kewajiban neto sebesar 197,4 miliar dolar AS",
+        197.4, -197.431, label="Posisi Investasi Internasional, bersih",
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_the_same_number_with_the_opposite_sign_stays_wrong_without_a_word_that_explains_it():
+    result = _signed_level_case(
+        "transaksi berjalan pada triwulan II 2026 tercatat sebesar 12,5 miliar dolar AS",
+        12.5, -12.4874,
+    )
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_deficit_word_does_not_excuse_a_positive_table_value():
+    # The word explains a positive printed number against a NEGATIVE stored balance — not a
+    # negative claim against a positive cell, which is a genuine disagreement.
+    result = _signed_level_case(
+        "defisit transaksi berjalan tercatat sebesar 12,5 miliar dolar AS", -12.5, 12.4874,
+    )
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_deficit_word_does_not_excuse_a_different_number():
+    result = _signed_level_case(
+        "defisit transaksi berjalan tercatat sebesar 12,5 miliar dolar AS", 12.5, -9.1,
+    )
+
+    assert result.verdict == "Refuted"
+
+
 # ---------------------------------------------------------------------------
 # _evaluate_fact — operation="yoy_growth"
 # ---------------------------------------------------------------------------

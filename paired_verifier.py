@@ -986,6 +986,53 @@ def _reinterpret_diff_as_value(
     return result.model_copy(update={"operation": "value"})
 
 
+# Words that make a report print the SIZE of a negative balance as a positive number: "defisit
+# 12,5 miliar dolar AS", "kewajiban neto 197,4", "arus keluar neto 2,2", "kontraksi 0,1".
+_NEGATIVE_BALANCE_WORDS = re.compile(
+    r"\b(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow"
+    r"|(ter)?kontraksi)\b",
+    re.IGNORECASE,
+)
+
+
+def _reinterpret_signed_level(
+    fact: ExtractedFact,
+    resolved: List[Tuple[str, float]],
+    periods: List[PeriodResult],
+    computed: float,
+    src: _ExcelSource,
+) -> Optional[FactVerificationResult]:
+    """A value claim that prints the size of a negative balance, re-checked against its magnitude.
+
+    NPI: "defisit transaksi berjalan … tercatat sebesar 12,5 miliar dolar AS" — SEKI Tabel V.1
+    stores the balance, −12,49, so the claim was Refuted although report and table agree. PII
+    does the same with "kewajiban neto 197,4" against a net position of −197,43.
+
+    Only consulted after the value check has failed, and only when all three hold: the sentence
+    names a negative balance (_NEGATIVE_BALANCE_WORDS), the table value is negative, and the
+    claimed number matches its magnitude. A negative claim against a positive cell, or a number
+    that matches nothing, keeps its Refuted verdict. Returns None in those cases.
+    """
+    if fact.claimed_value is None or computed >= 0 or fact.claimed_value <= 0:
+        return None
+    word = _NEGATIVE_BALANCE_WORDS.search(fact.context_quote or "")
+    if word is None:
+        return None
+    delta, verdict = _numeric_verdict(fact.claimed_value, -computed)
+    if verdict != "Entailed":
+        return None
+    return _make_result(
+        fact, periods, src.label, fact.claimed_value, fact.unit, computed, fact.unit, delta,
+        "Entailed",
+        reasoning=(
+            f"PDF: {fact.claimed_value} {fact.unit} ('{word.group(0)}') | "
+            f"Excel [{src.label}] ({resolved[0][0]}): {computed} {fact.unit} | "
+            f"Laporan menulis besarnya {word.group(0).lower()} sebagai angka positif; tabel "
+            f"mencatat saldonya negatif. Δ besaran = {delta} → within tolerance {MATCH_TOLERANCE}"
+        ),
+    )
+
+
 def _compute_operation(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], factor: float, src: _ExcelSource
 ) -> FactVerificationResult:
@@ -999,6 +1046,10 @@ def _compute_operation(
         computed = round(resolved[0][1] / factor, 4)
         periods = _build_periods(fact.periods, resolved, [resolved[0][1] / factor])
         delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        if verdict == "Refuted":
+            recovered = _reinterpret_signed_level(fact, resolved, periods, computed, src)
+            if recovered is not None:
+                return recovered
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
