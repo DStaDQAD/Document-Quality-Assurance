@@ -1,0 +1,69 @@
+{
+  "publication": "sulni",
+  "data_period": "2026-07",
+  "release": "Siaran Pers No.28/188/DKom, 15 September 2026, ULN Juli 2026 (siaran_pers.pdf); zip SULNI edisi September 2026",
+  "sheets": {
+    "TABEL_INDONESIA Sep26_value.xlsx": {
+      "TabI.1": {"year": 2026, "period": "Jul"},
+      "TabI.2": {"year": 2026, "period": "Jul"},
+      "TabI.3": {"year": 2026, "period": "Jul"},
+      "TabI.4": {"year": 2026, "period": "Jul"},
+      "TabI.5": {"year": 2026, "period": "Jul"},
+      "TabI.6": {"year": 2026, "period": "Jul"},
+      "TabI.7": {"year": 2026, "period": "Q2"}
+    },
+    "TABEL_PEMERINTAH Sep26_value.xlsx": {
+      "Tbl II.1": {"year": 2026, "period": "Jul"},
+      "Tbl II.2": {"year": 2026, "period": "Jul"},
+      "Tbl II.3": {"year": 2026, "period": "Jul"},
+      "Tbl II.4": {"year": 2026, "period": "Jul"},
+      "Tbl II.5": {"year": 2026, "period": "Jul"},
+      "Tbl II.6": {"year": 2026, "period": "Jul"}
+    },
+    "TABEL_SWASTA Sep26_value.xlsx": {
+      "Tbl III.1": {"year": 2026, "period": "Jul"},
+      "Tbl III.2": {"year": 2026, "period": "Jul"},
+      "Tbl III.3": {"year": 2026, "period": "Jul"},
+      "Tbl III.4": {"year": 2026, "period": "Jul"},
+      "Tbl III.5": {"year": 2026, "period": "Jul"},
+      "Tbl III.6": {"year": 2026, "period": "Jul"},
+      "Tbl III.7": {"year": 2026, "period": "Jul"},
+      "Tbl III.8": {"year": 2026, "period": "Jul"},
+      "Tbl III.9": {"year": 2026, "period": "Jul"},
+      "Tbl III.10": {"year": 2026, "period": "Jul"}
+    }
+  },
+  "values": [
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "TOTAL",
+     "year": 2026, "period": "Jul", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 454.8,
+     "quote": "Posisi ULN Indonesia pada Juli 2026 tercatat sebesar 454,8 miliar dolar AS"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "TOTAL",
+     "year": 2026, "period": "Jun", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 454.5,
+     "quote": "posisi pada Juni 2026 sebesar 454,5 miliar dolar AS"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "TOTAL",
+     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1, "expected": 4.9,
+     "quote": "ULN Indonesia mencatat pertumbuhan sebesar 4,9 % (yoy)"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Pemerintah",
+     "query": "ULN pemerintah", "year": 2026, "period": "Jul", "kind": "value", "scale": 0.001,
+     "decimals": 1, "expected": 218.4,
+     "quote": "Posisi ULN pemerintah pada Juli 2026 tercatat 218,4 miliar dolar AS"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Pemerintah",
+     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1, "expected": 3.2,
+     "quote": "atau tumbuh sebesar 3,2% (yoy)"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Swasta",
+     "query": "ULN swasta", "year": 2026, "period": "Jul", "kind": "value", "scale": 0.001,
+     "decimals": 1, "expected": 194.5,
+     "quote": "Posisi ULN swasta pada Juli 2026 tercatat sebesar 194,5 miliar dolar AS"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Swasta",
+     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1, "expected": -1.2,
+     "quote": "atau mengalami kontraksi sebesar 1,2% (yoy)"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Bukan Lembaga Keuangan",
+     "query": "perusahaan bukan lembaga keuangan", "year": 2026, "period": "Jul", "kind": "yoy",
+     "decimals": 1, "expected": -1.4,
+     "quote": "bukan lembaga keuangan (nonfinancial corporations) ... kontraksi sebesar 1,4% (yoy)"},
+    {"workbook": "TABEL_INDONESIA Sep26_value.xlsx", "sheet": "TabI.1", "label": "Lembaga Keuangan",
+     "query": "lembaga keuangan", "year": 2026, "period": "Jul", "kind": "yoy",
+     "decimals": 1, "expected": -0.3,
+     "quote": "lembaga keuangan (financial corporations) ... 0,3% (yoy)"}
+  ]
+}

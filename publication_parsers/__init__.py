@@ -9,7 +9,7 @@ Design: docs/superpowers/specs/2026-10-07-publication-parsers-design.md
 from types import ModuleType
 from typing import Dict, Optional
 
-from publication_parsers import cadangan_devisa, uang_beredar, uang_primer
+from publication_parsers import cadangan_devisa, sulni, uang_beredar, uang_primer
 from publication_parsers._common import PublicationParseError, load_grid, sheet_matches
 from table_model import TableData
 
@@ -17,6 +17,7 @@ PARSERS: Dict[str, ModuleType] = {
     "uang-beredar": uang_beredar,
     "uang-primer-m0": uang_primer,
     "cadangan-devisa": cadangan_devisa,
+    "sulni": sulni,
 }
 
 __all__ = ["PARSERS", "PublicationParseError", "covers", "load_grid", "parse_for_publication"]

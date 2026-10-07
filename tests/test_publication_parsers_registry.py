@@ -51,3 +51,12 @@ def test_seki_wrapper_rejects_a_table_without_figures(mock_bi):
 
     with pytest.raises(PublicationParseError, match="angka"):
         parse_for_publication("uang-primer-m0", b"bytes", "I.2")
+
+
+@pytest.mark.parametrize("sheet, expected", [
+    ("TabI.1", True), ("TabI.7", True), ("Tbl II.1", True), ("Tbl II.6", True),
+    ("Tbl II.7", False), ("Tbl II.8", False),
+    ("Tbl III.1", True), ("Tbl III.10", True), ("Tbl III.11", False),
+])
+def test_sulni_covers_only_its_time_series_sheets(sheet, expected):
+    assert covers("sulni", sheet) is expected
