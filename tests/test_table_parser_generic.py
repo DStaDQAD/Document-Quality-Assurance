@@ -9,6 +9,7 @@ from table_parser_generic import (
     _load_grid,
     _parse_period,
     _parse_two_row_table,
+    load_workbook_grids,
     parse_generic_grid,
     parse_generic_table,
 )
@@ -418,6 +419,31 @@ def test_load_grid_forward_fills_merged_cells():
 
     assert [grid[1][c] for c in range(1, 5)] == [2026, 2026, 2026, 2026]
     assert [grid[r][0] for r in range(3, 6)] == ["Sektor Ekonomi"] * 3
+
+
+def test_load_workbook_grids_reads_every_sheet_in_one_go_like_load_grid():
+    wb = Workbook()
+    first = wb.active
+    first.title = "Data"
+    first["A1"] = "Judul"
+    first.merge_cells("A1:C1")
+    first["B2"] = 0.25
+    first["B2"].number_format = "0.0%"
+    wb.create_sheet("Catatan")["A1"] = 7
+    data = _save(wb)
+
+    grids = load_workbook_grids(data)
+
+    assert list(grids) == ["Data", "Catatan"]
+    assert grids["Data"] == _load_grid(data, "Data")
+    assert grids["Catatan"] == _load_grid(data, "Catatan")
+    assert grids["Data"][0][:3] == ["Judul"] * 3
+    assert grids["Data"][1][1] == pytest.approx(25.0)
+
+
+def test_load_workbook_grids_rejects_bytes_that_are_not_a_workbook():
+    with pytest.raises(ValueError, match="Unrecognized file format"):
+        load_workbook_grids(b"not a workbook")
 
 
 # ---------------------------------------------------------------------------

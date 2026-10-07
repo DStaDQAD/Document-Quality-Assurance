@@ -214,63 +214,105 @@ def _apply_merged_fill(grid: List[List], ranges: List[Tuple[int, int, int, int]]
                 row[c] = anchor
 
 
+_XLS_MAGIC = b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1'
+
+
+def _open_xls(data: bytes):
+    import xlrd
+
+    # formatting_info exposes merged_cells; some .xls files can't provide it —
+    # fall back to a plain open and skip the merged fill (same pattern as
+    # excel_parser_bi._read_xls).
+    try:
+        return xlrd.open_workbook(file_contents=data, formatting_info=True)
+    except Exception:
+        return xlrd.open_workbook(file_contents=data)
+
+
+def _xls_sheet_grid(wb, ws) -> List[List]:
+    import xlrd
+
+    grid: List[List] = []
+    for r in range(ws.nrows):
+        row = []
+        for c in range(ws.ncols):
+            v = ws.cell_value(r, c)
+            if ws.cell_type(r, c) == xlrd.XL_CELL_DATE:
+                v = xlrd.xldate.xldate_as_datetime(v, wb.datemode)
+            row.append(v)
+        grid.append(row)
+    _apply_merged_fill(grid, list(getattr(ws, "merged_cells", []) or []))
+    return grid
+
+
+def _open_xlsx(data: bytes):
+    import openpyxl
+
+    # Not read_only: merged_cells.ranges is unavailable in read-only mode, and the
+    # workbooks handled here are small enough to load fully.
+    return openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+
+
+def _xlsx_sheet_grid(ws) -> List[List]:
+    grid = []
+    for row in ws.iter_rows():
+        out = []
+        for cell in row:
+            v = cell.value
+            # Excel scales %-formatted cells by 100 for DISPLAY only (0.0577
+            # shown as "5.77%"). Narrative claims quote the displayed number,
+            # so store the display scale. Quoted literals ('0"%"') don't scale
+            # in Excel and are excluded. (.xls path: xlrd format lookup is
+            # impractical, so this correction is xlsx-only.)
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                fmt = re.sub(r'"[^"]*"', "", cell.number_format or "")
+                if "%" in fmt:
+                    v = v * 100
+            out.append(v)
+        grid.append(out)
+    _apply_merged_fill(grid, [
+        (m.min_row - 1, m.max_row, m.min_col - 1, m.max_col)
+        for m in ws.merged_cells.ranges
+    ])
+    return grid
+
+
 def _load_grid(data: bytes, sheet_name: str) -> List[List]:
-    if data[:8] == b'\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1':
+    if data[:8] == _XLS_MAGIC:
         import xlrd
 
-        # formatting_info exposes merged_cells; some .xls files can't provide it —
-        # fall back to a plain open and skip the merged fill (same pattern as
-        # excel_parser_bi._read_xls).
-        try:
-            wb = xlrd.open_workbook(file_contents=data, formatting_info=True)
-        except Exception:
-            wb = xlrd.open_workbook(file_contents=data)
+        wb = _open_xls(data)
         try:
             ws = wb.sheet_by_name(sheet_name)
         except xlrd.XLRDError:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheet_names()}")
-        grid: List[List] = []
-        for r in range(ws.nrows):
-            row = []
-            for c in range(ws.ncols):
-                v = ws.cell_value(r, c)
-                if ws.cell_type(r, c) == xlrd.XL_CELL_DATE:
-                    v = xlrd.xldate.xldate_as_datetime(v, wb.datemode)
-                row.append(v)
-            grid.append(row)
-        _apply_merged_fill(grid, list(getattr(ws, "merged_cells", []) or []))
-        return grid
+        return _xls_sheet_grid(wb, ws)
     elif data[:4] == b'PK\x03\x04':
-        import openpyxl
-
-        # Not read_only: merged_cells.ranges is unavailable in read-only mode, and the
-        # workbooks handled here are small enough to load fully.
-        wb = openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+        wb = _open_xlsx(data)
         if sheet_name not in wb.sheetnames:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
         try:
-            ws = wb[sheet_name]
-            grid = []
-            for row in ws.iter_rows():
-                out = []
-                for cell in row:
-                    v = cell.value
-                    # Excel scales %-formatted cells by 100 for DISPLAY only (0.0577
-                    # shown as "5.77%"). Narrative claims quote the displayed number,
-                    # so store the display scale. Quoted literals ('0"%"') don't scale
-                    # in Excel and are excluded. (.xls path: xlrd format lookup is
-                    # impractical, so this correction is xlsx-only.)
-                    if isinstance(v, (int, float)) and not isinstance(v, bool):
-                        fmt = re.sub(r'"[^"]*"', "", cell.number_format or "")
-                        if "%" in fmt:
-                            v = v * 100
-                    out.append(v)
-                grid.append(out)
-            _apply_merged_fill(grid, [
-                (m.min_row - 1, m.max_row, m.min_col - 1, m.max_col)
-                for m in ws.merged_cells.ranges
-            ])
-            return grid
+            return _xlsx_sheet_grid(wb[sheet_name])
+        finally:
+            wb.close()
+    else:
+        raise ValueError("Unrecognized file format: expected .xls or .xlsx bytes.")
+
+
+def load_workbook_grids(data: bytes) -> Dict[str, List[List]]:
+    """Every sheet's grid from ONE workbook load, keyed by sheet name in workbook order.
+
+    Opening a large .xlsx is the slow part (openpyxl must load all of it to see merged ranges;
+    about 9 s for a SULNI workbook) while converting a loaded sheet is cheap, so a caller that
+    needs several sheets of one workbook — publication_parsers.load_grid — takes them at once.
+    """
+    if data[:8] == _XLS_MAGIC:
+        wb = _open_xls(data)
+        return {ws.name: _xls_sheet_grid(wb, ws) for ws in wb.sheets()}
+    elif data[:4] == b'PK\x03\x04':
+        wb = _open_xlsx(data)
+        try:
+            return {ws.title: _xlsx_sheet_grid(ws) for ws in wb.worksheets}
         finally:
             wb.close()
     else:
