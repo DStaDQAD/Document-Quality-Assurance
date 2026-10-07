@@ -2053,6 +2053,51 @@ def test_yoy_claim_is_not_answered_by_the_qtq_band_of_a_mixed_growth_table():
     assert "qtq" in result.reasoning
 
 
+def _spe_growth_tables():
+    yoy = _make_table(title="Tabel 2. Pertumbuhan Tahunan IPR (%, yoy)", unit="%, yoy",
+                      data={("INDEKS TOTAL", 2026, "Jul"): 1.1})
+    mtm = _make_table(title="Tabel 3. Pertumbuhan Bulanan IPR (%, mtm)", unit="%, mtm",
+                      data={("INDEKS TOTAL", 2026, "Jul"): -0.1})
+    return _make_source(yoy, sheet="Tabel 2"), _make_source(mtm, sheet="Tabel 3")
+
+
+def _rate_fact(claimed, quote):
+    return _make_fact(
+        periods=[_make_period(metric_label="INDEKS TOTAL", month="Jul")],
+        claimed_value=claimed, unit="persen", context_quote=quote,
+    )
+
+
+def test_an_mtm_rate_is_answered_by_the_mtm_table_not_the_yoy_one():
+    # SPE E2E: "terkontraksi sebesar 0,1% (mtm)" was answered by Tabel 2 (yoy, 1,1).
+    yoy, mtm = _spe_growth_tables()
+    quote = "Pada Juli 2026, IPR tumbuh sebesar 1,1% (yoy) dan terkontraksi sebesar 0,1% (mtm)."
+
+    result = _evaluate_fact(_rate_fact(-0.1, quote), [yoy, mtm])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source == "TABEL1_1.xls / Tabel 3"
+
+
+def test_an_mtm_rate_is_not_answered_by_a_yoy_table_alone():
+    yoy, _ = _spe_growth_tables()
+
+    result = _evaluate_fact(_rate_fact(-0.1, "terkontraksi sebesar 0,1% (mtm)"), [yoy])
+
+    assert result.verdict == "Inconclusive"
+    assert "mtm" in result.reasoning
+
+
+def test_the_yoy_rate_in_the_same_sentence_still_reads_the_yoy_table():
+    yoy, mtm = _spe_growth_tables()
+    quote = "Pada Juli 2026, IPR tumbuh sebesar 1,1% (yoy) dan terkontraksi sebesar 0,1% (mtm)."
+
+    result = _evaluate_fact(_rate_fact(1.1, quote), [mtm, yoy])
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source == "TABEL1_1.xls / Tabel 2"
+
+
 def test_yoy_claim_against_a_levels_table_still_computes_growth():
     table = _make_table(
         unit="triliun Rp",

@@ -583,6 +583,30 @@ def _not_a_yoy_cell(fact: ExtractedFact, label: str, src: "_ExcelSource") -> Opt
     return kind if kind not in (None, "yoy") else None
 
 
+def _claimed_rate_kind(fact: ExtractedFact) -> Optional[str]:
+    """The growth kind a percent claim states — the '(mtm)' / '(qtq)' / '(yoy)' after its number.
+
+    One sentence often carries two ('tumbuh 1,1% (yoy) dan terkontraksi sebesar 0,1% (mtm)'), so
+    the tag that follows the claimed number wins; without the number in the quote, a quote with a
+    single kind decides. None when the quote names no kind.
+    """
+    quote = fact.context_quote or ""
+    tags = [(m.start(), m.group(1).lower()) for m in _GROWTH_KIND_RE.finditer(quote)]
+    if not tags:
+        return None
+    if fact.claimed_value is not None:
+        text = f"{abs(fact.claimed_value):.4f}".rstrip("0").rstrip(".")
+        whole, _, frac = text.partition(".")
+        pattern = re.escape(whole) + (r"\s*,\s*" + re.escape(frac) if frac else "") + r"(?![\d,])"
+        number = re.search(r"(?<![\d,.])" + pattern, quote)
+        if number:
+            following = [kind for pos, kind in tags if pos >= number.end()]
+            if following:
+                return following[0]
+    kinds = {kind for _, kind in tags}
+    return kinds.pop() if len(kinds) == 1 else None
+
+
 def _breakdown_the_table_lacks(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], src: "_ExcelSource"
 ) -> List[str]:
@@ -1560,6 +1584,18 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     f"('{resolved[0][0]}'), bukan angka '{fact.display_label}' itu sendiri."
                 )
             continue
+        # A rate the sentence marks '(mtm)' is not answered by a '%, yoy' cell, and vice versa:
+        # SPE Tabel 2 (yoy) answered "terkontraksi sebesar 0,1% (mtm)" with 1,1.
+        if fact.operation == "value" and _is_percent_unit(fact.unit):
+            claim_kind = _claimed_rate_kind(fact)
+            cell_kind = _growth_kind(src.table.unit, resolved[0][0])
+            if claim_kind and cell_kind not in (None, "mixed", claim_kind):
+                if best_reason is None:
+                    best_reason = (
+                        f"Excel [{src.label}] ({resolved[0][0]}) berisi pertumbuhan {cell_kind} "
+                        f"('{src.table.unit}'), sedangkan klaim menyebut {claim_kind}."
+                    )
+                continue
         absent = _breakdown_the_table_lacks(fact, resolved, src)
         if absent:
             if best_reason is None:
