@@ -146,3 +146,26 @@ def test_verify_paired_endpoint_reports_no_gaps_on_a_clean_run(
     )
 
     assert response.json()["coverage_gaps"] == []
+
+
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_verify_paired_endpoint_passes_the_publication_to_the_table_parsers(
+    mock_get_vision_llm, mock_extract_narrative_text, mock_verify_paired
+):
+    mock_get_vision_llm.side_effect = RuntimeError("no key configured")
+    mock_extract_narrative_text.return_value = "[== Halaman 1 ==]\nULN tumbuh 4,9% (yoy)."
+    mock_verify_paired.return_value = _fact_response()
+
+    client.post(
+        "/api/verify-paired",
+        params={"run_typo_check": "false", "publication": "sulni"},
+        data={"sheet_names": "TabI.1"},
+        files=[
+            ("pdf_file", ("report.pdf", b"%PDF-1.4 fake", "application/pdf")),
+            ("excel_file", ("TABEL_INDONESIA.xlsx", b"xlsx-bytes", "application/vnd.ms-excel")),
+        ],
+    )
+
+    assert mock_verify_paired.call_args.kwargs["publication"] == "sulni"

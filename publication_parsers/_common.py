@@ -17,8 +17,14 @@ from collections import Counter, OrderedDict
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
+from excel_parser_bi import parse_bi_table
 from table_model import QUAL_SEP, TableData
-from table_parser_generic import _bare_period_token, _parse_period, load_workbook_grids
+from table_parser_generic import (
+    _bare_period_token,
+    _parse_period,
+    load_workbook_grids,
+    parse_generic_table,
+)
 
 _XLS_MAGIC = b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"
 
@@ -413,3 +419,32 @@ def parse_with_specs(
         if spec.hierarchy == "indent" else None
     )
     return parse_series_sheet(load_grid(data, sheet_name), spec, indents)
+
+
+def parse_with_bi_reader(data: bytes, sheet_name: str) -> TableData:
+    """SEKI monthly tables: the existing BI reader, accepted only when its result is whole."""
+    try:
+        table = parse_bi_table(data, sheet_name)
+    except ValueError as exc:
+        raise PublicationParseError(f"pembaca tabel SEKI: {exc}") from exc
+    if not table._data:
+        raise PublicationParseError("pembaca tabel SEKI tidak menemukan angka")
+    if len(set(table.row_labels)) < len(table.row_labels):
+        raise PublicationParseError("label baris berulang tanpa induk; hierarki tidak terbaca")
+    return table
+
+
+def parse_with_generic_reader(data: bytes, sheet_name: str, unit: str = "") -> TableData:
+    """Survey workbooks the generic reader already handles (SK, SKDU), checked for shape.
+
+    The generic reader keeps both halves of a bilingual unit cell ('Rp)  / (IDR'); only the
+    Indonesian half is kept, and `unit` fills in for a sheet that states none.
+    """
+    try:
+        table = parse_generic_table(data, sheet_name)
+    except ValueError as exc:
+        raise PublicationParseError(f"pembaca tabel survei: {exc}") from exc
+    if table.axis_type != "temporal" or not table._data:
+        raise PublicationParseError("tabel tidak terbaca sebagai deret waktu")
+    table.unit = _BILINGUAL_SPLIT.split(table.unit)[0].strip(" ()") or unit
+    return table

@@ -801,6 +801,7 @@ async def _run_paired_pipeline(
             reference_tables=reference_tables,
             chart_readings=chart_readings,
             chart_pages_unread=chart_pages_unread,
+            publication=publication,
         ),
         _maybe_typo_check(),
     )

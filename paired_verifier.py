@@ -40,9 +40,10 @@ from excel_parser_bi import BITableData, parse_bi_table
 from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _expand_report_terms, _sig_words, label_match_score
+from publication_parsers import load_grid as _load_grid
+from publication_parsers import parse_for_publication
 from table_parser_generic import (
     _MONTH_ABBREVS,
-    _load_grid,
     parse_generic_grid,
     parse_generic_table,
 )
@@ -1811,11 +1812,20 @@ def _bi_parse_collapsed(table: BITableData) -> bool:
 
 
 def _parse_table_with_fallback(
-    excel_bytes: bytes, sheet_name: str, llm: Optional[BaseChatModel] = None
+    excel_bytes: bytes,
+    sheet_name: str,
+    llm: Optional[BaseChatModel] = None,
+    publication: str = "",
 ) -> Tuple[BITableData, str]:
-    """Return (table, parser_name) — three-tier cascade: BI → generic heuristic → LLM mapping.
+    """Return (table, parser_name) — publication parser, then BI → generic → LLM mapping.
 
-    The BI parser stays the primary path so known SEKI files keep their exact current
+    When the checker picked a publication whose own parser covers this sheet
+    (publication_parsers), that parser goes first and is reported under the publication's key
+    (e.g. "sulni"). If it rejects the sheet — or breaks — the cascade below runs exactly as it
+    would without a publication, so a layout change in a new edition degrades to today's
+    behaviour instead of failing the check.
+
+    The BI parser stays the primary generic path so known SEKI files keep their exact current
     behaviour. Its result is accepted only when it actually extracted data; a structurally
     successful but EMPTY parse (or a ValueError) falls through to the generic parser. When
     that also fails and an llm is available, the LLM structure-mapping parser (tier 3) gets
@@ -1824,6 +1834,18 @@ def _parse_table_with_fallback(
     instead of the whole request failing); only when every tier raised is the combined error
     surfaced.
     """
+    if publication:
+        try:
+            table = parse_for_publication(publication, excel_bytes, sheet_name)
+        except Exception as exc:  # a parser fault must never fail the check
+            logger.warning(
+                "Publication parser '%s' failed on sheet '%s' (%s) — using the generic cascade.",
+                publication, sheet_name, exc,
+            )
+            table = None
+        if table is not None:
+            return table, publication
+
     bi_table = None
     bi_error: Optional[Exception] = None
     try:
@@ -2585,6 +2607,7 @@ async def verify_paired(
     reference_tables: Optional[List[Tuple[str, List[PdfTable]]]] = None,
     chart_readings: Optional[List[ChartReading]] = None,
     chart_pages_unread: Optional[List[int]] = None,
+    publication: str = "",
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -2620,6 +2643,9 @@ async def verify_paired(
                         and each chart is a fallback source for the narrative — it answers only
                         what no table can, and otherwise can raise a "chart" conflict.
         chart_pages_unread: Pages whose charts were located but not read; echoed back.
+        publication:    The publication type the checker picked ("sulni", "npi", ...). Its own
+                        parser reads the sheets it covers before the generic cascade (see
+                        _parse_table_with_fallback); empty means the generic cascade only.
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -2638,7 +2664,9 @@ async def verify_paired(
             detail=f"{filename} / {sheet_name}",
         )
         try:
-            table, parser_used = _parse_table_with_fallback(excel_bytes, sheet_name, llm=llm)
+            table, parser_used = _parse_table_with_fallback(
+                excel_bytes, sheet_name, llm=llm, publication=publication
+            )
         except ValueError as parse_error:
             # Every parser tier failed. If the raw grid still loads, keep the source as
             # POINTER-ONLY: an empty table whose claims can only be answered by the

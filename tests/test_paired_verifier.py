@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from unittest.mock import Mock, patch
 
 import pytest
@@ -19,6 +20,7 @@ from paired_verifier import (
     _unit_factor,
     verify_paired,
 )
+from publication_parsers import PublicationParseError
 from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint
 
@@ -760,6 +762,32 @@ def test_verify_paired_still_raises_when_grid_also_unloadable(
         )
 
 
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier._parse_table_with_fallback")
+def test_verify_paired_hands_the_publication_to_the_table_parsers(mock_parse, mock_extract_facts):
+    mock_parse.return_value = (_make_table(data={("TOTAL", 2026, "Jul"): 1.0}), "sulni")
+    mock_extract_facts.return_value = []
+
+    response = asyncio.run(
+        verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "x" * 250,
+            excel_sources=[(b"xlsx-bytes", "TabI.1", "TABEL_INDONESIA.xlsx")],
+            llm=Mock(),
+            publication="sulni",
+        )
+    )
+
+    assert mock_parse.call_args.kwargs["publication"] == "sulni"
+    assert response.excel_parsers == ["sulni"]
+
+
+def test_verify_paired_reads_each_grid_through_the_cached_loader():
+    import paired_verifier
+    from publication_parsers import load_grid
+
+    assert paired_verifier._load_grid is load_grid
+
+
 # ---------------------------------------------------------------------------
 # Categorical (non-time-series) sources
 # ---------------------------------------------------------------------------
@@ -1341,6 +1369,54 @@ def test_cascade_falls_back_to_generic_when_bi_parse_is_empty(mock_bi, mock_gene
     table, parser = _parse_table_with_fallback(b"bytes", "S")
 
     assert parser == "generic"
+
+
+@patch("paired_verifier.parse_bi_table")
+@patch("paired_verifier.parse_for_publication")
+def test_cascade_uses_the_publication_parser_first(mock_pub, mock_bi):
+    mock_pub.return_value = _make_table(data={("TOTAL", 2026, "Jul"): 454759.8})
+
+    table, parser = _parse_table_with_fallback(b"bytes", "TabI.1", publication="sulni")
+
+    assert parser == "sulni"
+    assert table.lookup("TOTAL", 2026, "Jul") == 454759.8
+    mock_pub.assert_called_once_with("sulni", b"bytes", "TabI.1")
+    mock_bi.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", [PublicationParseError("kolom bergeser"), IndexError("bug")])
+@patch("paired_verifier.parse_bi_table")
+@patch("paired_verifier.parse_for_publication")
+def test_cascade_falls_back_when_the_publication_parser_fails(mock_pub, mock_bi, failure, caplog):
+    mock_pub.side_effect = failure
+    mock_bi.return_value = _make_table(data={("Total", 2026, "Jul"): 1.0})
+
+    with caplog.at_level(logging.WARNING):
+        table, parser = _parse_table_with_fallback(b"bytes", "TabI.1", publication="sulni")
+
+    assert parser == "bi"
+    assert "sulni" in caplog.text
+
+
+@patch("paired_verifier.parse_bi_table")
+@patch("paired_verifier.parse_for_publication")
+def test_cascade_reads_an_uncovered_sheet_the_old_way(mock_pub, mock_bi):
+    mock_pub.return_value = None
+    mock_bi.return_value = _make_table(data={("Total", 2026, "Jul"): 1.0})
+
+    _, parser = _parse_table_with_fallback(b"bytes", "Tbl II.7", publication="sulni")
+
+    assert parser == "bi"
+
+
+@patch("paired_verifier.parse_bi_table")
+@patch("paired_verifier.parse_for_publication")
+def test_cascade_without_a_publication_never_asks_a_publication_parser(mock_pub, mock_bi):
+    mock_bi.return_value = _make_table(data={("Total", 2026, "Apr"): 1.0})
+
+    _parse_table_with_fallback(b"bytes", "I.1")
+
+    mock_pub.assert_not_called()
 
 
 @patch("paired_verifier.parse_generic_table")

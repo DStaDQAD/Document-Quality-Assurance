@@ -1,0 +1,53 @@
+"""Which sheets each publication parser claims, and how the reader wrappers report failure."""
+from unittest.mock import patch
+
+import pytest
+
+from publication_parsers import PublicationParseError, covers, parse_for_publication
+from table_model import TableData
+
+
+@pytest.mark.parametrize("publication, sheet, expected", [
+    ("uang-beredar", "I.1", True),
+    ("uang-beredar", "I.1A", True),
+    ("uang-beredar", " i.1a ", True),
+    ("uang-beredar", "I.10", False),
+    ("uang-beredar", "Th 1985-1992", False),
+    ("uang-primer-m0", "I.2", True),
+    ("uang-primer-m0", "Th 2010-2021", False),
+    ("cadangan-devisa", "5.9", True),
+    ("cadangan-devisa", "5.90", False),
+    ("cadangan-devisa", "I.1", False),
+    ("", "I.1", False),
+    ("tidak-ada", "I.1", False),
+])
+def test_covers(publication, sheet, expected):
+    assert covers(publication, sheet) is expected
+
+
+def test_an_uncovered_sheet_is_left_to_the_generic_cascade():
+    assert parse_for_publication("cadangan-devisa", b"never read", "I.1") is None
+
+
+def test_seki_wrapper_reports_an_unreadable_file_as_a_publication_error():
+    with pytest.raises(PublicationParseError, match="SEKI"):
+        parse_for_publication("uang-beredar", b"not an excel file", "I.1")
+
+
+@patch("publication_parsers._common.parse_bi_table")
+def test_seki_wrapper_rejects_a_table_whose_hierarchy_collapsed(mock_bi):
+    mock_bi.return_value = TableData(
+        title="t", unit="Miliar Rp", row_labels=["Rupiah", "Rupiah"],
+        _data={("Rupiah", 2026, "Jul"): 1.0},
+    )
+
+    with pytest.raises(PublicationParseError, match="berulang"):
+        parse_for_publication("uang-beredar", b"bytes", "I.1")
+
+
+@patch("publication_parsers._common.parse_bi_table")
+def test_seki_wrapper_rejects_a_table_without_figures(mock_bi):
+    mock_bi.return_value = TableData(title="t", unit="Miliar Rp", row_labels=["M2"])
+
+    with pytest.raises(PublicationParseError, match="angka"):
+        parse_for_publication("uang-primer-m0", b"bytes", "I.2")
