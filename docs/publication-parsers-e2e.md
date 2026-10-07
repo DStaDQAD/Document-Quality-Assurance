@@ -132,6 +132,35 @@ menentukan jenisnya). Klaim yoy membaca sel tabel yoy langsung, dan tidak dijawa
 Sisa 11 di SPE satu pola: ekstraktor memberi label yoy pada klaim "(mtm)", lalu pertumbuhan yoy
 dihitung dari indeks. Perbaikannya ada di prompt ekstraktor (belum dikerjakan).
 
+### 4. mtm/qtq bukan yoy, perubahan sebagai diff, rincian yang tidak ada, seri penuh (2026-10-08)
+
+- Prompt ekstraktor (aturan 2e, 2f): laju "(mtm)/(qtq)/(ctc)" adalah nilai persen, bukan yoy;
+  "naik/turun sebesar X miliar" adalah `diff` periode sebelumnya → sekarang, bertanda minus bila turun.
+- Klaim persen bertanda mtm/qtq/yoy tidak dijawab tabel pertumbuhan berjenis lain (jenis dibaca dari
+  tanda setelah angka klaim di kalimatnya).
+- Kata di belakang istilah yang dicocokkan baris, yang tidak ada di mana pun dalam tabel ("ekspor
+  nonmigas ke **Tiongkok**", "impor barang **konsumsi**"), membuat sumber itu tidak menjawab.
+- Seri penuh di semua kunci peringkat (SKDU: label sektor sama di tiap sheet) dimenangkan sumber yang
+  nilainya sama dengan angka klaim.
+
+| Publikasi | Tidak Sesuai sebelum | sesudah | Sesuai |
+|---|---|---|---|
+| spe | 11 | **2** | 37 |
+| npi | 62 | 36 | 41 |
+| pii | 13 | 8 | 26 |
+| skdu | 34 | 29 | 95 |
+
+Sisa:
+- **spe (2):** teks legenda grafik ("IPR (yoy) meningkat …") terbaca sebagai klaim tren.
+- **npi (36):** tren pada saldo defisit ("defisit … meningkat" = saldo makin negatif), rasio "% PDB"
+  dihitung TB ÷ baris % PDB, "transaksi modal dan finansial" adalah jumlah dua baris, neraca
+  perdagangan nonmigas berbasis lain (11,5 vs 12,14).
+- **pii (8):** perubahan per komponen ("kenaikan AFLN investasi lainnya 8,7") dan posisi neto
+  komponen yang tidak ada di tabel.
+- **skdu (29):** klaim tentang Tabel 5–7 (harga jual, inflasi, investasi) yang tidak diunggah di run
+  ini, jatuh ke baris sektor Tabel 1 — kata topiknya ("SBT harga jual …") ada di DEPAN nama sektor,
+  sedangkan aturan rincian hanya menolak kata di belakang.
+
 ## Tindak lanjut (di luar parser)
 
 1. **Kata arah pada angka:** "defisit X", "kewajiban neto X", "terkontraksi X" → −X, dan sisi debit
