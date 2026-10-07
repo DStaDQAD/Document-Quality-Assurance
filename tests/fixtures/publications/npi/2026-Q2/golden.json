@@ -1,0 +1,36 @@
+{
+  "publication": "npi",
+  "data_period": "2026-Q2",
+  "release": "Laporan Neraca Pembayaran Indonesia, Realisasi Triwulan II 2026 (laporan.pdf), Ringkasan",
+  "sheets": {
+    "TABEL5_1.xls": {"5.1": {"year": 2026, "period": "Q2"}}
+  },
+  "values": [
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Neraca Keseluruhan",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -0.9,
+     "quote": "NPI pada triwulan II 2026 mencatat defisit 0,9 miliar dolar AS"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Neraca Keseluruhan",
+     "year": 2026, "period": "Q1", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -9.1,
+     "quote": "dibandingkan dengan defisit pada triwulan I 2026 sebesar 9,1 miliar dolar AS"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Transaksi Berjalan", "query": "transaksi berjalan",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -12.5,
+     "quote": "defisit transaksi berjalan pada triwulan II 2026 tercatat sebesar 12,5 miliar dolar AS"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Transaksi Berjalan (% PDB)",
+     "year": 2026, "period": "Q2", "kind": "value", "decimals": 1, "expected": -3.3,
+     "quote": "(3,3% dari PDB)"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Transaksi Berjalan",
+     "year": 2026, "period": "Q1", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -3.6,
+     "quote": "defisit pada triwulan sebelumnya sebesar 3,6 miliar dolar AS"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Transaksi Berjalan (% PDB)",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 1, "expected": -1.0,
+     "quote": "(1,0% dari PDB)"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1", "label": "Posisi Cadangan Devisa",
+     "query": "posisi cadangan devisa",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 145.6,
+     "quote": "Posisi cadangan devisa pada akhir Juni 2026 tetap terjaga sebesar 145,6 miliar dolar AS"},
+    {"workbook": "TABEL5_1.xls", "sheet": "5.1",
+     "label": "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah",
+     "year": 2026, "period": "Q2", "kind": "value", "decimals": 1, "expected": 5.4,
+     "quote": "atau 5,4 bulan impor dan pembayaran utang luar negeri pemerintah"}
+  ]
+}

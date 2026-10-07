@@ -60,3 +60,11 @@ def test_seki_wrapper_rejects_a_table_without_figures(mock_bi):
 ])
 def test_sulni_covers_only_its_time_series_sheets(sheet, expected):
     assert covers("sulni", sheet) is expected
+
+
+@pytest.mark.parametrize("publication, sheet, expected", [
+    ("npi", "5.1", True), ("npi", "Th 2004-2010", False), ("npi", "I.1", False),
+    ("pii", "5.39", True), ("pii", "2001-2012", False), ("pii", "5.3", False),
+])
+def test_npi_and_pii_cover_their_seki_sheets(publication, sheet, expected):
+    assert covers(publication, sheet) is expected

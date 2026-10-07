@@ -1,0 +1,28 @@
+{
+  "publication": "pii",
+  "data_period": "2026-Q2",
+  "release": "Laporan Posisi Investasi Internasional Indonesia Triwulan II 2026 (laporan.pdf), Ringkasan",
+  "sheets": {
+    "TABEL5_39.xls": {"5.39": {"year": 2026, "period": "Q2"}}
+  },
+  "values": [
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Posisi Investasi Internasional, bersih",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -197.4,
+     "quote": "PII Indonesia mencatat kewajiban neto sebesar 197,4 miliar dolar AS"},
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Posisi Investasi Internasional, bersih",
+     "year": 2026, "period": "Q1", "kind": "value", "scale": 0.001, "decimals": 1, "expected": -223.0,
+     "quote": "kewajiban neto pada akhir triwulan I 2026 sebesar 223,0 miliar dolar AS"},
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Kewajiban",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 769.0,
+     "quote": "Posisi KFLN Indonesia pada akhir triwulan II 2026 tercatat sebesar 769,0 miliar dolar AS"},
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Kewajiban",
+     "year": 2026, "period": "Q1", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 783.7,
+     "quote": "dari 783,7 miliar dolar AS pada akhir triwulan I 2026"},
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Aset",
+     "year": 2026, "period": "Q2", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 571.5,
+     "quote": "Posisi AFLN pada akhir triwulan II 2026 tercatat sebesar 571,5 miliar dolar AS"},
+    {"workbook": "TABEL5_39.xls", "sheet": "5.39", "label": "Aset",
+     "year": 2026, "period": "Q1", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 560.7,
+     "quote": "dari 560,7 miliar dolar AS pada akhir triwulan I 2026"}
+  ]
+}
