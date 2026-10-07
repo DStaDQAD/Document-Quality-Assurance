@@ -128,3 +128,18 @@ def test_sbank_covers_its_sheets_however_they_are_spaced(sheet, expected):
 ])
 def test_shpr_covers_its_three_tables(sheet, expected):
     assert covers("shpr", sheet) is expected
+
+
+@pytest.mark.parametrize("sheet, expected", [
+    ("T1 PMI", True), ("T1 - Komponen PMI", True), ("T2", True), ("T2 Sublapangan", True),
+    ("T10", False), ("T3", False),
+])
+def test_pmi_covers_both_sheet_namings(sheet, expected):
+    assert covers("pmi", sheet) is expected
+
+
+def test_every_publication_in_the_ui_has_its_own_parser():
+    import check_history
+    from publication_parsers import PARSERS
+
+    assert sorted(PARSERS) == sorted(check_history.PUBLICATIONS)

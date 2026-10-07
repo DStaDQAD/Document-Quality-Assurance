@@ -1,0 +1,47 @@
+{
+  "publication": "pmi",
+  "data_period": "2026-Q1",
+  "release": "Laporan Prompt Manufacturing Index Bank Indonesia Triwulan I 2026 (laporan.pdf; halaman 1 berupa gambar, dibaca dari render; Tabel 2 dari teks halaman 7)",
+  "sheets": {
+    "PMI-Triwulan-I-2026.xlsx": {
+      "T1 PMI": {"year": 2026, "period": "Q2"},
+      "T2": {"year": 2026, "period": "Q2"}
+    }
+  },
+  "values": [
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "PMI - BI", "query": "PMI-BI",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 52.03,
+     "quote": "tecermin dari PMI-BI triwulan I 2026 sebesar 52,03%"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "PMI - BI",
+     "year": 2025, "period": "Q4", "kind": "value", "decimals": 2, "expected": 51.86,
+     "quote": "lebih tinggi dibandingkan dengan triwulan sebelumnya sebesar 51,86%"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "PMI - BI",
+     "year": 2026, "period": "Q2", "kind": "value", "decimals": 2, "expected": 52.26,
+     "quote": "Pada triwulan II 2026, kinerja LU Industri Pengolahan diprakirakan ... meningkat menjadi 52,26%"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "Volume Produksi",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 54.07,
+     "quote": "peningkatan kinerja Komponen Volume Produksi (54,07%)"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "Volume Persediaan Barang Jadi",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 54.43,
+     "quote": "dan Volume Persediaan Barang Jadi (54,43%)"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "Volume Total Pesanan",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 53.20,
+     "quote": "komponen Volume Total Pesanan masih tetap kuat di zona ekspansi dengan indeks sebesar 53,20%"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "Volume Produksi",
+     "year": 2026, "period": "Q2", "kind": "value", "decimals": 2, "expected": 54.51,
+     "quote": "Ekspansi terutama didorong oleh Volume Produksi (54,51%)"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T1 PMI", "label": "Jumlah Tenaga Kerja",
+     "year": 2026, "period": "Q2", "kind": "value", "decimals": 2, "expected": 49.49,
+     "quote": "komponen Jumlah Tenaga Kerja mengalami perbaikan meski masih berada di zona kontraksi sebesar 49,49%"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T2", "label": "Industri Makanan dan Minuman",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 55.33,
+     "quote": "Tabel 2: Industri Makanan dan Minuman ... 55,33"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T2",
+     "label": "Industri Kertas dan Barang dari Kertas, Percetakan dan Reproduksi Media Rekaman",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 57.27,
+     "quote": "Tabel 2: Industri Kertas dan Barang dari Kertas, Percetakan dan Reproduksi Media Rekaman ... 57,27"},
+    {"workbook": "PMI-Triwulan-I-2026.xlsx", "sheet": "T2", "label": "Industri Kulit, Barang dari Kulit dan Alas Kaki",
+     "year": 2026, "period": "Q1", "kind": "value", "decimals": 2, "expected": 55.83,
+     "quote": "Tabel 2: Industri Kulit, Barang dari Kulit dan Alas Kaki ... 55,83"}
+  ]
+}
