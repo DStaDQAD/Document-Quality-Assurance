@@ -96,6 +96,22 @@ palsu): 46 s, 3 Tidak Cukup Data yang memang di luar jangkauan tabel, 0 Tidak Se
 - Halaman laporan berupa gambar: lapisan teks 187 karakter, tersaring jadi 0, dan fallback visi
   tidak terpicu, sehingga tidak ada klaim. Angka emas PMI dibaca dari render halaman.
 
+## Perbaikan lanjutan
+
+### 1. Tanda "defisit / kewajiban neto" (2026-10-07, `paired_verifier._reinterpret_signed_level`)
+
+Klaim nilai yang Tidak Sesuai dinilai ulang bila kalimatnya menyebut defisit, kewajiban neto,
+arus keluar neto, atau kontraksi, nilai tabelnya negatif, dan angka klaim sama dengan besarnya.
+Uji ulang dengan Gemini:
+
+| Publikasi | Tidak Sesuai sebelum | Tidak Sesuai sesudah | Klaim yang terselamatkan |
+|---|---|---|---|
+| npi | 74 | 62 | 9 (mis. defisit TB 12,5 vs −12,49; NPI defisit 0,9 vs −0,88) |
+| pii | 22 | 13 | 3 (kewajiban neto 197,4 dan 223,0; IL kewajiban neto 168,8) |
+
+Jumlah klaim berubah antar-run (ekstraksi LLM tidak deterministik), jadi angka sebelum/sesudah
+adalah perbandingan kasar; semua klaim yang terselamatkan dicek manual dan benar.
+
 ## Tindak lanjut (di luar parser)
 
 1. **Kata arah pada angka:** "defisit X", "kewajiban neto X", "terkontraksi X" → −X, dan sisi debit
