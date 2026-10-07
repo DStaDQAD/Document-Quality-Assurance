@@ -1,0 +1,27 @@
+{
+  "publication": "uang-primer-m0",
+  "data_period": "2026-07",
+  "release": "Laporan Uang Beredar Juli 2026, paragraf Uang Primer (fixtures uang-beredar/2026-07/laporan.pdf); TABEL1_2.xls diunduh September 2026",
+  "sheets": {
+    "TABEL1_2.xls": {"I.2": {"year": 2026, "period": "Sep"}}
+  },
+  "values": [
+    {"workbook": "TABEL1_2.xls", "sheet": "I.2", "label": "Uang Primer Adjusted 1)",
+     "query": "uang primer adjusted", "year": 2026, "period": "Jul", "kind": "value",
+     "scale": 0.001, "decimals": 1, "expected": 2254.5,
+     "quote": "sehingga tercatat sebesar Rp2.254,5 triliun"},
+    {"workbook": "TABEL1_2.xls", "sheet": "I.2", "label": "Uang Primer Adjusted 1)",
+     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1, "expected": 17.1,
+     "quote": "Uang Primer (M0) adjusted pada Juli 2026 tumbuh 17,1% (yoy)"},
+    {"workbook": "TABEL1_2.xls", "sheet": "I.2", "label": "Uang Primer Adjusted 1)",
+     "year": 2026, "period": "Jun", "kind": "yoy", "decimals": 1, "expected": 13.8,
+     "quote": "pertumbuhan bulan Juni 2026 sebesar 13,8% (yoy)"},
+    {"workbook": "TABEL1_2.xls", "sheet": "I.2", "label": "Giro Bank Umum di BI Adjusted 2)",
+     "query": "giro bank umum di BI adjusted", "year": 2026, "period": "Jul", "kind": "yoy",
+     "decimals": 1, "expected": 17.1,
+     "quote": "pertumbuhan giro bank umum di Bank Indonesia adjusted sebesar 17,1% (yoy)"},
+    {"workbook": "TABEL1_2.xls", "sheet": "I.2", "label": "Uang Kartal Yang Diedarkan",
+     "year": 2026, "period": "Jul", "kind": "yoy", "decimals": 1, "expected": 15.1,
+     "quote": "uang kartal yang diedarkan sebesar 15,1% (yoy)"}
+  ]
+}

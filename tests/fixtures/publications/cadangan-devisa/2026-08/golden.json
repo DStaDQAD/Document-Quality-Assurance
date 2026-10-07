@@ -1,0 +1,16 @@
+{
+  "publication": "cadangan-devisa",
+  "data_period": "2026-08",
+  "release": "Siaran Pers No.28/181/DKom, Cadangan Devisa Agustus 2026 (siaran_pers.pdf)",
+  "sheets": {
+    "TABEL5_9.xls": {"5.9": {"year": 2026, "period": "Aug"}}
+  },
+  "values": [
+    {"workbook": "TABEL5_9.xls", "sheet": "5.9", "label": "Total", "query": "posisi cadangan devisa",
+     "year": 2026, "period": "Aug", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 146.5,
+     "quote": "Posisi cadangan devisa Indonesia pada akhir Agustus 2026 tetap terjaga sebesar 146,5 miliar dolar AS"},
+    {"workbook": "TABEL5_9.xls", "sheet": "5.9", "label": "Total",
+     "year": 2026, "period": "Jul", "kind": "value", "scale": 0.001, "decimals": 1, "expected": 145.3,
+     "quote": "posisi akhir Juli 2026 sebesar 145,3 miliar dolar AS"}
+  ]
+}

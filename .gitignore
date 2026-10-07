@@ -58,3 +58,9 @@ n8n-logbook-magang.json
 
 # Presentation, claim-verification write-ups and screenshots: local working material only
 results/
+
+# BI publication samples sit next to their golden.json but are never committed
+tests/fixtures/publications/**/*.xls
+tests/fixtures/publications/**/*.xlsx
+tests/fixtures/publications/**/*.pdf
+tests/fixtures/publications/**/*.zip
