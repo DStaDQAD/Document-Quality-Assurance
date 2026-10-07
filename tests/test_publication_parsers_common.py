@@ -152,6 +152,38 @@ def test_monthly_sheet_skips_annual_columns_reads_sparse_years_and_ignores_the_m
     assert not any(year == 2013 for _, year, _ in table._data)  # annual column skipped
 
 
+def test_years_written_only_at_the_end_of_each_year_still_label_every_quarter():
+    # SEKI's NPI table merges the year over all of a year's columns for early years, but later
+    # writes it only on Q4 and on the annual column after it — and the last, partial year only
+    # on its latest quarter.
+    grid = [
+        [None, "KETERANGAN", 2021, 2021, 2021, 2021, 2021, None, None, None, 2022, 2022, None, 2023],
+        [None, "KETERANGAN", "Q1", "Q2", "Q3", "Q4", None, "Q1", "Q2", "Q3", "Q4", None, "Q1*", "Q2**"],
+        [None, "Transaksi Berjalan", 1.0, 2.0, 3.0, 4.0, 10.0, 5.0, 6.0, 7.0, 8.0, 26.0, 9.0, 10.0],
+    ]
+
+    table = parse_series_sheet(grid, SheetSpec(label_cols=(1,), unit="Juta USD"))
+
+    assert table.lookup("Transaksi Berjalan", 2021, "Q1") == 1.0
+    assert table.lookup("Transaksi Berjalan", 2022, "Q1") == 5.0
+    assert table.lookup("Transaksi Berjalan", 2022, "Q3") == 7.0
+    assert table.lookup("Transaksi Berjalan", 2023, "Q1") == 9.0
+    assert table.lookup("Transaksi Berjalan", 2023, "Q2") == 10.0
+    assert len(table._data) == 10  # the two annual columns are not quarters
+
+
+def test_a_year_missing_from_its_whole_run_follows_the_year_before():
+    grid = [
+        [None, None, 2025, 2025, None, None],
+        [None, None, "Nov", "Des", "Jan", "Feb*"],
+        [None, "Indeks", 1.0, 2.0, 3.0, 4.0],
+    ]
+
+    table = parse_series_sheet(grid, SheetSpec(label_cols=(1,), unit="Indeks"))
+
+    assert table.lookup("Indeks", 2026, "Feb") == 4.0
+
+
 def test_duplicate_labels_take_their_parents_from_the_indent_hierarchy():
     grid = [
         ["NERACA PEMBAYARAN", None, None, None],

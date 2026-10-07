@@ -245,32 +245,79 @@ def _header_rows(grid: List[List], spec: SheetSpec, first_col: int) -> List[int]
     return rows
 
 
+_PERIOD_ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
+                 "Dec", "Q1", "Q2", "Q3", "Q4"]
+
+
+def _year_runs(
+    head: List, below: List, band_row: List, first_col: int, width: int
+) -> List[List[Tuple[int, Optional[int], str, str]]]:
+    """Period columns grouped into runs of one year: [(column, written year, period, band)].
+
+    A run ends where the periods start over (Q4 → Q1, Dec → Jan), the band changes, or a
+    column is not a period at all (annual column, 'ITEMS', 'Perubahan (Poin)').
+    """
+    runs: List[List[Tuple[int, Optional[int], str, str]]] = []
+    run: List[Tuple[int, Optional[int], str, str]] = []
+    band = ""
+    for c in range(first_col, width):
+        if not _blank(_cell(band_row, c)):
+            band = clean_label(_cell(band_row, c))
+        written = _cell(head, c)
+        year = None if _blank(written) else parse_year(written)
+        period = parse_period(_cell(below, c))
+        if period is None or (not _blank(written) and year is None):
+            if run:
+                runs.append(run)
+                run = []
+            continue
+        if run and (
+            _PERIOD_ORDER.index(period) <= _PERIOD_ORDER.index(run[-1][2]) or band != run[-1][3]
+        ):
+            runs.append(run)
+            run = []
+        run.append((c, year, period, band))
+    if run:
+        runs.append(run)
+    return runs
+
+
 def _period_columns(
     grid: List[List], spec: SheetSpec, header_row: int, first_col: int
 ) -> Dict[int, Tuple[str, int, str]]:
-    """{column: (band, year, period)} for every monthly/quarterly column, leftmost copy only."""
+    """{column: (band, year, period)} for every monthly/quarterly column, leftmost copy only.
+
+    Two-row headers write a year's number once (on its first column, on its last — SEKI's NPI
+    marks Q4 — or merged over all of them), so each run of one year's periods takes the year
+    written anywhere inside it; a run with none follows the year before.
+    """
     head = grid[header_row]
     below = grid[header_row + 1] if spec.header == "two_rows" else []
     band_row = grid[header_row - 1] if spec.bands and header_row > 0 else []
+    width = max(len(head), len(below), len(band_row))
+    keyed: List[Tuple[int, Tuple[str, int, str]]] = []
+    if spec.header == "combined":
+        band = ""
+        for c in range(first_col, width):
+            if not _blank(_cell(band_row, c)):
+                band = clean_label(_cell(band_row, c))
+            parsed = parse_year_period(_cell(head, c))
+            if parsed is not None:
+                keyed.append((c, (band, parsed[0], parsed[1])))
+    else:
+        previous: Optional[int] = None
+        for run in _year_runs(head, below, band_row, first_col, width):
+            written = [year for _, year, _, _ in run if year is not None]
+            year = written[0] if written else (previous + 1 if previous is not None else None)
+            for c, own_year, period, band in run:
+                if own_year is not None:
+                    year = own_year  # several years written inside one run: each holds onward
+                if year is not None:
+                    keyed.append((c, (band, year, period)))
+            previous = year
     columns: Dict[int, Tuple[str, int, str]] = {}
     seen = set()
-    year: Optional[int] = None
-    band = ""
-    for c in range(first_col, max(len(head), len(below), len(band_row))):
-        if not _blank(_cell(band_row, c)):
-            band = clean_label(_cell(band_row, c))
-        if spec.header == "combined":
-            parsed = parse_year_period(_cell(head, c))
-            if parsed is None:
-                continue
-            col_year, period = parsed
-        else:
-            if not _blank(_cell(head, c)):
-                year = parse_year(_cell(head, c))  # non-year text ('ITEMS') ends the run
-            col_year, period = year, parse_period(_cell(below, c))
-            if col_year is None or period is None:
-                continue  # annual column, mirror heading, 'Perubahan' block
-        key = (band, col_year, period)
+    for c, key in keyed:
         if key in seen:
             continue  # the English mirror repeats periods already read: leftmost wins
         seen.add(key)
