@@ -1590,7 +1590,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # Coverage first (a tie goes to the source whose title and matched rows carry the claim's
     # words themselves), then label quality. Stable sort, so ties keep source order as before.
-    candidates.sort(key=lambda c: (-c.coverage, -c.direct_coverage, c.qualification, -c.score))
+    candidates.sort(key=_rank_key)
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
     # the user chose decide whenever they can answer at all. So is a chart — its labels are read
@@ -1620,6 +1620,20 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         if result.verdict != "Inconclusive":
             head_index = index
             break
+    # A FULL tie — same coverage, title wording, qualification and label quality — leaves the
+    # ranking with no basis at all, and upload order decided. SKDU names its sector rows the
+    # same in every sheet, so "Pengadaan Listrik tercatat stabil (80,54%)" (capacity, Tabel 2)
+    # was answered by Tabel 1's SBT row (0,57). Among fully tied sources the claim's own number
+    # is the evidence of which series the sentence means; any other tied value still shows up
+    # in the source comparison. A claim without a number (a trend) carries no such evidence.
+    head_cand, head_result = evaluated[head_index]
+    if head_result.verdict == "Refuted" and fact.claimed_value is not None:
+        for index, (cand, result) in enumerate(evaluated):
+            if (result.verdict == "Entailed" and _rank_key(cand) == _rank_key(head_cand)
+                    and (cand.src.origin in _FALLBACK_ORIGINS)
+                    == (head_cand.src.origin in _FALLBACK_ORIGINS)):
+                head_index = index
+                break
     # The loop above stops at the first looser match, and with the fallback group sorted last
     # that can be before any other PDF was looked at. When the own sources reached no verdict,
     # another PDF may still answer — held to the same bar: at least as close a label match as
@@ -1633,6 +1647,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 break
 
     return _attach_source_comparison(evaluated, head_index, displaced_source)
+
+
+def _rank_key(c: _Candidate) -> Tuple[float, float, int, float]:
+    """How _evaluate_fact orders candidate sources: coverage, title wording, qualification, label."""
+    return (-c.coverage, -c.direct_coverage, c.qualification, -round(c.score, 9))
 
 
 def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:

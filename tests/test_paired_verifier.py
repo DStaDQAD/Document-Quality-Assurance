@@ -528,6 +528,47 @@ def test_a_word_the_table_spells_with_another_prefix_counts_as_present():
     assert result.verdict == "Entailed"
 
 
+def _skdu_sheet(title, value, label="PENGADAAN LISTRIK"):
+    return _make_table(title=title, unit="%", data={(label, 2026, "Q2"): value})
+
+
+def _capacity_fact(label="PENGADAAN LISTRIK"):
+    return _make_fact(
+        periods=[_make_period(metric_label=label, month="Q2")], claimed_value=80.54, unit="persen",
+    )
+
+
+def test_a_full_tie_goes_to_the_source_whose_value_the_claim_states():
+    # SKDU E2E: "LU Pengadaan Listrik tercatat stabil (80,54%)" — capacity utilisation, Tabel 2 —
+    # was answered by Tabel 1's SBT row of the same name (0,57) because the three sheets tie on
+    # every ranking key and Tabel 1 was uploaded first.
+    sources = [
+        _make_source(_skdu_sheet("Tabel 1. Kegiatan Usaha", 0.57), sheet="T1"),
+        _make_source(_skdu_sheet("Tabel 2. Kapasitas Produksi Terpakai", 80.54), sheet="T2"),
+        _make_source(_skdu_sheet("Tabel 4. Penggunaan Tenaga Kerja", 0.01), sheet="T4"),
+    ]
+
+    result = _evaluate_fact(_capacity_fact(), sources)
+
+    assert result.verdict == "Entailed"
+    assert result.matched_excel_source == "TABEL1_1.xls / T2"
+
+
+def test_a_looser_match_that_happens_to_agree_does_not_take_over():
+    sources = [
+        _make_source(_skdu_sheet("Tabel 1. Kegiatan Usaha", 0.57), sheet="T1"),
+        _make_source(
+            _skdu_sheet("Tabel 2. Kapasitas Produksi Terpakai", 80.54, label="PENGADAAN LISTRIK DAN GAS"),
+            sheet="T2",
+        ),
+    ]
+
+    result = _evaluate_fact(_capacity_fact(), sources)
+
+    assert result.verdict == "Refuted"
+    assert result.matched_excel_source == "TABEL1_1.xls / T1"
+
+
 def test_a_tie_goes_to_the_source_whose_title_names_the_claim_not_one_with_a_lookalike_row():
     # SULNI E2E: "ULN pemerintah ... Jasa Kesehatan (22,0% dari total ULN pemerintah)" against
     # the private-debt sector table (uploaded first) and the government one. The private table
