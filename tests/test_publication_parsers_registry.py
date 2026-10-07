@@ -107,3 +107,10 @@ def test_survey_wrapper_rejects_a_table_that_is_not_a_time_series(mock_generic):
 
     with pytest.raises(PublicationParseError, match="deret waktu"):
         parse_for_publication("sk", b"bytes", "Tabel 1")
+
+
+@pytest.mark.parametrize("sheet, expected", [
+    ("Tabel 1", True), ("Tabel 4", True), ("Tabel 9", True), ("Tabel 10", False), ("Tabel1", False),
+])
+def test_spe_covers_its_nine_tables(sheet, expected):
+    assert covers("spe", sheet) is expected
