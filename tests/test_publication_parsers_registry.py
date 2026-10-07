@@ -114,3 +114,10 @@ def test_survey_wrapper_rejects_a_table_that_is_not_a_time_series(mock_generic):
 ])
 def test_spe_covers_its_nine_tables(sheet, expected):
     assert covers("spe", sheet) is expected
+
+
+@pytest.mark.parametrize("sheet, expected", [
+    ("Tabel1", True), ("Tabel 1", True), ("tabel4", True), ("Tabel 5 (disc)", True), ("Tabel6", False),
+])
+def test_sbank_covers_its_sheets_however_they_are_spaced(sheet, expected):
+    assert covers("sbank", sheet) is expected
