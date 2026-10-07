@@ -121,3 +121,10 @@ def test_spe_covers_its_nine_tables(sheet, expected):
 ])
 def test_sbank_covers_its_sheets_however_they_are_spaced(sheet, expected):
     assert covers("sbank", sheet) is expected
+
+
+@pytest.mark.parametrize("sheet, expected", [
+    ("TABEL 1", True), ("Tabel 2", True), ("TABEL 3", True), ("TABEL 4", False),
+])
+def test_shpr_covers_its_three_tables(sheet, expected):
+    assert covers("shpr", sheet) is expected
