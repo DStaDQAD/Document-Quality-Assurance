@@ -342,18 +342,42 @@ def _title_and_unit(rows: List[List]) -> Tuple[str, str]:
     return title, unit
 
 
+_AGGREGATE_LABELS = frozenset({"total", "jumlah"})
+
+
+def _first_label_col(spec: SheetSpec, row: List) -> int:
+    return next(i for i, c in enumerate(spec.label_cols) if not _blank(_cell(row, c)))
+
+
+def _own_numbering(raw: List, own: int) -> int:
+    """Depth of the row's own number ('2.1.1.'), in its label cell or a numbering-only cell
+    just before it; 0 for unnumbered rows and 'a.' / '-' items."""
+    depth = numbering_depth(raw[own])
+    if not depth and own > 0 and not clean_label(raw[own - 1]):
+        depth = numbering_depth(raw[own - 1])
+    return depth
+
+
 def _depth(spec: SheetSpec, r: int, row: List, raw: List, own: int, has_data: bool,
-           indents: Optional[Dict[int, int]]) -> int:
+           indents: Optional[Dict[int, int]],
+           last_numbered: Optional[Tuple[int, int]] = None) -> int:
     if spec.hierarchy == "indent":
         return (indents or {}).get(r, 0)
-    first_col = next(i for i, c in enumerate(spec.label_cols) if not _blank(_cell(row, c)))
+    first_col = _first_label_col(spec, row)
     if spec.hierarchy == "numbering":
-        # '2.1.1.' says its own depth; 'a.' / '-' items and unnumbered rows nest by the
-        # column they start in, one level below a '1.' that starts in the same column.
-        depth = numbering_depth(raw[own])
-        if not depth and own > 0 and not clean_label(raw[own - 1]):
-            depth = numbering_depth(raw[own - 1])
-        return depth or first_col + 1
+        # '2.1.1.' says its own depth. An 'a.' / '-' item or an unnumbered row sits one level
+        # below the last numbered row of its group, deeper still by how many columns further
+        # right it starts (SULNI Tbl II.6: '-  Bilateral' under '1.1', '     ODA' under it).
+        # A TOTAL row closes the group.
+        depth = _own_numbering(raw, own)
+        if depth:
+            return depth
+        if clean_label(raw[own]).lower() in _AGGREGATE_LABELS:
+            return 0
+        if last_numbered is not None:
+            numbered_depth, numbered_col = last_numbered
+            return numbered_depth + 1 + max(first_col - numbered_col, 0)
+        return first_col + 1
     if spec.hierarchy == "first_col":
         return first_col
     if spec.hierarchy == "sections":
@@ -397,9 +421,10 @@ def parse_series_sheet(
     columns: Dict[int, Tuple[str, int, str]] = {}
     stack: List[Tuple[int, str]] = []
     group: Optional[Tuple[str, ...]] = None
+    last_numbered: Optional[Tuple[int, int]] = None  # (depth, first label column)
     for r in range(header_rows[0], len(grid)):
         if r in blocks:
-            columns, stack, group = blocks[r], [], None
+            columns, stack, group, last_numbered = blocks[r], [], None, None
         if r in header_like:
             continue
         row = grid[r]
@@ -422,9 +447,11 @@ def parse_series_sheet(
             value = _number(_cell(row, c))
             if value is not None:
                 by_band.setdefault(band, {})[(year, period)] = value
-        depth = _depth(spec, r, row, raw, own, bool(by_band), indents)
         if ancestors != group:
-            stack, group = [], ancestors
+            stack, group, last_numbered = [], ancestors, None
+        depth = _depth(spec, r, row, raw, own, bool(by_band), indents, last_numbered)
+        if spec.hierarchy == "numbering" and _own_numbering(raw, own):
+            last_numbered = (depth, _first_label_col(spec, row))
         while stack and stack[-1][0] >= depth:
             stack.pop()
         path = list(ancestors) + [label for _, label in stack] + [texts[own]]
@@ -437,7 +464,9 @@ def parse_series_sheet(
     table = TableData(title=title, unit=spec.unit or unit, row_labels=[])
     for name, (_, values) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
         if name in table.row_labels:
-            continue  # identical path twice in one sheet: first occurrence wins
+            # Two rows the hierarchy could not tell apart. Keeping the first would answer the
+            # second's claims with the first's figures, silently — the generic cascade instead.
+            raise PublicationParseError(f"label baris berulang tanpa induk pembeda: '{name}'")
         table.row_labels.append(name)
         for (year, period), value in values.items():
             table._data[(name, year, period)] = value

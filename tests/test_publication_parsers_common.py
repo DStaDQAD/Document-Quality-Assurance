@@ -259,6 +259,63 @@ def test_letter_and_dash_items_nest_by_the_column_they_start_in():
     ]
 
 
+def test_dash_items_sit_under_the_numbered_row_above_them_in_the_same_column():
+    # SULNI Tbl II.6: '-' items share the label column with '1.1'/'1.2', and their own
+    # breakdowns ('     ODA') start one column further right.
+    grid = [
+        [None, None, None, 2026],
+        [None, None, None, "Jul"],
+        [None, "1.  Pemerintah / Government", "1.  Pemerintah / Government", 10.0],
+        [None, "1.1   Kreditor Pemerintah", "1.1   Kreditor Pemerintah", 6.0],
+        [None, "-", "Bilateral", 2.0],
+        [None, None, "     ODA", 1.0],
+        [None, "-", "Multilateral", 4.0],
+        [None, "1.2   Kreditor Swasta", "1.2   Kreditor Swasta", 4.0],
+        [None, "-", "Bank Komersial", 4.0],
+        [None, "2.  Bank Sentral", "2.  Bank Sentral", 5.0],
+        [None, "2.1   Kreditor Pemerintah", "2.1   Kreditor Pemerintah", 1.0],
+        [None, "-", "Bilateral", 0.5],
+        [None, "2.2   Kreditor Swasta", "2.2   Kreditor Swasta", 4.0],
+        [None, "-", "Bank Komersial", 3.0],
+        [None, None, "TOTAL (1+2)", 15.0],
+    ]
+
+    table = parse_series_sheet(
+        grid, SheetSpec(label_cols=(1, 2), hierarchy="numbering", unit="Juta USD")
+    )
+
+    assert table.row_labels == [
+        "Pemerintah",
+        "Pemerintah > Kreditor Pemerintah",
+        "Pemerintah > Kreditor Pemerintah > Bilateral",
+        "ODA",
+        "Multilateral",
+        "Pemerintah > Kreditor Swasta",
+        "Pemerintah > Kreditor Swasta > Bank Komersial",
+        "Bank Sentral",
+        "Bank Sentral > Kreditor Pemerintah",
+        "Bank Sentral > Kreditor Pemerintah > Bilateral",
+        "Bank Sentral > Kreditor Swasta",
+        "Bank Sentral > Kreditor Swasta > Bank Komersial",
+        "TOTAL",
+    ]
+    assert table.lookup("Bank Sentral > Kreditor Swasta > Bank Komersial", 2026, "Jul") == 3.0
+
+
+def test_two_rows_that_end_up_with_the_same_name_reject_the_sheet():
+    # Keeping only the first would answer the second row's claims with the first row's figures,
+    # silently; rejecting the sheet sends it to the generic cascade instead.
+    grid = [
+        [None, None, 2026],
+        [None, None, "Jul"],
+        [None, "Bank", 1.0],
+        [None, "Bank", 2.0],
+    ]
+
+    with pytest.raises(PublicationParseError, match="berulang"):
+        parse_series_sheet(grid, SheetSpec(label_cols=(1,), unit="%"))
+
+
 def test_section_rows_head_their_block_and_bands_split_the_columns():
     grid = [
         [None, None, None, None, "TRIWULANAN (QTQ)", None, "TAHUNAN (YOY)", None],
