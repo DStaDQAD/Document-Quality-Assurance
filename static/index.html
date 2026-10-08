@@ -819,6 +819,10 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .paired-container.has-results .upload-row {
   gap: 8px;
 }
+/* The 340px form column cannot fit the name field beside the buttons: give it its own row. */
+.paired-container.has-results .card-footer { flex-wrap: wrap; padding: 13px 16px; }
+.paired-container.has-results .checker-field { flex: 1 0 100%; margin-right: 0; box-sizing: border-box; }
+.paired-container.has-results .checker-field input { width: auto; flex: 1; min-width: 0; }
 .paired-container.has-results .upload-row.has-three { grid-template-columns: 1fr 1fr; }
 .paired-container.has-results .upload-row.has-three #excel-upload-field { grid-column: 1 / -1; }
 .paired-container.has-results .paired-form-area {
@@ -1203,7 +1207,11 @@ body.auth-locked .app {
   }
 
   document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
-    item.addEventListener("click", () => showTab(item.dataset.tab));
+    item.addEventListener("click", () => {
+      // A running check keeps its form and progress; otherwise Verifikasi starts afresh.
+      if (item.dataset.tab === "paired" && !pairedRunActive) resetPairedForm();
+      showTab(item.dataset.tab);
+    });
   });
 
   function escapeHtml(str) {
@@ -1528,13 +1536,13 @@ body.auth-locked .app {
         <input type="file" id="inp-${uid}" accept="application/pdf,.pdf,.docx,${WORD_MIME}" style="display:none">
       </div>`;
     const inp = container.querySelector(`#inp-${uid}`);
-    attachDropzoneBehavior(container.querySelector(`#dz-${uid}`), inp, container.querySelector(`#fn-${uid}`), {
+    const assign = attachDropzoneBehavior(container.querySelector(`#dz-${uid}`), inp, container.querySelector(`#fn-${uid}`), {
       placeholder: "Pilih file PDF atau Word (.docx)",
       accepts: isReportFile,
       rejectText: "Satu file PDF atau Word saja; file lain diabaikan",
       onFile: () => syncRules(),
     });
-    return { container, inp, role };
+    return { container, inp, role, assign };
   }
   const pressSlot  = makeReportSlot("press-source-container", "Siaran Pers");
   const reportSlot = makeReportSlot("publication-report-container", "Laporan");
@@ -1554,6 +1562,23 @@ body.auth-locked .app {
     syncRules();
   }
   publicationSelect.addEventListener("change", applyPublication);
+
+  // Back to the empty form, as on first load: no files, no publication, no result. The
+  // Verifikasi nav item calls this, so a result opened from Riwayat does not stay in the way.
+  // The checker's name is kept on purpose.
+  function resetPairedForm() {
+    pressSlot.assign(null);
+    reportSlot.assign(null);
+    excelSources.slice(1).forEach((s) => s.container.remove());
+    excelSources = excelSources.slice(0, 1);
+    excelSources[0].assign(null);
+    publicationSelect.value = "";
+    applyPublication();
+    document.getElementById("paired-result").replaceChildren();
+    document.getElementById("paired-container").classList.remove("has-results");
+    document.getElementById("panel-paired").classList.remove("has-results");
+    if (/^#riwayat\//i.test(window.location.hash)) clearHistoryHash();
+  }
 
   // A drop that misses a dropzone would make the browser open the file in place of the app,
   // throwing away every pick made so far. Outside a dropzone, show "not allowed" instead.
