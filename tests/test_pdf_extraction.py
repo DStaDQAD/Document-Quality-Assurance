@@ -319,3 +319,39 @@ def test_extract_narrative_text_passes_the_gap_callback_to_vision(mock_text, moc
     asyncio.run(extract_narrative_text(b"pdf", Mock(), on_vision_gap=on_gap))
 
     assert mock_vision.call_args.kwargs["on_batch_failed"] is on_gap
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_pages_holding_only_a_page_number_count_as_blank(mock_extract_text, mock_vision, mock_count_pages):
+    # PMI reports are page images: pages 1-6 yield a page number or a stray label (1-13 chars)
+    # and only the last page has a real text layer, so "most pages are blank" never fired.
+    stray = "".join(f"[== Halaman {i} ==]\n{i}\n\n" for i in range(1, 7))
+    mock_extract_text.return_value = stray + "[== Halaman 7 ==]\n" + "Metodologi survei. " * 20
+    mock_count_pages.return_value = 7
+    mock_vision.return_value = "[== Halaman 1 ==]\nPMI-BI triwulan I 2026 sebesar 52,03%."
+
+    vision_llm = Mock()
+    result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=vision_llm))
+
+    mock_vision.assert_called_once()
+    assert result == mock_vision.return_value
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_a_text_layer_that_is_all_table_rows_falls_back_to_vision(mock_extract_text, mock_vision, mock_count_pages):
+    # The one text page of a PMI report is its data table; once the table rows are stripped
+    # nothing of the narrative is left to check.
+    rows = "\n".join(f"Komponen {n} 51,49 57,50 53,04 55,12 49,10 56,34 54,20" for n in range(12))
+    mock_extract_text.return_value = "[== Halaman 1 ==]\n" + rows
+    mock_count_pages.return_value = 1
+    mock_vision.return_value = "[== Halaman 1 ==]\nPMI-BI triwulan I 2026 sebesar 52,03%."
+
+    vision_llm = Mock()
+    result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=vision_llm))
+
+    mock_vision.assert_called_once()
+    assert result == mock_vision.return_value

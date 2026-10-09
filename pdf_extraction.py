@@ -49,6 +49,10 @@ class VisionExtractionFailedError(RuntimeError):
 # Text-layer result shorter than this is treated as "extraction failed" and triggers the vision fallback.
 MIN_USEFUL_CHARS = 200
 
+# A page whose text layer is shorter than this (a page number, a stray chart label) counts as
+# blank when deciding whether most of a document's pages need the vision fallback.
+MIN_PAGE_CHARS = 40
+
 # How many PDF pages to send per vision LLM call. Batching cuts the number of requests, which
 # is what matters when the provider throttles by requests-per-minute rather than by tokens:
 # Gemini's free tier caps gemini-2.5-flash at ~5 requests/minute, so 10 per-page calls need
@@ -723,12 +727,21 @@ async def extract_narrative_text(
     # image/chart pages - only checked when the char count alone looks fine, so fake/short
     # bytes in the too-short branch never reach a second real PDF parse.
     mostly_blank_pages = False
+    prose = ""
     if not too_short:
-        pages_with_text = len(PAGE_MARKER_RE.findall(text))
+        # A page that yields only its page number or a stray label is as blank as one that
+        # yields nothing: PMI's image pages give 1-13 characters each.
+        page_bodies = PAGE_MARKER_RE.split(text)[2::2]  # split also yields each marker's number
+        pages_with_text = sum(1 for body in page_bodies if len(body.strip()) >= MIN_PAGE_CHARS)
         total_pages = _count_total_pages(file_bytes)
         mostly_blank_pages = total_pages > 0 and pages_with_text / total_pages < 0.5
+        prose = _strip_tabular_content(text)
+    # A text layer that is nothing but table rows leaves no narrative once they are stripped.
+    tables_only = not too_short and not mostly_blank_pages and (
+        len(PAGE_MARKER_RE.sub('', prose).strip()) < MIN_USEFUL_CHARS
+    )
 
-    if too_short or mostly_blank_pages:
+    if too_short or mostly_blank_pages or tables_only:
         if vision_llm is None:
             logger.warning(
                 "PDF content too short or mostly blank pages (%d chars excl. markers) and no "
@@ -748,5 +761,5 @@ async def extract_narrative_text(
         # Statistical-table rows still leak into the text layer; strip them so the typo checker
         # and structured extractor only see prose. The vision path already runs this per-page
         # (see extract_text_from_pdf_vision_async); the text-layer path needs it too.
-        text = _strip_tabular_content(text)
+        text = prose
     return text
