@@ -2749,3 +2749,85 @@ def test_a_noun_before_the_deficit_also_says_which_way_its_size_moved(quote, old
         result = _deficit_trend_case(quote, operation, older, newer, label="Jasa")
 
         assert result.verdict == "Entailed", (quote, operation)
+
+
+@pytest.mark.parametrize("quote, claimed", [
+    # the earlier quarter's figure, a few words away from 'kewajiban neto'
+    ("posisi investasi portofolio mencatat kewajiban neto sebesar 229,6 miliar dolar AS, lebih "
+     "rendah dibandingkan dengan 237,7 miliar dolar AS pada akhir triwulan I 2026", 237.7),
+    ("derivatif finansial mencatat kewajiban neto 1,4 miliar dolar AS, lebih tinggi dari "
+     "kewajiban neto pada triwulan I 2026 sebesar 0,6 miliar dolar AS", 0.6),
+])
+def test_a_net_figure_further_along_the_sentence_is_still_a_net_figure(quote, claimed):
+    result = _net_claim_case("Kewajiban Investasi Portofolio", quote, claimed)
+
+    assert result.verdict == "Inconclusive"
+
+
+def test_a_gross_figure_after_a_net_one_is_judged_as_gross():
+    # The KFLN figure names its own (gross) side; the net position earlier in the sentence does
+    # not carry over to it.
+    result = _net_claim_case(
+        "Kewajiban Investasi Portofolio",
+        "kewajiban neto menurun, bersumber dari penurunan posisi KFLN investasi portofolio menjadi 389,7 miliar dolar AS",
+        389.7,
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_net_figure_is_not_answered_by_a_top_level_side_row():
+    table = _make_table(
+        title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+        data={("Aset Lainnya", 2026, "Q2"): 28.42},
+    )
+    fact = _make_fact(
+        claimed_value=9.9, unit="miliar USD",
+        context_quote="instrumen lainnya mencatatkan aset neto sebesar 9,9 miliar dolar AS",
+        periods=[_make_period(metric_label="aset neto instrumen lainnya", month="Q2")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"
+
+
+def test_a_change_in_net_liabilities_is_measured_on_their_size():
+    # "Kewajiban neto PII ... menurun sebesar 25,6": the net position goes -223,0 -> -197,4.
+    table = _make_table(
+        title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+        data={("Posisi Investasi Internasional, bersih", 2026, "Q1"): -223.0489,
+              ("Posisi Investasi Internasional, bersih", 2026, "Q2"): -197.431},
+    )
+    label = "Posisi Investasi Internasional, bersih"
+    fact = _make_fact(
+        operation="diff", claimed_value=-25.6, unit="miliar USD",
+        context_quote="Kewajiban neto PII pada akhir triwulan II 2026 tersebut menurun sebesar 25,6 miliar dolar AS",
+        periods=[_make_period(metric_label=label, month="Q1"), _make_period(metric_label=label, month="Q2")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
+def test_pointer_pass_does_not_point_a_net_figure_at_a_gross_cell():
+    # PII e2e: "investasi portofolio mengalami kewajiban neto tertinggi sebesar 229,6" fell to the
+    # pointer, which read the gross liability cell (273,1). The sheet has no net cell per
+    # component, so there is nothing a pointer could correctly point at.
+    grid = [["Komponen", "Q2 2026"], ["Investasi Portofolio", 273.1], ["Lain", 1.0]]
+    src = _pointer_only_source(grid)
+    fact = _make_fact(
+        claimed_value=229.6, unit="miliar USD",
+        context_quote="Komponen investasi portofolio mengalami kewajiban neto tertinggi sebesar 229,6 miliar dolar AS",
+        periods=[_make_period(metric_label="Investasi Portofolio", month="Q2")],
+    )
+    results = [_evaluate_fact(fact, [src])]
+    batch = _MultiSourcePointers(pointers=[
+        _MultiCellPointer(source_index=0, query_index=0, found=True, row=1, col=1)
+    ])
+
+    new, n = asyncio.run(_pointer_pass([fact], results, [src], _pointer_llm(batch)))
+
+    assert n == 0
+    assert new[0].verdict == "Inconclusive"

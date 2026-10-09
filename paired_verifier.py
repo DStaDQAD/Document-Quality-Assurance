@@ -654,11 +654,34 @@ def _breakdown_the_table_lacks(
 
 
 # "kewajiban neto sebesar 229,6", "aset neto 37,0": the number that follows is a NET position.
-_NET_NUMBER = re.compile(
-    r"\b(kewajiban|aset)\s+(neto|bersih)\s+(?:sebesar\s+|tertinggi\s+sebesar\s+)?(\d[\d.,]*)",
-    re.IGNORECASE,
-)
+_NET_POSITION = re.compile(r"\b(kewajiban|aset)\s+(neto|bersih)\b", re.IGNORECASE)
+# A gross side named after the net position takes the figures that follow it.
+_GROSS_SIDE = re.compile(r"\b(KFLN|AFLN|finansial\s+luar\s+negeri|bruto)\b", re.IGNORECASE)
+_QUOTE_NUMBER = re.compile(r"\d[\d.]*(?:,\d+)?")
 _BALANCE_SIDES = ("aset", "kewajiban", "afln", "kfln")
+
+
+def _is_a_net_figure(fact: ExtractedFact) -> bool:
+    """True when the sentence presents the claimed number as a net position.
+
+    The number counts as net when, within its sentence, the nearest earlier mention of a side
+    is 'kewajiban/aset neto' ("kewajiban neto sebesar 229,6 …, lebih rendah dibandingkan dengan
+    237,7"), not a gross one ("… dari penurunan posisi KFLN … menjadi 389,7").
+    """
+    if fact.claimed_value is None:
+        return False
+    quote = fact.context_quote or ""
+    for m in _QUOTE_NUMBER.finditer(quote):
+        try:
+            if abs(_id_number(m.group(0).rstrip(".")) - abs(fact.claimed_value)) > 1e-9:
+                continue
+        except ValueError:
+            continue
+        before = re.split(r"[.;]\s", quote[:m.start()])[-1]
+        nets = list(_NET_POSITION.finditer(before))
+        if nets and not _GROSS_SIDE.search(before[nets[-1].end():]):
+            return True
+    return False
 
 
 def _gross_row_for_a_net_number(fact: ExtractedFact, resolved: List[Tuple[str, float]]) -> Optional[str]:
@@ -666,21 +689,14 @@ def _gross_row_for_a_net_number(fact: ExtractedFact, resolved: List[Tuple[str, f
 
     PII prints "investasi portofolio mencatat kewajiban neto sebesar 229,6" for each component,
     while SEKI V.39 holds only 'Aset > Investasi Portofolio' and 'Kewajiban > Investasi
-    Portofolio'. The claim's 'kewajiban' matched the liability row (389,7) and was reported Tidak
-    Sesuai. Applies only when the sentence ties THIS claimed number to 'kewajiban/aset neto', so
-    a gross KFLN claim in a sentence that mentions a net position elsewhere still matches.
+    Portofolio' (and a top-level 'Aset Lainnya'). The claim's 'kewajiban' matched the liability
+    row (389,7) and was reported Tidak Sesuai. See _is_a_net_figure for which numbers count.
     """
-    if fact.claimed_value is None:
-        return None
-    tied = any(
-        abs(_id_number(m.group(3).rstrip(".,")) - abs(fact.claimed_value)) < 1e-9
-        for m in _NET_NUMBER.finditer(fact.context_quote or "")
-    )
-    if not tied:
+    if not _is_a_net_figure(fact):
         return None
     for label, _ in resolved:
-        side = label.split(">")[0].strip().lower()
-        if side in _BALANCE_SIDES:
+        words = label.split(">")[0].strip().lower().split()
+        if words and words[0] in _BALANCE_SIDES:
             return label
     return None
 
@@ -1328,6 +1344,26 @@ def _compute_operation(
             recovered = _reinterpret_diff_as_value(fact, resolved, converted, computed, src)
             if recovered is not None:
                 return recovered
+            quote = fact.context_quote or ""
+            if all(v < 0 for v in converted) and (
+                _DEFICIT_TREND.search(quote) or _DEFICIT_TREND_NOUN_FIRST.search(quote)
+            ):
+                # "Kewajiban neto PII ... menurun sebesar 25,6" on -223,0 -> -197,4: the change
+                # the report states is in the size of the net liabilities, not in the balance.
+                size_change = round(converted[0] - converted[-1], 4)
+                size_delta, size_verdict = _numeric_verdict(fact.claimed_value, size_change)
+                if size_verdict == "Entailed":
+                    return _make_result(
+                        fact, periods, matched_source, fact.claimed_value, fact.unit, size_change,
+                        fact.unit, size_delta, "Entailed",
+                        reasoning=(
+                            f"PDF: perubahan = {fact.claimed_value} {fact.unit} | "
+                            f"Excel [{matched_source}]: besarnya {round(-converted[0], 4)} → "
+                            f"{round(-converted[-1], 4)} = {size_change} {fact.unit} "
+                            f"(dinilai pada besarnya defisit/kewajiban neto) | "
+                            f"Δ = {size_delta} → within tolerance {MATCH_TOLERANCE}"
+                        ),
+                    )
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
@@ -2291,9 +2327,12 @@ async def _pointer_pass(
     A wrong pointer is therefore visible (cell refs are appended to reasoning and
     resolved_via='pointer' is set) but can never invent data.
     """
+    # A net position per component ("kewajiban neto sebesar 229,6") has no cell of its own in
+    # SEKI V.39; a pointer can only land on a gross side (see _gross_row_for_a_net_number).
     candidate_idx = [
         i for i, r in enumerate(results)
         if r.verdict == "Inconclusive" and r.matched_excel_source is None
+        and not _is_a_net_figure(facts[i])
     ]
     grid_sources = [s for s in sources if s.grid]
     if not candidate_idx or not grid_sources:
