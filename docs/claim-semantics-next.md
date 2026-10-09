@@ -1,4 +1,4 @@
-# Perbaikan semantik klaim — rencana berikutnya (belum disetujui)
+# Perbaikan semantik klaim — usulan A–H (dikerjakan 2026-10-09)
 
 Disusun 2026-10-08. Lanjutan dari `docs/publication-parsers-e2e.md` (bagian "Perbaikan lanjutan").
 
@@ -43,3 +43,32 @@ kalimat asli).
   `APP_USERNAME=""` dan `HISTORY_DATABASE_URL=""` di-set di Python, dan
   `check_history.LOCAL_DB_PATH` diarahkan ke folder sementara.
 - Commit tanpa trailer `Co-Authored-By`; merge/push hanya bila pengguna minta.
+
+
+## Hasil (2026-10-09, branch `fix-claim-semantics-2`, belum di-merge)
+
+A–H dikerjakan (H = kolom sisa template di Excel PMI Tw IV-2025 T2), ditambah perbaikan yang
+ditemukan saat uji Gemini: arah tren defisit diambil dari kata kerjanya (LLM kadang menulis
+`is_decreasing`, kadang `is_increasing` untuk "defisit melebar"), bentuk kata benda
+("peningkatan defisit …"), aturan tanda defisit untuk `sum` dan `diff`, baris (% PDB) metrik lain
+bukan penyebut, posisi neto di kalimat yang sama ("… dibandingkan dengan 237,7"), dan pointer
+tidak ditanya tentang posisi neto. Suite 1354 hijau, eval Layer-1 dan ejaan 100%.
+
+| Publikasi | Tidak Sesuai sebelum | sesudah | Catatan |
+|---|---|---|---|
+| NPI | 34 (baseline jalur tabel, run yang sama) | 22 | Sesuai 38 → 54 |
+| PII | 13 → 8 (gelombang lalu) | 2 | |
+| SKDU | 29 | 18 | harga jual/investasi/inflasi hilang |
+| PMI | 0 klaim terbaca | 53 klaim, 38 Sesuai, 6 Tidak Sesuai | lihat temuan 2 |
+
+### Temuan baru (belum diusulkan perbaikannya)
+
+1. **Pointer menunjuk sel total untuk rincian yang tidak ada di tabel.** NPI: "impor minyak",
+   "ekspor LNG", "impor gas" ditunjuk ke sel Migas/Barang total. Jumlahnya berubah-ubah antar run
+   (baseline 11 vonis pointer, run lain 47, run lain 2) — ini variasi LLM di pass pointer.
+2. **Visi salah baca digit di PMI.** Laporan menulis "49,32%" dan "53,20%"; visi membaca 49,22
+   dan 52,2, sehingga Tidak Sesuai palsu. Kandidat: render resolusi lebih tinggi, atau angka yang
+   juga ada di lapisan teks diambil dari sana.
+3. **Pertumbuhan baris debit (impor, negatif di SEKI V.1)** dihitung dengan tanda terbalik
+   (−20,3% padahal impor naik 20,3%).
+4. **SKDU:** angka SBT sub-LU masih jatuh ke baris LU induk; kapasitas produksi ke T1.
