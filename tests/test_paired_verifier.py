@@ -2626,3 +2626,45 @@ def test_a_gross_liability_claim_still_matches_the_liability_row():
     )
 
     assert result.verdict == "Entailed"
+
+
+_TRADE = "PERDAGANGAN BESAR DAN ECERAN, DAN REPARASI MOBIL DAN MOTOR"
+
+
+def _skdu_t1_case(metric_label, claimed):
+    table = _make_table(
+        title="Tabel 1. Kegiatan Usaha  / Table 1. Business Activity",
+        unit="% Saldo Bersih Tertimbang - SBT",
+        data={(_TRADE, 2026, "Q2"): 1.2, ("INDUSTRI PENGOLAHAN", 2026, "Q2"): 0.77},
+    )
+    fact = _make_fact(
+        claimed_value=claimed, unit="persen", context_quote=f"{metric_label} sebesar {claimed}%",
+        periods=[_make_period(metric_label=metric_label, month="Q2")],
+    )
+    return _evaluate_fact(fact, [_make_source(table, filename="SKDU.xlsx", sheet="T1 Kegiatan Usaha")])
+
+
+@pytest.mark.parametrize("metric_label", [
+    "SBT harga jual Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor",
+    "SBT Investasi Industri Pengolahan",
+    "prakiraan tingkat inflasi Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor",
+])
+def test_a_topic_word_before_the_sector_that_the_table_lacks_keeps_the_claim_off_it(metric_label):
+    # SKDU: claims about Tabel 5-7 (harga jual, inflasi, investasi), not uploaded in the run,
+    # fell to the same sector's row in Tabel 1 Kegiatan Usaha and were reported Tidak Sesuai.
+    result = _skdu_t1_case(metric_label, 5.8)
+
+    assert result.verdict == "Inconclusive"
+    assert result.matched_excel_source is None
+
+
+@pytest.mark.parametrize("metric_label, claimed", [
+    ("SBT kegiatan usaha Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor", 1.2),
+    ("LU Industri Pengolahan", 0.77),
+    ("prakiraan SBT kegiatan usaha sub-LU Industri Pengolahan", 0.77),
+    ("kinerja LU Industri Pengolahan", 0.77),
+])
+def test_generic_words_before_the_sector_still_reach_the_row(metric_label, claimed):
+    result = _skdu_t1_case(metric_label, claimed)
+
+    assert result.verdict == "Entailed"

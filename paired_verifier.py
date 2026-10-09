@@ -607,6 +607,16 @@ def _claimed_rate_kind(fact: ExtractedFact) -> Optional[str]:
     return kinds.pop() if len(kinds) == 1 else None
 
 
+# Words a report puts in front of a series name without changing which series it is: "LU
+# Industri Pengolahan", "kinerja sub-LU …", "prakiraan SBT …", "nilai ekspor …". A front word
+# outside this list names a topic ("SBT harga jual …", "SBT investasi …") and must be in the table.
+_GENERIC_LEADING_WORDS = frozenset({
+    "lu", "sub", "sektor", "subsektor", "lapangan", "kinerja", "tingkat", "level", "nilai", "angka",
+    "laju", "realisasi", "prakiraan", "perkiraan", "ekspektasi", "kondisi", "perkembangan",
+    "aktivitas", "kelompok", "komponen", "golongan", "kategori", "indikator", "rata",
+})
+
+
 def _breakdown_the_table_lacks(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], src: "_ExcelSource"
 ) -> List[str]:
@@ -620,8 +630,9 @@ def _breakdown_the_table_lacks(
     rewords it ('Uang Beredar Luas (M2)' for a row 'Uang Beredar (M2)').
     """
     narrowing: List[str] = []
+    unit_words = {t.lower() for t in re.findall(r"\w+", src.table.unit or "")}
     for point, (label, _) in zip(fact.periods, resolved):
-        absent = src.table.words_absent(point.metric_label)
+        absent = src.table.words_absent(point.metric_label) - unit_words
         if not absent:
             continue
         claim_tokens = [t.lower() for t in re.findall(r"\w+", point.metric_label)]
@@ -630,9 +641,12 @@ def _breakdown_the_table_lacks(
             i for i, t in enumerate(claim_tokens)
             if any(_same_root(t, r) for r in row_tokens)
         ]
+        first = covered[0] if covered else len(claim_tokens)
         last = covered[-1] if covered else -1
         narrowing += [
-            t for i, t in enumerate(claim_tokens) if i > last and t in absent and t not in narrowing
+            t for i, t in enumerate(claim_tokens)
+            if t in absent and t not in narrowing
+            and (i > last or (i < first and t not in _GENERIC_LEADING_WORDS))
         ]
     return narrowing
 
