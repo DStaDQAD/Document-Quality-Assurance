@@ -2484,14 +2484,17 @@ def test_an_aggregate_parent_is_not_a_qualification_when_ranking_sources():
     assert result.computed_value == 17.0
 
 
-def _deficit_trend_case(quote, operation, older, newer, label="Transaksi Berjalan"):
+def _deficit_trend_case(quote, operation, older, newer, label="Transaksi Berjalan", claim_label=None):
     table = _make_table(
         title="Neraca Pembayaran Indonesia", unit="juta USD",
         data={(label, 2026, "Q1"): older, (label, 2026, "Q2"): newer},
     )
     fact = _make_fact(
         operation=operation, claimed_value=None, unit=None, context_quote=quote,
-        periods=[_make_period(metric_label=label, month="Q1"), _make_period(metric_label=label, month="Q2")],
+        periods=[
+            _make_period(metric_label=claim_label or label, month="Q1"),
+            _make_period(metric_label=claim_label or label, month="Q2"),
+        ],
     )
     return _evaluate_fact(fact, [_make_source(table)])
 
@@ -2668,3 +2671,69 @@ def test_generic_words_before_the_sector_still_reach_the_row(metric_label, claim
     result = _skdu_t1_case(metric_label, claimed)
 
     assert result.verdict == "Entailed"
+
+
+def test_a_widening_deficit_holds_whichever_way_the_extractor_read_the_verb():
+    # NPI e2e: "defisit neraca transaksi berjalan (TB) melebar" came back as is_decreasing (the
+    # balance falls) in one run and is_increasing (the deficit grows) in another. The verb
+    # decides: -3576 -> -12487 is a wider deficit either way.
+    for operation in ("is_decreasing", "is_increasing"):
+        result = _deficit_trend_case(
+            "defisit neraca transaksi berjalan (TB) melebar terutama dipengaruhi perekonomian global",
+            operation, -3576.01, -12487.42,
+        )
+
+        assert result.verdict == "Entailed", operation
+
+
+def test_a_deficit_word_before_the_account_does_not_keep_the_claim_off_its_row():
+    # "Defisit neraca perdagangan migas meningkat": 'defisit' and 'neraca' name the sign and the
+    # kind of account, not a different series.
+    result = _deficit_trend_case(
+        "Defisit neraca perdagangan migas meningkat akibat kenaikan impor minyak",
+        "is_increasing", -1.2, -5.1, label="Migas", claim_label="Defisit neraca migas",
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_two_account_sum_printed_as_a_deficit_matches_its_negative_total():
+    # "transaksi modal dan finansial ... setelah pada triwulan I 2026 mengalami defisit sebesar
+    # 4,8 miliar dolar AS": the two rows add up to -4,76.
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="miliar USD",
+        data={("Transaksi Modal", 2026, "Q1"): 0.0043, ("Transaksi Finansial", 2026, "Q1"): -4.7654},
+    )
+    fact = _make_fact(
+        operation="sum", claimed_value=4.8, unit="miliar USD",
+        context_quote="transaksi modal dan finansial ... setelah pada triwulan I 2026 mengalami defisit sebesar 4,8 miliar dolar AS",
+        periods=[
+            _make_period(metric_label="Transaksi Modal", month="Q1"),
+            _make_period(metric_label="Transaksi Finansial", month="Q1"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+
+
+def test_another_accounts_share_of_gdp_is_not_a_denominator():
+    # "TMF ... 12,0 miliar dolar AS (3,2% dari PDB)": SEKI V.1 has a (% PDB) row only for the
+    # current account. Dividing the capital account by it gave -881%.
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="miliar USD",
+        data={("Transaksi Modal", 2026, "Q2"): 29.44, ("Transaksi Berjalan (% PDB)", 2026, "Q2"): -3.34},
+    )
+    fact = _make_fact(
+        operation="ratio", claimed_value=3.2, unit="persen",
+        context_quote="neraca transaksi modal dan finansial (TMF) mencatat surplus 12,0 miliar dolar AS (3,2% dari PDB)",
+        periods=[
+            _make_period(metric_label="Transaksi Modal", month="Q2"),
+            _make_period(metric_label="Transaksi Berjalan (% PDB)", month="Q2"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive"

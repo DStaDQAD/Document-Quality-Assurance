@@ -614,6 +614,8 @@ _GENERIC_LEADING_WORDS = frozenset({
     "lu", "sub", "sektor", "subsektor", "lapangan", "kinerja", "tingkat", "level", "nilai", "angka",
     "laju", "realisasi", "prakiraan", "perkiraan", "ekspektasi", "kondisi", "perkembangan",
     "aktivitas", "kelompok", "komponen", "golongan", "kategori", "indikator", "rata",
+    # the sign and kind of a balance: "defisit neraca perdagangan migas", "surplus neraca jasa"
+    "defisit", "surplus", "neraca", "saldo",
 })
 
 
@@ -965,6 +967,16 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
             reasoning=f"Nilai penyebut '{label_b}' bernilai nol; rasio tidak terdefinisi.",
         )
+    if _GDP_SHARE_SUFFIX.search(label_b) and not _gdp_share_row(label_a, label_b):
+        # SEKI V.1 prints a (% PDB) row only for the current account; dividing the capital
+        # account by it gave -881%. Another account's share of GDP is no denominator.
+        return _make_result(
+            fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            reasoning=(
+                f"Baris '{label_b}' adalah rasio terhadap PDB untuk metrik lain, bukan untuk "
+                f"'{label_a}'; tabel tidak memuat rasio '{label_a}' terhadap PDB."
+            ),
+        )
     share = _gdp_share_row(label_a, label_b)
     if share:
         # The denominator row already IS the claim's share of GDP (SEKI V.1 "Transaksi Berjalan
@@ -1009,6 +1021,10 @@ _DEFICIT_TREND = re.compile(
     r"\b(meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
     r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
     re.IGNORECASE,
+)
+# The verbs among them that say the size went DOWN; every other one says it went up.
+_SIZE_DOWN = re.compile(
+    r"menurun|turun|menyempit|mengecil|berkurang|lebih\s+(rendah|kecil|sempit)", re.IGNORECASE,
 )
 
 
@@ -1055,14 +1071,21 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     # "defisit … meningkat" on a balance stored negative (−5,1 → −8,2) means the deficit grew, which
     # the signed numbers read as a fall. Judge such a claim on the size of the balance.
     size_note = ""
-    if all(v < 0 for v in values) and _DEFICIT_TREND.search(fact.context_quote or ""):
+    operation = fact.operation
+    deficit = _DEFICIT_TREND.search(fact.context_quote or "")
+    if all(v < 0 for v in values) and deficit:
         values = [-v for v in values]
         size_note = " (dinilai pada besarnya defisit/kewajiban neto)"
+        # The extractor reads "defisit … melebar" as the balance falling in one run and the
+        # deficit growing in the next; the verb itself says which way the size moved.
+        if operation in ("is_increasing", "is_decreasing"):
+            grew = _SIZE_DOWN.fullmatch(deficit.group(2)) is None
+            operation = "is_increasing" if grew else "is_decreasing"
 
     band_note = ""
-    if fact.operation == "is_increasing":
+    if operation == "is_increasing":
         ok = all(values[i + 1] >= values[i] for i in range(len(values) - 1))
-    elif fact.operation == "is_decreasing":
+    elif operation == "is_decreasing":
         ok = all(values[i + 1] <= values[i] for i in range(len(values) - 1))
     else:  # is_stable — see _stable_band
         bands = [_stable_band(values[i], values[i + 1]) for i in range(len(values) - 1)]
@@ -1268,6 +1291,12 @@ def _compute_operation(
         computed = round(sum(converted) / len(converted), 4) if op == "average" else round(sum(converted), 4)
         periods = _build_periods(fact.periods, resolved, converted)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        if verdict == "Refuted" and op == "sum":
+            # "transaksi modal dan finansial ... mengalami defisit sebesar 4,8" over two rows
+            # that add up to -4,76: the same printed-size rule as a single level.
+            recovered = _reinterpret_signed_level(fact, resolved, periods, computed, src)
+            if recovered is not None:
+                return recovered
         label = "rata-rata" if op == "average" else "total"
         breakdown = ", ".join(f"{_point_desc(p)}={round(v, 4)}" for p, v in zip(fact.periods, converted))
         return _make_result(
