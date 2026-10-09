@@ -2831,3 +2831,23 @@ def test_pointer_pass_does_not_point_a_net_figure_at_a_gross_cell():
 
     assert n == 0
     assert new[0].verdict == "Inconclusive"
+
+
+@pytest.mark.parametrize("metric_label, row, title", [
+    # an abbreviation spelled out in front of the row it names (SBank e2e)
+    ("Kredit Pemilikan Rumah KPR/KPA", "KPR/KPA",
+     "Tabel 1. Penyaluran Kredit Baru Berdasarkan Jenis Kredit (SBT, %)"),
+    # descriptive words in front of the row (SHPR e2e)
+    ("pertumbuhan indeks harga rumah tipe menengah", "MENENGAH",
+     "TABEL 3. PERTUMBUHAN INDEKS HARGA PROPERTI RESIDENSIAL"),
+])
+def test_descriptive_words_before_the_row_do_not_reject_the_table(metric_label, row, title):
+    table = _make_table(title=title, unit="%", data={(row, 2026, "Q2"): 40.63, ("Lain", 2026, "Q2"): 1.0})
+    fact = _make_fact(
+        claimed_value=40.63, unit="persen", context_quote=f"{metric_label} sebesar 40,63%",
+        periods=[_make_period(metric_label=metric_label, month="Q2")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"

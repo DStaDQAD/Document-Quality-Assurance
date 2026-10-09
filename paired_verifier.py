@@ -607,15 +607,14 @@ def _claimed_rate_kind(fact: ExtractedFact) -> Optional[str]:
     return kinds.pop() if len(kinds) == 1 else None
 
 
-# Words a report puts in front of a series name without changing which series it is: "LU
-# Industri Pengolahan", "kinerja sub-LU …", "prakiraan SBT …", "nilai ekspor …". A front word
-# outside this list names a topic ("SBT harga jual …", "SBT investasi …") and must be in the table.
-_GENERIC_LEADING_WORDS = frozenset({
-    "lu", "sub", "sektor", "subsektor", "lapangan", "kinerja", "tingkat", "level", "nilai", "angka",
-    "laju", "realisasi", "prakiraan", "perkiraan", "ekspektasi", "kondisi", "perkembangan",
-    "aktivitas", "kelompok", "komponen", "golongan", "kategori", "indikator", "rata",
-    # the sign and kind of a balance: "defisit neraca perdagangan migas", "surplus neraca jasa"
-    "defisit", "surplus", "neraca", "saldo",
+# Survey topics a report names in front of a sector: "SBT harga jual Perdagangan", "SBT
+# investasi Industri Pengolahan", "prakiraan tingkat inflasi …" (SKDU Tabel 5-7). Such a word
+# absent from the table means the claim is about another table. Any other front word stays
+# allowed: it usually spells out or describes the row ("Kredit Pemilikan Rumah (KPR)" for
+# 'KPR/KPA', "harga rumah tipe menengah" for 'Menengah', "LU …", "defisit neraca …").
+_FRONT_TOPIC_WORDS = frozenset({
+    "harga", "jual", "inflasi", "investasi", "upah", "margin", "kapasitas", "produksi",
+    "tenaga", "kerja",
 })
 
 
@@ -648,7 +647,7 @@ def _breakdown_the_table_lacks(
         narrowing += [
             t for i, t in enumerate(claim_tokens)
             if t in absent and t not in narrowing
-            and (i > last or (i < first and t not in _GENERIC_LEADING_WORDS))
+            and (i > last or (i < first and t in _FRONT_TOPIC_WORDS))
         ]
     return narrowing
 
