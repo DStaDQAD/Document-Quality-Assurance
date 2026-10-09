@@ -2566,3 +2566,25 @@ def test_a_negative_share_needs_a_deficit_word_to_match_a_positive_claim():
     result = _gdp_share_case(1.0, "transaksi berjalan sebesar 3,3 miliar dolar AS (1,0% dari PDB)")
 
     assert result.verdict == "Refuted"
+
+
+def test_a_sum_adds_two_different_rows_of_the_same_period():
+    # NPI: "transaksi modal dan finansial ... surplus 12,0 miliar dolar AS" — SEKI V.1 holds
+    # the two accounts as separate rows; the extractor emits a sum over both (rule 2g).
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="miliar USD",
+        data={("Transaksi Modal", 2026, "Q2"): 0.04, ("Transaksi Finansial", 2026, "Q2"): 11.98},
+    )
+    fact = _make_fact(
+        operation="sum", claimed_value=12.0, unit="miliar USD",
+        context_quote="transaksi modal dan finansial mencatat surplus 12,0 miliar dolar AS",
+        periods=[
+            _make_period(metric_label="Transaksi Modal", month="Q2"),
+            _make_period(metric_label="Transaksi Finansial", month="Q2"),
+        ],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(12.02)

@@ -201,6 +201,7 @@ Available operations:
                    periods = every individual month in the stated range, listed in order
                    (e.g. "rata-rata Januari-April 2026" → periods = [Jan, Feb, Mar, Apr] of 2026).
   sum            : the stated total of several months of the SAME metric. periods = every month, in order.
+                   Also one number stated for two accounts on the same date — see rule 2g.
   diff           : the stated difference/selisih between exactly TWO points of the SAME metric.
                    periods = [earlier point, later point] (chronological order).
   ratio          : the stated ratio/percentage of one metric relative to ANOTHER metric (or point),
@@ -297,6 +298,12 @@ IMPORTANT RULES:
          → diff, periods [Q1 2026, Q2 2026], '-16,8'
    A percentage change stays a growth rate (rules 2, 2b, 2e); a sentence that states the new
    level itself ('naik menjadi 145,6 miliar') is a value.
+2g. ONE NUMBER FOR TWO NAMED ACCOUNTS IS A sum. When a single level is stated for two accounts
+   joined by 'dan' that the tables keep as separate rows ('transaksi modal dan finansial'), use operation='sum'
+   with one period per account, both on the SAME date, each metric_label naming one account:
+     'transaksi modal dan finansial mencatat surplus 12,0 miliar dolar AS' (report on Q2 2026)
+         → sum, periods [Transaksi Modal Q2 2026, Transaksi Finansial Q2 2026], '12,0'
+   Use this only when the sentence gives one number for the pair; two numbers are two facts.
 3. For each metric that has both an absolute value AND a growth rate in the same sentence, create
    TWO separate entries: one operation='value', one operation='yoy_growth' — each with its own
    short anchor_quote covering just its own number (e.g. 'sebesar Rp10.355,1 triliun' vs
