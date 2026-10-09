@@ -2588,3 +2588,41 @@ def test_a_sum_adds_two_different_rows_of_the_same_period():
 
     assert result.verdict == "Entailed"
     assert result.computed_value == pytest.approx(12.02)
+
+
+
+def _net_claim_case(metric_label, quote, claimed):
+    table = _make_table(
+        title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+        data={
+            ("Aset > Investasi Portofolio", 2026, "Q2"): 160.1,
+            ("Kewajiban > Investasi Portofolio", 2026, "Q2"): 389.7,
+        },
+    )
+    fact = _make_fact(
+        claimed_value=claimed, unit="miliar USD", context_quote=quote,
+        periods=[_make_period(metric_label=metric_label, month="Q2")],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_a_net_position_is_not_answered_by_the_gross_liability_row():
+    # PII: "investasi portofolio mencatat kewajiban neto sebesar 229,6" was matched to the gross
+    # 'Kewajiban > Investasi Portofolio' (389,7) and reported Tidak Sesuai. SEKI V.39 has no net
+    # row per component, so the claim cannot be checked against this table.
+    result = _net_claim_case(
+        "Kewajiban Investasi Portofolio",
+        "posisi investasi portofolio mencatat kewajiban neto sebesar 229,6 miliar dolar AS", 229.6,
+    )
+
+    assert result.verdict == "Inconclusive"
+    assert result.matched_excel_source is None
+
+
+def test_a_gross_liability_claim_still_matches_the_liability_row():
+    result = _net_claim_case(
+        "Kewajiban Investasi Portofolio",
+        "posisi KFLN investasi portofolio tercatat sebesar 389,7 miliar dolar AS", 389.7,
+    )
+
+    assert result.verdict == "Entailed"

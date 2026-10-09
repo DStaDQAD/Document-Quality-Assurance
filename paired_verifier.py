@@ -637,6 +637,38 @@ def _breakdown_the_table_lacks(
     return narrowing
 
 
+# "kewajiban neto sebesar 229,6", "aset neto 37,0": the number that follows is a NET position.
+_NET_NUMBER = re.compile(
+    r"\b(kewajiban|aset)\s+(neto|bersih)\s+(?:sebesar\s+|tertinggi\s+sebesar\s+)?(\d[\d.,]*)",
+    re.IGNORECASE,
+)
+_BALANCE_SIDES = ("aset", "kewajiban", "afln", "kfln")
+
+
+def _gross_row_for_a_net_number(fact: ExtractedFact, resolved: List[Tuple[str, float]]) -> Optional[str]:
+    """The matched row, when the claimed number is a net position but the row is one gross side.
+
+    PII prints "investasi portofolio mencatat kewajiban neto sebesar 229,6" for each component,
+    while SEKI V.39 holds only 'Aset > Investasi Portofolio' and 'Kewajiban > Investasi
+    Portofolio'. The claim's 'kewajiban' matched the liability row (389,7) and was reported Tidak
+    Sesuai. Applies only when the sentence ties THIS claimed number to 'kewajiban/aset neto', so
+    a gross KFLN claim in a sentence that mentions a net position elsewhere still matches.
+    """
+    if fact.claimed_value is None:
+        return None
+    tied = any(
+        abs(_id_number(m.group(3).rstrip(".,")) - abs(fact.claimed_value)) < 1e-9
+        for m in _NET_NUMBER.finditer(fact.context_quote or "")
+    )
+    if not tied:
+        return None
+    for label, _ in resolved:
+        side = label.split(">")[0].strip().lower()
+        if side in _BALANCE_SIDES:
+            return label
+    return None
+
+
 def _is_percent_unit(unit: Optional[str]) -> bool:
     return bool(unit and (unit.strip().lower().startswith("persen") or "%" in unit))
 
@@ -1647,6 +1679,14 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                         f"('{src.table.unit}'), sedangkan klaim menyebut {claim_kind}."
                     )
                 continue
+        gross = _gross_row_for_a_net_number(fact, resolved)
+        if gross:
+            if best_reason is None:
+                best_reason = (
+                    f"Klaim menyebut posisi neto, sedangkan baris '{gross}' di [{src.label}] "
+                    f"hanya memuat satu sisi (aset atau kewajiban) secara bruto."
+                )
+            continue
         absent = _breakdown_the_table_lacks(fact, resolved, src)
         if absent:
             if best_reason is None:
