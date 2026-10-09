@@ -2482,3 +2482,51 @@ def test_an_aggregate_parent_is_not_a_qualification_when_ranking_sources():
 
     assert result.verdict == "Entailed"
     assert result.computed_value == 17.0
+
+
+def _deficit_trend_case(quote, operation, older, newer, label="Transaksi Berjalan"):
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="juta USD",
+        data={(label, 2026, "Q1"): older, (label, 2026, "Q2"): newer},
+    )
+    fact = _make_fact(
+        operation=operation, claimed_value=None, unit=None, context_quote=quote,
+        periods=[_make_period(metric_label=label, month="Q1"), _make_period(metric_label=label, month="Q2")],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_a_widening_deficit_is_judged_on_its_size_not_on_the_signed_balance():
+    # NPI: "defisit transaksi berjalan meningkat" — the balance goes −5,1 → −8,2, which read
+    # as signed numbers is a fall, yet the deficit really did grow.
+    result = _deficit_trend_case(
+        "defisit transaksi berjalan meningkat menjadi 8,2 miliar dolar AS", "is_increasing", -5.1, -8.2,
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_smaller_deficit_is_judged_on_its_size_not_on_the_signed_balance():
+    result = _deficit_trend_case(
+        "defisit transaksi berjalan lebih rendah dibandingkan triwulan sebelumnya", "is_decreasing", -8.2, -5.1,
+    )
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_deficit_that_really_shrank_still_refutes_a_claim_that_it_grew():
+    result = _deficit_trend_case(
+        "defisit transaksi berjalan meningkat menjadi 5,1 miliar dolar AS", "is_increasing", -8.2, -5.1,
+    )
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_trend_on_the_balance_itself_keeps_the_signed_reading():
+    # "transaksi berjalan membaik" with no deficit word before the verb: −8,2 → −5,1 is an
+    # improvement of the signed balance, exactly as written.
+    result = _deficit_trend_case(
+        "transaksi berjalan membaik, dari defisit 8,2 miliar dolar AS", "is_increasing", -8.2, -5.1,
+    )
+
+    assert result.verdict == "Entailed"

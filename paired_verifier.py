@@ -922,6 +922,18 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     )
 
 
+# A negative balance named as the SUBJECT of the trend verb: "defisit transaksi berjalan meningkat",
+# "kewajiban neto PII menurun". The noun must come before the verb in the same clause, so "transaksi
+# berjalan membaik, dari defisit 8,2" stays a claim about the signed balance. "kontraksi" is left
+# out: it names a negative growth RATE, where "kontraksi menurun" is ambiguous.
+_DEFICIT_TREND = re.compile(
+    r"\b(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow)\b[^,.;]{0,80}?"
+    r"\b(meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
+    r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
+    re.IGNORECASE,
+)
+
+
 def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
     matched_source = src.label
     used_periods = list(fact.periods)
@@ -962,6 +974,13 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             ),
         )
 
+    # "defisit … meningkat" on a balance stored negative (−5,1 → −8,2) means the deficit grew, which
+    # the signed numbers read as a fall. Judge such a claim on the size of the balance.
+    size_note = ""
+    if all(v < 0 for v in values) and _DEFICIT_TREND.search(fact.context_quote or ""):
+        values = [-v for v in values]
+        size_note = " (dinilai pada besarnya defisit/kewajiban neto)"
+
     band_note = ""
     if fact.operation == "is_increasing":
         ok = all(values[i + 1] >= values[i] for i in range(len(values) - 1))
@@ -975,12 +994,12 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         band_note = f" (ambang stabil ±{round(max(bands), 4)})"
 
     verdict = "Entailed" if ok else "Refuted"
-    breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, v in zip(used_periods, values))
+    breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, (_, v) in zip(used_periods, labelled))
     return _make_result(
         fact, periods, matched_source, None, None, None, src.table.unit, None, verdict,
         reasoning=(
             f"Klaim tren '{fact.operation}' untuk '{fact.display_label}' | "
-            f"Excel [{matched_source}]: {breakdown}{band_note} | "
+            f"Excel [{matched_source}]: {breakdown}{band_note}{size_note} | "
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
