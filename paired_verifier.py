@@ -894,6 +894,18 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     )
 
 
+_GDP_SHARE_SUFFIX = re.compile(r"\s*\(\s*%\s*(dari\s+|of\s+)?(PDB|GDP)\s*\)\s*$", re.IGNORECASE)
+
+
+def _gdp_share_row(numerator: str, denominator: str) -> bool:
+    """True when `denominator` is the "(% PDB)" row of the numerator's own metric."""
+    m = _GDP_SHARE_SUFFIX.search(denominator)
+    if not m:
+        return False
+    base = denominator[:m.start()].strip().lower()
+    return bool(base) and base in numerator.lower()
+
+
 def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
     (label_a, raw_a), (label_b, raw_b) = resolved
     matched_source = src.label
@@ -906,6 +918,26 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
             reasoning=f"Nilai penyebut '{label_b}' bernilai nol; rasio tidak terdefinisi.",
+        )
+    share = _gdp_share_row(label_a, label_b)
+    if share:
+        # The denominator row already IS the claim's share of GDP (SEKI V.1 "Transaksi Berjalan
+        # (% PDB)"); dividing the balance by it is meaningless. Read the row as the answer.
+        computed = round(raw_b, 4)
+        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        word = _NEGATIVE_BALANCE_WORDS.search(fact.context_quote or "")
+        size = ""
+        if verdict != "Entailed" and word and computed < 0 and (fact.claimed_value or 0) > 0:
+            delta, verdict = _numeric_verdict(fact.claimed_value, -computed)
+            size = f" Laporan menulis besarnya {word.group(0).lower()}; tabel mencatat rasionya negatif."
+        return _make_result(
+            fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
+            reasoning=(
+                f"PDF: {fact.claimed_value} {fact.unit} dari PDB | "
+                f"Excel [{matched_source}]: baris '{label_b}' = {computed} | "
+                f"Rasio terhadap PDB dibaca langsung dari baris itu.{size} "
+                f"Δ = {delta} → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}"
+            ),
         )
     computed = raw_a / raw_b
     if fact.unit and "persen" in fact.unit.lower():

@@ -2530,3 +2530,39 @@ def test_a_trend_on_the_balance_itself_keeps_the_signed_reading():
     )
 
     assert result.verdict == "Entailed"
+
+
+def _gdp_share_case(claimed, quote, ratio_row=-1.0):
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="juta USD",
+        data={("Transaksi Berjalan", 2026, "Q2"): -3270.0, ("Transaksi Berjalan (% PDB)", 2026, "Q2"): ratio_row},
+    )
+    fact = _make_fact(
+        operation="ratio", claimed_value=claimed, unit="persen", context_quote=quote,
+        periods=[
+            _make_period(metric_label="Transaksi Berjalan", month="Q2"),
+            _make_period(metric_label="Transaksi Berjalan (% PDB)", month="Q2"),
+        ],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_a_share_of_gdp_is_read_from_the_tables_own_percent_of_gdp_row():
+    # NPI: "defisit transaksi berjalan ... (1,0% dari PDB)". SEKI V.1 already prints the share;
+    # dividing the balance by that row (−3270 / −1,0) gave 327000%.
+    result = _gdp_share_case(1.0, "defisit transaksi berjalan sebesar 3,3 miliar dolar AS (1,0% dari PDB)")
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(-1.0)
+
+
+def test_a_wrong_share_of_gdp_is_still_refuted():
+    result = _gdp_share_case(1.4, "defisit transaksi berjalan sebesar 3,3 miliar dolar AS (1,4% dari PDB)")
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_negative_share_needs_a_deficit_word_to_match_a_positive_claim():
+    result = _gdp_share_case(1.0, "transaksi berjalan sebesar 3,3 miliar dolar AS (1,0% dari PDB)")
+
+    assert result.verdict == "Refuted"
