@@ -296,6 +296,10 @@ IMPORTANT RULES:
    claimed_value_raw for a fall ('turun', 'menurun', 'berkurang'):
      'posisi modal ekuitas yang turun sebesar 16,8 miliar dolar AS' (report on Q2 2026)
          → diff, periods [Q1 2026, Q2 2026], '-16,8'
+   The noun forms say the same thing: 'kenaikan', 'peningkatan', 'penambahan' (+) and
+   'penurunan', 'pengurangan' (−) followed by 'sebesar X' + a level unit:
+     'kenaikan posisi AFLN investasi lainnya sebesar 8,7 miliar dolar AS' (report on Q2 2026)
+         → diff, periods [Q1 2026, Q2 2026], '8,7'
    A percentage change stays a growth rate (rules 2, 2b, 2e); a sentence that states the new
    level itself ('naik menjadi 145,6 miliar') is a value.
 2g. ONE NUMBER FOR TWO NAMED ACCOUNTS IS A sum. When a single level is stated for two accounts
