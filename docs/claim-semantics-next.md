@@ -72,3 +72,29 @@ tidak ditanya tentang posisi neto. Suite 1354 hijau, eval Layer-1 dan ejaan 100%
 3. **Pertumbuhan baris debit (impor, negatif di SEKI V.1)** dihitung dengan tanda terbalik
    (−20,3% padahal impor naik 20,3%).
 4. **SKDU:** angka SBT sub-LU masih jatuh ke baris LU induk; kapasitas produksi ke T1.
+
+### Uji regresi 8 publikasi lain (2026-10-09, branch vs `main` di hari yang sama)
+
+| Publikasi | main: Sesuai / Tidak Sesuai | branch: Sesuai / Tidak Sesuai |
+|---|---|---|
+| Uang Beredar | 22 / 5 | 21 / 5 |
+| Uang Primer (M0) | 32 / 4 | 33 / 8 |
+| Cadangan Devisa | 3 / 0 | 4 / 0 |
+| SK | 49 / 0 | 55 / 5 |
+| SPE | 36 / 0 (14 klaim crash) | 40 / 0 (71 klaim, 0 crash) |
+| SBank | 30 / 1 | 25 / 3 |
+| SHPR | 25 / 0 | 21 / 0 |
+| SULNI | 13 / 0 | 14 / 0 |
+
+Aturan A, B, E tidak terpicu sama sekali di 8 publikasi ini. Selisih Tidak Sesuai di M0, SK dan
+SBank berasal dari ekstraksi LLM yang berbeda antar run (mis. "IKK" tanpa nama kota, IPDG diberi
+`below_threshold`, label "SBT" saja), bukan dari kode — aturan F hanya bisa menolak sumber, tidak
+bisa membuat Tidak Sesuai baru. Uji ini menemukan dua hal yang lalu diperbaiki:
+
+- Aturan F terlalu agresif ("Kredit Pemilikan Rumah KPR/KPA", "harga rumah tipe menengah" ditolak):
+  diubah menjadi daftar tertutup kata topik survei.
+- Klaim nilai tanpa satuan crash di `_parse_scale_unit(None)` (bug lama, juga di `main`): 14 klaim
+  SPE tidak pernah diperiksa.
+
+Temuan tambahan: aturan F membaca label buatan LLM; bila LLM membuang kata topiknya ("SBT
+PERDAGANGAN …" untuk kalimat tentang SBT harga jual), klaim tetap jatuh ke tabel yang salah.
