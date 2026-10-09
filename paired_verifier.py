@@ -229,14 +229,14 @@ _CURRENCY_TOKENS: Dict[str, str] = {
 }
 
 
-def _parse_scale_unit(unit: str) -> Optional[Tuple[float, Optional[str]]]:
+def _parse_scale_unit(unit: Optional[str]) -> Optional[Tuple[float, Optional[str]]]:
     """Parse a level unit into (decimal scale, currency token or None).
 
     'juta Rp' -> (1e6, 'rp') | 'Rp' -> (1.0, 'rp') | 'miliar' -> (1e9, None).
-    Returns None for percentages and units with neither a scale word nor a currency
-    ('unit', 'buah'), where scaling would be meaningless.
+    Returns None for percentages, for no unit at all (an index claim), and for units with
+    neither a scale word nor a currency ('unit', 'buah'), where scaling would be meaningless.
     """
-    if "%" in unit:
+    if not unit or "%" in unit:
         return None
     words = re.findall(r"[a-z]+", unit.lower())
     if "persen" in words:

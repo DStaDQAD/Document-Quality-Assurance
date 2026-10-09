@@ -2851,3 +2851,20 @@ def test_descriptive_words_before_the_row_do_not_reject_the_table(metric_label, 
     result = _evaluate_fact(fact, [_make_source(table)])
 
     assert result.verdict == "Entailed"
+
+
+def test_a_value_claim_without_a_unit_is_checked_against_a_growth_table_without_crashing():
+    # SPE e2e: 14 claims such as "Indeks Penjualan Riil (IPR) ... 210,6" carry no unit; meeting
+    # a '%, yoy' sheet they raised TypeError in _parse_scale_unit(None) and were never checked.
+    table = _make_table(
+        title="Tabel 2. Pertumbuhan Indeks Penjualan Riil", unit="%, yoy",
+        data={("Indeks Penjualan Riil (IPR)", 2026, "Jul"): 1.1},
+    )
+    fact = _make_fact(
+        claimed_value=1.1, unit=None, context_quote="IPR tumbuh 1,1%",
+        periods=[_make_period(metric_label="Indeks Penjualan Riil (IPR)", month="Jul")],
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
