@@ -2737,3 +2737,15 @@ def test_another_accounts_share_of_gdp_is_not_a_denominator():
     result = _evaluate_fact(fact, [_make_source(table)])
 
     assert result.verdict == "Inconclusive"
+
+
+@pytest.mark.parametrize("quote, older, newer", [
+    ("didorong oleh peningkatan defisit neraca jasa", -4391.13, -5893.35),
+    ("pelebaran defisit neraca jasa pada triwulan II 2026", -4391.13, -5893.35),
+    ("penyempitan defisit neraca jasa pada triwulan II 2026", -5893.35, -4391.13),
+])
+def test_a_noun_before_the_deficit_also_says_which_way_its_size_moved(quote, older, newer):
+    for operation in ("is_increasing", "is_decreasing"):
+        result = _deficit_trend_case(quote, operation, older, newer, label="Jasa")
+
+        assert result.verdict == "Entailed", (quote, operation)

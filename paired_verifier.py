@@ -1016,15 +1016,24 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
 # "kewajiban neto PII menurun". The noun must come before the verb in the same clause, so "transaksi
 # berjalan membaik, dari defisit 8,2" stays a claim about the signed balance. "kontraksi" is left
 # out: it names a negative growth RATE, where "kontraksi menurun" is ambiguous.
+_DEFICIT_NOUNS = r"(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow)"
 _DEFICIT_TREND = re.compile(
-    r"\b(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow)\b[^,.;]{0,80}?"
-    r"\b(meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
+    r"\b" + _DEFICIT_NOUNS + r"\b[^,.;]{0,80}?"
+    r"\b(?P<verb>meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
     r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
     re.IGNORECASE,
 )
-# The verbs among them that say the size went DOWN; every other one says it went up.
+# The same, noun first: "peningkatan defisit neraca jasa", "penyempitan defisit TB".
+_DEFICIT_TREND_NOUN_FIRST = re.compile(
+    r"\b(?P<verb>peningkatan|kenaikan|pelebaran|penambahan|penurunan|penyempitan|pengurangan)\s+"
+    + _DEFICIT_NOUNS + r"\b",
+    re.IGNORECASE,
+)
+# The words among them that say the size went DOWN; every other one says it went up.
 _SIZE_DOWN = re.compile(
-    r"menurun|turun|menyempit|mengecil|berkurang|lebih\s+(rendah|kecil|sempit)", re.IGNORECASE,
+    r"menurun|turun|menyempit|mengecil|berkurang|lebih\s+(rendah|kecil|sempit)"
+    r"|penurunan|penyempitan|pengurangan",
+    re.IGNORECASE,
 )
 
 
@@ -1072,14 +1081,16 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     # the signed numbers read as a fall. Judge such a claim on the size of the balance.
     size_note = ""
     operation = fact.operation
-    deficit = _DEFICIT_TREND.search(fact.context_quote or "")
+    deficit = _DEFICIT_TREND.search(fact.context_quote or "") or _DEFICIT_TREND_NOUN_FIRST.search(
+        fact.context_quote or ""
+    )
     if all(v < 0 for v in values) and deficit:
         values = [-v for v in values]
         size_note = " (dinilai pada besarnya defisit/kewajiban neto)"
         # The extractor reads "defisit … melebar" as the balance falling in one run and the
         # deficit growing in the next; the verb itself says which way the size moved.
         if operation in ("is_increasing", "is_decreasing"):
-            grew = _SIZE_DOWN.fullmatch(deficit.group(2)) is None
+            grew = _SIZE_DOWN.search(deficit.group("verb")) is None
             operation = "is_increasing" if grew else "is_decreasing"
 
     band_note = ""
