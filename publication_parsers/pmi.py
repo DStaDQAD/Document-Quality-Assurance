@@ -5,13 +5,15 @@ column 2 (column 3 is English, column 4 a longer Indonesian name). BI renamed th
 between editions ('T1 - Komponen PMI' → 'T1 PMI'), hence the patterns. Values are diffusion
 indices (50 = no change) that the report prints in percent ("52,03%"), hence the sheet's own
 unit '%, Indeks': the verifier compares percent claims only with an index that carries the %.
+Each sheet ends at its forecast quarter ('I*'); the Tw IV-2025 T2 carried three template columns
+after it (two repeating 2025's Q2 and Q3), hence end_at_forecast.
 """
 from publication_parsers._common import SheetSpec, parse_with_specs
 from table_model import TableData
 
 SPECS = (
-    (r"T1\b.*", SheetSpec(label_cols=(1,), unit="%, Indeks")),
-    (r"T2\b.*", SheetSpec(label_cols=(2,), unit="%, Indeks")),
+    (r"T1\b.*", SheetSpec(label_cols=(1,), unit="%, Indeks", end_at_forecast=True)),
+    (r"T2\b.*", SheetSpec(label_cols=(2,), unit="%, Indeks", end_at_forecast=True)),
 )
 SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 

@@ -394,3 +394,32 @@ def test_a_header_without_any_figures_below_it_is_rejected():
 
     with pytest.raises(PublicationParseError, match="berisi angka"):
         parse_series_sheet(grid, SheetSpec(label_cols=(1,)))
+
+
+def _pmi_t2_grid():
+    # PMI Tw IV-2025, sheet T2: the table ends at the forecast 'I*' of 2026, but three template
+    # columns follow it — II and III repeat 2025's Q2 and Q3, IV* is unexplained.
+    return [
+        [None, "TABEL 2. PROMPT MANUFACTURING INDEX - BI BY SUBSECTOR", None, None, None, None, None, None, None, None],
+        [None, "(%, Indeks)", None, None, None, None, None, None, None, None],
+        [None, "Sublapangan", 2025, None, None, None, 2026, None, None, None],
+        [None, "Sublapangan", "I", "II", "III", "IV", "I*", "II", "III", "IV*"],
+        [None, "Industri Makanan dan Minuman", 53.8, 54.0, 53.5, 54.1, 55.2, 54.0, 53.5, 51.8],
+        [None, "* Ket : Angka Perkiraan", None, None, None, None, None, None, None, None],
+    ]
+
+
+def test_columns_after_the_forecast_are_dropped_when_the_sheet_ends_at_it():
+    table = parse_series_sheet(_pmi_t2_grid(), SheetSpec(label_cols=(1,), end_at_forecast=True))
+
+    assert table.lookup("Industri Makanan dan Minuman", 2026, "Q1") == 55.2
+    assert table.lookup("Industri Makanan dan Minuman", 2026, "Q2") is None
+    assert table.lookup("Industri Makanan dan Minuman", 2026, "Q4") is None
+    assert table.lookup("Industri Makanan dan Minuman", 2025, "Q4") == 54.1
+
+
+def test_starred_columns_are_kept_unless_the_sheet_is_said_to_end_at_its_forecast():
+    # SEKI marks its latest quarters 'Q1*', 'Q2**' (angka sementara): all of them are data.
+    table = parse_series_sheet(_pmi_t2_grid(), SheetSpec(label_cols=(1,)))
+
+    assert table.lookup("Industri Makanan dan Minuman", 2026, "Q4") == 51.8

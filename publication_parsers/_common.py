@@ -198,12 +198,16 @@ class SheetSpec:
     bands: the row above the year row splits the columns into bands ('TRIWULANAN (QTQ)' vs
       'TAHUNAN (YOY)'); the band becomes the outermost label level.
     unit: replaces the unit read from the title block.
+    end_at_forecast: the sheet's last real period is its first starred one ('I*' = angka
+      perkiraan); later columns are template leftovers and are dropped. Not for SEKI, whose
+      stars mark several provisional quarters in a row.
     """
     label_cols: Tuple[int, ...]
     header: str = "two_rows"
     hierarchy: str = "flat"
     bands: bool = False
     unit: Optional[str] = None
+    end_at_forecast: bool = False
 
 
 _FOOTER = re.compile(r"\s*(\*|(keterangan|catatan|sumber|note|source)\s*:)", re.IGNORECASE)
@@ -317,6 +321,11 @@ def _period_columns(
                 if year is not None:
                     keyed.append((c, (band, year, period)))
             previous = year
+    if spec.end_at_forecast:
+        period_row = below if spec.header == "two_rows" else head
+        starred = [c for c, _ in keyed if str(_cell(period_row, c) or "").strip().endswith("*")]
+        if starred:
+            keyed = [(c, key) for c, key in keyed if c <= starred[0]]
     columns: Dict[int, Tuple[str, int, str]] = {}
     seen = set()
     for c, key in keyed:
