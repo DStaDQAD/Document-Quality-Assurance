@@ -66,3 +66,5 @@ tests/fixtures/publications/**/*.xls
 tests/fixtures/publications/**/*.xlsx
 tests/fixtures/publications/**/*.pdf
 tests/fixtures/publications/**/*.zip
+# Tinjauan AI eval: snapshot of real report claims, model answers and hand labels — local only
+eval/cases/ai_review/
