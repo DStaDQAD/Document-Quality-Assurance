@@ -144,7 +144,8 @@ def subject_is_covered(subject: str, quote: str, rows: List[str], src: _ExcelSou
 
     This is the deterministic backstop for the one mistake the spike showed the model makes
     despite being told not to: answering a breakdown ("impor minyak") with its total row
-    ("Migas > Impor"). Words are compared whole or one derivational prefix apart
+    ("Migas > Impor"). judge_review asks it only of a NEW Tidak Sesuai — the answer such a row
+    produces — and not of a Sesuai, whose reproduced number is proof enough. Words are compared whole or one derivational prefix apart
     (_same_root), so 'kepemilikan' meets 'Pemilikan' but 'usaha' never meets 'Perusahaan'.
     An abbreviation the table spells out differently (KPR) fails the guard — the verdict then
     simply stays as the code left it.
@@ -251,9 +252,6 @@ def judge_review(
     if read is None:
         return unchanged
     src, keyed = read
-    rows = [label for label, _s, _v in keyed]
-    if use_guard and not subject_is_covered(review.subject, result.context_quote, rows, src):
-        return unchanged
     engine = _evaluate_on_cells(result, review.operation or result.operation, src, keyed)
     if engine.verdict == "Inconclusive" or (engine.verdict == "Entailed") != (review.verdict == "sesuai"):
         return unchanged
@@ -263,8 +261,14 @@ def judge_review(
         "reasoning": f"{engine.reasoning} | Ditinjau AI: sel {cells} — {review.explanation}",
     })
     if engine.verdict == "Entailed":
+        # The engine reproduced the claimed number from the cited cells: that is the proof, and
+        # the subject guard is not asked. Run on 2026-10-12 it rejected 49 such answers, every
+        # one correct, over abbreviations (KFLN for the 'Kewajiban' row).
         return accepted, "to_entailed"
     if result.verdict == "Refuted":
+        return unchanged
+    rows = [label for label, _s, _v in keyed]
+    if use_guard and not subject_is_covered(review.subject, result.context_quote, rows, src):
         return unchanged
     if new_refuted == "verdict":
         return accepted, "to_refuted"

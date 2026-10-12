@@ -226,14 +226,31 @@ def test_a_refuted_claim_the_model_also_refutes_stays_as_it_was():
     assert judge_review(original, _review(verdict="tidak_sesuai"), _CODES) == (original, "unchanged")
 
 
-def test_the_guard_blocks_a_total_row_for_a_breakdown_claim():
-    npi = _table(title="Neraca Pembayaran Indonesia", unit="Juta USD",
-                 data={("Migas > Impor", 2026, "Q2"): 9000.0})
-    original = _result(verdict="Inconclusive", claimed_value=9.0, unit="miliar USD",
-                       quote="Impor minyak mentah tercatat 9,0 miliar USD.", label="impor minyak mentah")
-    review = _review(first_words="Impor minyak mentah tercatat 9,0", subject="Impor minyak mentah",
+_NPI_MIGAS = {"S1": _source(_table(title="Neraca Pembayaran Indonesia", unit="Juta USD",
+                                   data={("Migas > Impor", 2026, "Q2"): 9000.0}), sheet="I.1")}
+
+
+def test_the_guard_blocks_a_mismatch_found_on_a_total_row_for_a_breakdown_claim():
+    # A new Tidak Sesuai is the answer a wrong row produces most easily ("impor minyak" read off
+    # "Migas > Impor" gives a number that differs), so it must name the claim's own subject.
+    original = _result(verdict="Inconclusive", claimed_value=4.0, unit="miliar USD",
+                       quote="Impor minyak mentah tercatat 4,0 miliar USD.", label="impor minyak mentah")
+    review = _review(first_words="Impor minyak mentah tercatat 4,0", subject="Impor minyak mentah",
+                     verdict="tidak_sesuai",
                      cells=[CitedCell(sheet="S1", row="Migas > Impor", period="Q2 2026", value=9000.0)])
-    assert judge_review(original, review, {"S1": _source(npi, sheet="I.1")}) == (original, "unchanged")
+    assert judge_review(original, review, _NPI_MIGAS) == (original, "unchanged")
+    assert judge_review(original, review, _NPI_MIGAS, use_guard=False)[1] == "flag"
+
+
+def test_the_guard_does_not_block_a_number_the_engine_reproduces():
+    # Measured 2026-10-12: the guard threw away 49 correct Sesuai over abbreviations (KFLN for the
+    # 'Kewajiban' row, "ULN publik" for 'Pemerintah dan Bank Sentral'). An exact match of the
+    # claimed number from the cited cells is the proof; the guard adds nothing there.
+    original = _result(verdict="Inconclusive", claimed_value=9.0, unit="miliar USD",
+                       quote="Impor KFLN tercatat 9,0 miliar USD.", label="impor KFLN")
+    review = _review(first_words="Impor KFLN tercatat 9,0", subject="Impor KFLN",
+                     cells=[CitedCell(sheet="S1", row="Migas > Impor", period="Q2 2026", value=9000.0)])
+    assert judge_review(original, review, _NPI_MIGAS)[1] == "to_entailed"
 
 
 def test_a_swapped_claim_number_is_ignored():
