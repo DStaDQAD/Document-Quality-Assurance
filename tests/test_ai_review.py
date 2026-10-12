@@ -289,12 +289,13 @@ def test_review_claims_batches_claims_and_maps_answers_back():
 
     reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=2))
 
-    assert len(calls) == 2                     # 3 candidates, 2 per batch
+    # 3 candidates, 2 per batch → 2 calls; each reply answers only its claim 1 (indices 1 and
+    # 3), so index 2 is asked once more on its own → a third call.
+    assert len(calls) == 3
     assert all("### S1 — sheet 'Tabel 1'" in c for c in calls)
     assert "1. Kalimat: \"Kredit modal kerja pada Juni 2026" in calls[0]
-    # Each reply answers its batch's claim 1: indices 1 and 3. Index 2 got no answer.
-    assert [r.verdict for r in reviewed] == ["Entailed", "Entailed", "Inconclusive", "Entailed"]
-    assert (stats.candidates, stats.answered, stats.changed) == (3, 2, 2)
+    assert [r.verdict for r in reviewed] == ["Entailed", "Entailed", "Entailed", "Entailed"]
+    assert (stats.candidates, stats.answered, stats.changed) == (3, 3, 3)
 
 
 def test_a_failed_batch_keeps_the_code_verdicts():
@@ -338,3 +339,25 @@ def test_batches_are_asked_in_parallel():
     results = [_result() for _ in range(3)]
     asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=1))
     assert state["peak"] > 1
+
+
+def test_claims_a_batch_left_unanswered_are_asked_once_more():
+    # NPI 2026-10-12: one batch came back with 6 answers for 30 claims.
+    calls = []
+
+    def _answer(n):
+        return ReviewBatch(reviews=[_review(claim_no=1)])   # only ever answers the first claim
+
+    llm = _llm_answering(_answer, calls)
+    results = [_result(verdict="Refuted"), _result(verdict="Refuted")]
+    reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=2))
+    assert len(calls) == 2                      # the batch, then the one claim it skipped
+    assert stats.answered == 2
+    assert [r.verdict for r in reviewed] == ["Entailed", "Entailed"]
+
+
+def test_unanswered_claims_are_not_asked_a_third_time():
+    calls = []
+    llm = _llm_answering(lambda n: ReviewBatch(reviews=[]), calls)
+    asyncio.run(review_claims([_result(verdict="Refuted")], [_source(_KREDIT)], llm))
+    assert len(calls) == 2

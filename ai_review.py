@@ -367,15 +367,24 @@ async def ask_reviews(
                                batch_no, exc_info=True)
                 return batch, None
 
-    batches = [indices[s:s + batch_size] for s in range(0, len(indices), batch_size)]
-    replies = await asyncio.gather(*(_ask(n, b) for n, b in enumerate(batches, 1)))
+    async def _round(pending: List[int]) -> None:
+        batches = [pending[s:s + batch_size] for s in range(0, len(pending), batch_size)]
+        replies = await asyncio.gather(*(_ask(n, b) for n, b in enumerate(batches, 1)))
+        for batch, reply in replies:
+            if reply is None:
+                continue
+            for review in reply.reviews:
+                if 1 <= review.claim_no <= len(batch):
+                    answers.setdefault(batch[review.claim_no - 1], review)
+
     answers: Dict[int, ClaimReview] = {}
-    for batch, reply in replies:
-        if reply is None:
-            continue
-        for review in reply.reviews:
-            if 1 <= review.claim_no <= len(batch):
-                answers.setdefault(batch[review.claim_no - 1], review)
+    await _round(indices)
+    # A reply can stop short (NPI 2026-10-12: 6 answers for a batch of 30) or a batch can fail;
+    # those claims are asked once more, on their own. Twice is enough: what is still unanswered
+    # keeps the code's verdict.
+    unanswered = [i for i in indices if i not in answers]
+    if unanswered:
+        await _round(unanswered)
     return answers
 
 
