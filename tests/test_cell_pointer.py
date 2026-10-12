@@ -1,5 +1,6 @@
 import asyncio
 from unittest.mock import Mock
+import pytest
 
 from langchain_core.runnables import RunnableLambda
 
@@ -607,3 +608,32 @@ def test_pointer_without_bullets_is_not_judged_by_the_row_above():
         ["IKK Usia 31-40 th", 118.0],
     ]
     assert pointer_is_plausible(grid, 1, "Indeks Keyakinan Konsumen (IKK) > Usia 31-40 th") is True
+
+
+# ---------------------------------------------------------------------------
+# pointer_is_plausible — a breakdown the sheet never mentions is not its parent row
+# ---------------------------------------------------------------------------
+
+_NPI_GRID = [
+    ["Neraca Pembayaran Indonesia", None],
+    ["Migas", -5086.9],
+    ["Ekspor", 2956.2],
+    ["Impor", -13136.5],
+    ["KPR/KPA", 40.6],
+]
+
+
+@pytest.mark.parametrize("metric, row", [
+    ("impor minyak mentah", 3),   # NPI e2e: pointed at the whole Migas import row
+    ("ekspor LNG", 2),
+])
+def test_pointer_rejects_a_breakdown_the_sheet_never_mentions(metric, row):
+    assert pointer_is_plausible(_NPI_GRID, row, metric) is False
+
+
+@pytest.mark.parametrize("metric, row", [
+    ("Impor", 3),
+    ("Kredit Pemilikan Rumah KPR/KPA", 4),   # spelled-out words BEFORE the row's own name
+])
+def test_pointer_keeps_rows_that_name_the_claim(metric, row):
+    assert pointer_is_plausible(_NPI_GRID, row, metric) is True

@@ -27,7 +27,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
-from table_model import QUAL_SEP, numbers_agree
+from table_model import QUAL_SEP, _same_root, numbers_agree
 from table_parser_generic import (
     _bare_period_token,
     _is_empty,
@@ -688,6 +688,32 @@ def _section_row(grid: List[List], row: int) -> Optional[int]:
     return None
 
 
+def _breakdown_the_sheet_lacks(grid: List[List], row: int, metric_label: str, table_title: str) -> List[str]:
+    """Claim words after the last one the pointed row accounts for that no cell or title has.
+
+    NPI e2e: "impor minyak mentah" and "ekspor LNG" were pointed at the whole Migas import and
+    export rows, which share 'impor'/'ekspor', and came back Tidak Sesuai. SEKI V.1 never says
+    'minyak' or 'LNG', so no cell in it can hold those breakdowns. Only TRAILING words count, the
+    same reading as the table path's rincian rule: words in front ("Kredit Pemilikan Rumah" for
+    a 'KPR/KPA' row) usually spell out or describe the row.
+    """
+    tokens = [t for t in re.findall(r"\w+", metric_label.lower()) if len(t) > 2]
+    known = _row_words(grid[row])
+    section = _section_row(grid, row)
+    if section is not None:
+        known |= _row_words(grid[section])
+    covered = [i for i, t in enumerate(tokens) if any(_same_root(t, k) for k in known)]
+    if not covered:
+        return []
+    sheet = _sig_words(table_title or "")
+    for grid_row in grid:
+        sheet |= _row_words(grid_row)
+    return [
+        t for t in tokens[covered[-1] + 1:]
+        if not any(_same_root(t, w) for w in sheet)
+    ]
+
+
 def pointer_is_plausible(
     grid: List[List], row: int, metric_label: str, table_title: str = ""
 ) -> bool:
@@ -729,6 +755,13 @@ def pointer_is_plausible(
                     "than %r", row, row_text, section_text, metric_label,
                 )
                 return False
+        lacking = _breakdown_the_sheet_lacks(grid, row, metric_label, table_title)
+        if lacking:
+            logger.info(
+                "Cell pointer rejected: %r narrows %r by %s, which the sheet never mentions",
+                metric_label, row_text, lacking,
+            )
+            return False
     metric_words = _sig_words(metric_label)
     if not metric_words:
         return True

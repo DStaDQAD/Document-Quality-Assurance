@@ -1558,7 +1558,9 @@ def test_verify_paired_end_to_end_pointer_resolution_on_unparseable_sheet(mock_e
 
 
 def test_pointer_pass_sheet_unit_enables_scale_conversion_on_pointer_only_source():
-    grid = [["Posisi", 8900.0]]
+    # The row names its subject, as a real sheet does: a bare 'Posisi' row for "Posisi Kredit"
+    # is a breakdown the sheet never mentions (pointer_is_plausible).
+    grid = [["Posisi Kredit", 8900.0]]
     src = _pointer_only_source(grid)
     fact = _make_fact(
         periods=[_make_period(metric_label="Posisi Kredit", year=2026, month="Apr")],
