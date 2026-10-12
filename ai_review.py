@@ -16,12 +16,14 @@ of answer can be proved (spike 2026-10-12; spec docs/superpowers/specs/2026-10-1
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
 from excel_parser_bi import BITableData
-from paired_verifier import _ExcelSource, _period_ordinal
+from paired_verifier import _evaluate_fact_safely, _ExcelSource, _period_ordinal
+from schemas import FactVerificationResult
+from structured_extractor import ExtractedFact, PeriodPoint
 from table_model import TableData, _label_words, _same_root, _sig_words
 
 logger = logging.getLogger(__name__)
@@ -148,3 +150,122 @@ def subject_is_covered(subject: str, quote: str, rows: List[str], src: _ExcelSou
     words = [w for w in _sig_words(subject) if w not in _GENERIC_SUBJECT_WORDS and not w.isdigit()]
     known = _label_words(" ".join(rows) + " " + src.table.title + " " + src.sheet)
     return all(any(_same_root(w, k) for k in known) for w in words)
+
+
+Operation = Literal[
+    "value", "yoy_growth", "average", "sum", "diff", "ratio",
+    "is_increasing", "is_decreasing", "is_stable", "above_threshold", "below_threshold",
+]
+
+
+class ClaimReview(BaseModel):
+    # Field order matters: a structured answer is generated top to bottom, so the model has to
+    # write down the sentence's subject and check its words against the row BEFORE it commits
+    # to a match kind, and the match kind before the verdict.
+    claim_no: int
+    first_words: str = Field(description="5 kata pertama kalimat klaim, untuk memastikan nomor tidak tertukar")
+    subject: str = Field(description="Frasa yang menyebut APA yang diukur, disalin PERSIS dari kalimat")
+    word_check: str = Field(description="Tiap kata penting subject: ada/tidak di baris, induknya, atau judul tabel")
+    match: Literal["persis", "total_atau_induk", "mirip", "tidak_ada"]
+    verdict: Literal["sesuai", "tidak_sesuai", "tidak_ada_di_tabel"]
+    operation: Optional[Operation] = None
+    cells: List[CitedCell] = Field(
+        default_factory=list,
+        description="Sel yang dipakai; yoy_growth: [tahun lalu, sekarang]; diff/tren: urut waktu; ratio: [pembilang, penyebut]",
+    )
+    explanation: str = Field(description="Alasan singkat, Bahasa Indonesia, maks 2 kalimat")
+
+
+def _same_claim(review: ClaimReview, quote: str) -> bool:
+    """The answer is about this sentence: its first words open the sentence too."""
+    said = review.first_words.lower().split()[:2]
+    return not said or said == (quote or "").lower().split()[:2]
+
+
+def _header(suffix: Tuple) -> str:
+    return suffix[0] if len(suffix) == 1 else f"{suffix[1]} {suffix[0]}"
+
+
+def _cells_note(src: _ExcelSource, keyed: List[Tuple[str, Tuple, float]]) -> str:
+    return "; ".join(f"{src.sheet} · {label} · {_header(suffix)} = {_fmt(v)}" for label, suffix, v in keyed)
+
+
+def _evaluate_on_cells(
+    result: FactVerificationResult, operation: str, src: _ExcelSource,
+    keyed: List[Tuple[str, Tuple, float]],
+) -> FactVerificationResult:
+    """The claim rebuilt from the cited cells and judged by the ordinary engine, on a copy of
+    the sheet holding only the cited rows — so units, thresholds, tolerances and the deficit
+    rules apply exactly as in the code path, and no other row can be picked."""
+    table = src.table
+    rows = list(dict.fromkeys(label for label, _s, _v in keyed))
+    mini = BITableData(title=table.title, unit=table.unit, row_labels=rows,
+                       col_labels=list(table.col_labels), axis_type=table.axis_type)
+    mini._data = {k: v for k, v in table._data.items() if k[0] in rows}
+    points = keyed
+    if operation == "yoy_growth" and table.axis_type != "categorical":
+        # The engine looks the prior year up itself; it wants the current period only.
+        points = [max(keyed, key=lambda c: (c[1][0], _period_ordinal(c[1][1])))]
+    periods = [
+        PeriodPoint(metric_label=label, col_label=suffix[0]) if len(suffix) == 1
+        else PeriodPoint(metric_label=label, year=suffix[0], month=suffix[1])
+        for label, suffix, _v in points
+    ]
+    unit = "persen" if result.claimed_unit == "persen_yoy" else result.claimed_unit
+    fact = ExtractedFact(
+        operation=operation, periods=periods, claimed_value=result.claimed_value, unit=unit,
+        context_quote=result.context_quote, page_number=result.page_number,
+    )
+    patched = _ExcelSource(table=mini, filename=src.filename, sheet=src.sheet, origin=src.origin)
+    return _evaluate_fact_safely(fact, [patched])
+
+
+def judge_review(
+    result: FactVerificationResult,
+    review: ClaimReview,
+    codes: Dict[str, _ExcelSource],
+    *,
+    new_refuted: str = "note",
+    use_guard: bool = True,
+) -> Tuple[FactVerificationResult, str]:
+    """The claim after the model's answer, and what happened to it (see module docstring)."""
+    unchanged = (result, "unchanged")
+    if not _same_claim(review, result.context_quote):
+        return unchanged
+    if review.verdict == "tidak_ada_di_tabel":
+        if result.verdict != "Refuted":
+            return unchanged
+        return result.model_copy(update={
+            "verdict": "Inconclusive", "computed_value": None, "delta": None,
+            "resolved_via": "ai_review",
+            "reasoning": (f"{result.reasoning} | Ditinjau AI: tabel tidak memuat data yang dimaksud "
+                          f"kalimat ini — {review.explanation}"),
+        }), "to_inconclusive"
+    if review.match != "persis":
+        return unchanged
+    read = read_cells(review.cells, codes)
+    if read is None:
+        return unchanged
+    src, keyed = read
+    rows = [label for label, _s, _v in keyed]
+    if use_guard and not subject_is_covered(review.subject, result.context_quote, rows, src):
+        return unchanged
+    engine = _evaluate_on_cells(result, review.operation or result.operation, src, keyed)
+    if engine.verdict == "Inconclusive" or (engine.verdict == "Entailed") != (review.verdict == "sesuai"):
+        return unchanged
+    cells = _cells_note(src, keyed)
+    accepted = engine.model_copy(update={
+        "resolved_via": "ai_review",
+        "reasoning": f"{engine.reasoning} | Ditinjau AI: sel {cells} — {review.explanation}",
+    })
+    if engine.verdict == "Entailed":
+        return accepted, "to_entailed"
+    if result.verdict == "Refuted":
+        return unchanged
+    if new_refuted == "verdict":
+        return accepted, "to_refuted"
+    return result.model_copy(update={
+        "resolved_via": "ai_review_flag",
+        "reasoning": (f"{result.reasoning} | Ditinjau AI: kemungkinan tidak sesuai — sel {cells} "
+                      f"memberi {engine.computed_value}, klaim {result.claimed_value}; perlu ditinjau"),
+    }), "flag"
