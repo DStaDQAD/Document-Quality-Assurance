@@ -74,3 +74,36 @@ Labels were checked by the author only; the human spot-check of 10 labels is sti
 `AI_REVIEW_THINKING_BUDGET=1024`, `AI_REVIEW_NEW_REFUTED=note`. Every gate passes except stability as written; its
 failure is in how many claims get fixed, never in a wrong verdict. Whether that is enough to start Part B is the
 user's decision.
+
+## Part B regression (2026-10-12, branch `ai-review`, `AI_REVIEW=1`)
+
+Every publication end to end through `/api/verify-paired` once, with the shipped stage (parallel batches,
+re-ask of unanswered claims, the three prompt clarifications). Instead of a second same-day run of `main`,
+each claim the stage changed carries `resolved_via = ai_review` / `ai_review_flag`, so the code-path verdict
+of every other claim is exactly what `main` produces in that run; claims the code judged Sesuai are never
+reviewed. All 114 changed claims were checked by hand.
+
+| Publication | Facts | Sesuai | Tidak Sesuai | Tidak Cukup Data | → Sesuai by AI | → TCD by AI |
+|---|---|---|---|---|---|---|
+| npi | 323 | 66 | 12 | 245 | 7 | 17 |
+| pii | 85 | 39 | 2 | 44 | 16 | 2 |
+| pmi | 52 | 41 | 7 | 4 | 6 | 0 |
+| skdu | 179 | 138 | 5 | 36 | 34 | 0 |
+| sbank | 46 | 38 | 1 | 7 | 4 | 0 |
+| shpr | 64 | 21 | 0 | 43 | 0 | 0 |
+| sk | 83 | 55 | 2 | 26 | 1 | 3 |
+| spe | 71 | 55 | 0 | 16 | 18 | 0 |
+| sulni | 17 | 14 | 0 | 3 | 0 | 0 |
+| uang-beredar | 84 | 21 | 2 | 61 | 0 | 3 |
+| uang-primer-m0 | 95 | 33 | 5 | 57 | 0 | 3 |
+| cadangan-devisa | 3 | 3 | 0 | 0 | 0 | 0 |
+| **Total** | 1102 | 524 | 36 | 542 | **86** | **28** |
+
+- → Sesuai: 85/86 correct (98,8%). The wrong one: NPI "defisit neraca minyak 10,2 miliar USD" read off the
+  Migas row (−10.180); oil is not oil-and-gas, and the Q1 figures (6,0 vs −5.087) show the Q2 match is a
+  coincidence. This is the case the subject guard caught before it was limited to new Tidak Sesuai.
+- → Tidak Cukup Data: 27/28 (96%). The miss: PII "KFLN surat utang 27,3%" — truly Sesuai (27,26%), was a
+  wrong Tidak Sesuai; now Tidak Cukup Data.
+- New Tidak Sesuai: none. No flags.
+- The regression also showed `_compute_ratio` raising (contained) on 3-cell "ratio" answers; such answers are
+  now refused before the engine.

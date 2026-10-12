@@ -150,6 +150,13 @@ pip install -r requirements.txt
    - `LLM_PROVIDER=ollama` - runs fully locally, no API key (requires Ollama running with the
      configured model pulled).
    - `LLM_PROVIDER=groq` or `LLM_PROVIDER=google` - set the matching `*_API_KEY`.
+   - (Optional) `AI_REVIEW=1` turns on the Tinjauan AI stage (`ai_review.py`): after the code
+     checks, an LLM takes a second look at the claims left Tidak Sesuai / Tidak Cukup Data, and
+     code re-runs the comparison on the cells it cites before any verdict changes. Off by default.
+     `AI_REVIEW_NEW_REFUTED=note` (default) only notes a Tidak Sesuai the AI finds on a Tidak Cukup
+     Data claim; `verdict` lets it stand. `AI_REVIEW_THINKING_BUDGET` (default `1024`; `0` off,
+     `-1` model default) is the Gemini thinking budget of this stage only. Measured results:
+     `docs/ai-review-eval.md`.
 2. Seed the dummy SQL tables:
    ```bash
    python setup_db.py
