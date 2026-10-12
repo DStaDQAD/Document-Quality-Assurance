@@ -15,6 +15,7 @@ of answer can be proved (spike 2026-10-12; spec docs/superpowers/specs/2026-10-1
   verdict stays and the claim is only flagged "perlu ditinjau".
 """
 
+import asyncio
 import logging
 from collections import Counter
 from dataclasses import dataclass, field
@@ -38,6 +39,8 @@ logger = logging.getLogger(__name__)
 YEARS_SHOWN = 2
 # Claims per call. The tables are re-sent with every batch, so bigger batches are cheaper.
 BATCH_SIZE = 30
+# Batches asked at the same time (see ask_reviews).
+MAX_PARALLEL_BATCHES = 8
 
 # Origins whose cells are real reference data. Chart labels are the report checking itself, and
 # another uploaded PDF is only ever a fallback in the code path; neither is offered here.
@@ -350,15 +353,25 @@ async def ask_reviews(
     """The model's answer per claim index. A batch that fails is logged and left unanswered."""
     tables = "\n\n".join(table_markdown(code, src) for code, src in codes.items())
     chain = PROMPT | llm.with_structured_output(ReviewBatch)
-    answers: Dict[int, ClaimReview] = {}
-    for start in range(0, len(indices), batch_size):
-        batch = indices[start:start + batch_size]
+    # Batches are independent, so they are asked together: one after another, NPI's nine took
+    # 216 s on 2026-10-12. The cap keeps a long report from bursting the provider's rate limit.
+    limit = asyncio.Semaphore(MAX_PARALLEL_BATCHES)
+
+    async def _ask(batch_no: int, batch: List[int]):
         claims = "\n".join(_claim_line(n, results[i]) for n, i in enumerate(batch, 1))
-        try:
-            reply = await chain.ainvoke({"tables": tables, "claims": claims})
-        except Exception:
-            logger.warning("Tinjauan AI: batch %d gagal; klaimnya tetap dengan vonis kode",
-                           start // batch_size + 1, exc_info=True)
+        async with limit:
+            try:
+                return batch, await chain.ainvoke({"tables": tables, "claims": claims})
+            except Exception:
+                logger.warning("Tinjauan AI: batch %d gagal; klaimnya tetap dengan vonis kode",
+                               batch_no, exc_info=True)
+                return batch, None
+
+    batches = [indices[s:s + batch_size] for s in range(0, len(indices), batch_size)]
+    replies = await asyncio.gather(*(_ask(n, b) for n, b in enumerate(batches, 1)))
+    answers: Dict[int, ClaimReview] = {}
+    for batch, reply in replies:
+        if reply is None:
             continue
         for review in reply.reviews:
             if 1 <= review.claim_no <= len(batch):

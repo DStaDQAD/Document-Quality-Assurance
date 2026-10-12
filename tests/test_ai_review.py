@@ -315,3 +315,26 @@ def test_review_claims_without_reviewable_sources_makes_no_call():
     reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT, origin="chart")], llm))
     assert reviewed == results
     llm.with_structured_output.assert_not_called()
+
+
+def test_batches_are_asked_in_parallel():
+    # NPI sends ~9 batches; asked one after another they took 216 s (2026-10-12).
+    import threading
+    import time
+
+    lock, state = threading.Lock(), {"now": 0, "peak": 0}
+
+    def _respond(_prompt_value):
+        with lock:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        time.sleep(0.2)
+        with lock:
+            state["now"] -= 1
+        return ReviewBatch(reviews=[])
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    results = [_result() for _ in range(3)]
+    asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=1))
+    assert state["peak"] > 1
