@@ -361,3 +361,13 @@ def test_unanswered_claims_are_not_asked_a_third_time():
     llm = _llm_answering(lambda n: ReviewBatch(reviews=[]), calls)
     asyncio.run(review_claims([_result(verdict="Refuted")], [_source(_KREDIT)], llm))
     assert len(calls) == 2
+
+
+def test_the_prompt_spells_out_the_readings_that_split_the_two_runs():
+    # 2026-10-12, t1024a vs t1024b: the model read "kewajiban neto menurun" off −223 → −197 as a
+    # rise, "sub-LU tumbuh (SBT 0,59%)" as a rise on the quarter, and could not always place
+    # "IEP Oktober" in the July column of "3 bulan yang akan datang".
+    from ai_review import SYSTEM
+    assert "−223.049 ke −197.431" in SYSTEM
+    assert "SBT" in SYSTEM and "bernilai positif" in SYSTEM
+    assert "3 bulan yang akan datang" in SYSTEM and "Oktober" in SYSTEM

@@ -316,7 +316,15 @@ Untuk SETIAP klaim, isi kolom berurutan:
 
 Catatan tentang tabel:
 - Laporan menulis besarnya defisit atau kewajiban neto sebagai angka positif; tabel menyimpannya
-  negatif. Impor (debit) juga disimpan negatif.
+  negatif. Impor (debit) juga disimpan negatif. "Menurun", "menyempit", "melebar" untuk defisit
+  atau kewajiban neto bicara tentang BESARNYA: dari −223.049 ke −197.431 berarti kewajiban neto
+  menurun (sesuai), walaupun angka di tabel naik.
+- Pada Saldo Bersih Tertimbang (SBT), "tumbuh", "meningkat" atau "ekspansi" TANPA pembanding
+  periode lain berarti SBT bernilai positif; "terkontraksi" atau "turun" tanpa pembanding berarti
+  SBT negatif. Hanya bila kalimat membandingkan dengan periode lain ("lebih tinggi dari triwulan
+  sebelumnya") itu perbandingan dua sel.
+- Kolom ekspektasi "X bulan yang akan datang" pada bulan survei B adalah ekspektasi untuk bulan
+  B+X: nilai "3 bulan yang akan datang" di kolom Juli 2026 adalah ekspektasi Oktober 2026.
 - Satuan klaim (juta/miliar/triliun) boleh berbeda dari satuan tabel; program yang mengonversi.
   Salin nilai sel apa adanya.
 - Laporan membulatkan ke 1-2 desimal; selisih karena pembulatan dianggap sesuai.
