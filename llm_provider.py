@@ -24,6 +24,10 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # positive token cap. NOTE: gemini-2.5-pro rejects 0 (it cannot disable thinking) — use
 # -1 or >=128 if GEMINI_MODEL is ever pointed at pro.
 GEMINI_THINKING_BUDGET = int(os.getenv("GEMINI_THINKING_BUDGET", "0"))
+# The Tinjauan AI stage (ai_review.py) is the one call that has to REASON: deciding whether a
+# sentence's "impor minyak" is the table's "Migas > Impor" row is not pattern matching. It gets
+# its own budget so turning it on does not slow down extraction, typo verdicts or the pointer.
+AI_REVIEW_THINKING_BUDGET = int(os.getenv("AI_REVIEW_THINKING_BUDGET", "1024"))
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
@@ -57,11 +61,15 @@ if LLM_PROVIDER != "ollama":
         )
 
 
-def _gemini_thinking_kwargs() -> dict:
+def _thinking_kwargs(budget: int) -> dict:
     """thinking_budget kwarg for ChatGoogleGenerativeAI, or {} when -1 (model default)."""
-    if GEMINI_THINKING_BUDGET >= 0:
-        return {"thinking_budget": GEMINI_THINKING_BUDGET}
+    if budget >= 0:
+        return {"thinking_budget": budget}
     return {}
+
+
+def _gemini_thinking_kwargs() -> dict:
+    return _thinking_kwargs(GEMINI_THINKING_BUDGET)
 
 
 Callbacks = Optional[List[BaseCallbackHandler]]
@@ -98,6 +106,24 @@ def get_llm(temperature: float = 0.0, callbacks: Callbacks = None) -> BaseChatMo
         temperature=temperature,
         google_api_key=GOOGLE_API_KEY,
         **_gemini_thinking_kwargs(),
+        **_callback_kwargs(callbacks),
+    )
+
+
+def get_review_llm(thinking_budget: Optional[int] = None, callbacks: Callbacks = None) -> BaseChatModel:
+    """Chat model for the Tinjauan AI stage — get_llm, plus a thinking budget on Gemini.
+
+    thinking_budget overrides AI_REVIEW_THINKING_BUDGET (the eval runner compares budgets).
+    Other providers have no such knob and get the ordinary model.
+    """
+    if LLM_PROVIDER != "google":
+        return get_llm(temperature=0.0, callbacks=callbacks)
+    budget = AI_REVIEW_THINKING_BUDGET if thinking_budget is None else thinking_budget
+    return ChatGoogleGenerativeAI(
+        model=GEMINI_MODEL,
+        temperature=0.0,
+        google_api_key=GOOGLE_API_KEY,
+        **_thinking_kwargs(budget),
         **_callback_kwargs(callbacks),
     )
 
