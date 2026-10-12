@@ -78,7 +78,7 @@ import check_history
 from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
 from excel_parser_bi import list_sheet_names
 from excel_ingestion import ingest_bytes
-from llm_provider import get_llm, get_vision_llm
+from llm_provider import get_llm, get_review_llm, get_vision_llm
 from perf_log import StageTimer, log_perf, usage_totals
 from orchestrator import verify_document
 from paired_verifier import verify_paired
@@ -169,6 +169,19 @@ _OPEN_API_PATHS = {"/api/auth-status", "/api/login", "/api/logout"}
 
 def _auth_enabled() -> bool:
     return bool(os.getenv("APP_USERNAME") and os.getenv("APP_PASSWORD"))
+
+
+def _ai_review_enabled() -> bool:
+    """AI_REVIEW=1/on/true runs the Tinjauan AI stage (ai_review.py). Off unless set: it adds an
+    LLM call to every check, so it is opted into, not out of."""
+    return os.getenv("AI_REVIEW", "").strip().lower() in ("1", "on", "true", "yes")
+
+
+def _ai_review_new_refuted() -> str:
+    """What a Tidak Sesuai found by the AI on a Tidak Cukup Data claim becomes: a flag ("note",
+    the default) or the verdict ("verdict"). Anything else falls back to the safe default."""
+    value = os.getenv("AI_REVIEW_NEW_REFUTED", "note").strip().lower()
+    return value if value in ("note", "verdict") else "note"
 
 
 def _session_secret() -> bytes:
@@ -802,6 +815,8 @@ async def _run_paired_pipeline(
             chart_readings=chart_readings,
             chart_pages_unread=chart_pages_unread,
             publication=publication,
+            review_llm=(get_review_llm(callbacks=callbacks) if _ai_review_enabled() else None),
+            review_new_refuted=_ai_review_new_refuted(),
         ),
         _maybe_typo_check(),
     )

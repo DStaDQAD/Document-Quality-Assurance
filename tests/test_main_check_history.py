@@ -241,3 +241,48 @@ def test_history_endpoints_need_a_session_when_login_is_on(monkeypatch):
     fresh = TestClient(main.app)
     assert fresh.get("/api/history").status_code == 401
     assert fresh.get("/api/history/abc").status_code == 401
+
+
+def test_ai_review_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW", raising=False)
+    assert main._ai_review_enabled() is False
+
+
+@pytest.mark.parametrize("value", ["1", "on", "ON", "true"])
+def test_ai_review_turns_on_from_the_environment(monkeypatch, value):
+    monkeypatch.setenv("AI_REVIEW", value)
+    assert main._ai_review_enabled() is True
+
+
+def test_new_refuted_policy_defaults_to_note_and_rejects_typos(monkeypatch):
+    monkeypatch.delenv("AI_REVIEW_NEW_REFUTED", raising=False)
+    assert main._ai_review_new_refuted() == "note"
+    monkeypatch.setenv("AI_REVIEW_NEW_REFUTED", "verdict")
+    assert main._ai_review_new_refuted() == "verdict"
+    monkeypatch.setenv("AI_REVIEW_NEW_REFUTED", "verdik")
+    assert main._ai_review_new_refuted() == "note"
+
+
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_the_pipeline_passes_no_review_model_when_ai_review_is_off(mock_vision, mock_extract, mock_verify, monkeypatch):
+    monkeypatch.delenv("AI_REVIEW", raising=False)
+    _mock_pipeline(mock_vision, mock_extract, mock_verify)
+    client.post("/api/verify-paired", params={"run_typo_check": "false"}, files=[_PDF, _XLS])
+    assert mock_verify.call_args.kwargs["review_llm"] is None
+
+
+@patch("main.get_review_llm")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_the_pipeline_passes_the_review_model_when_ai_review_is_on(
+    mock_vision, mock_extract, mock_verify, mock_review_llm, monkeypatch
+):
+    monkeypatch.setenv("AI_REVIEW", "1")
+    monkeypatch.setenv("AI_REVIEW_NEW_REFUTED", "verdict")
+    _mock_pipeline(mock_vision, mock_extract, mock_verify)
+    client.post("/api/verify-paired", params={"run_typo_check": "false"}, files=[_PDF, _XLS])
+    assert mock_verify.call_args.kwargs["review_llm"] is mock_review_llm.return_value
+    assert mock_verify.call_args.kwargs["review_new_refuted"] == "verdict"
