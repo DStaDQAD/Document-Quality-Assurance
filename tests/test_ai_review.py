@@ -83,3 +83,40 @@ def test_read_cells_rejects_cells_from_two_sheets_or_none_at_all():
     ]
     assert read_cells(cited, codes) is None
     assert read_cells([], codes) is None
+
+
+from ai_review import subject_is_covered
+
+_NPI = _table(title="Neraca Pembayaran Indonesia", unit="Juta USD", data={
+    ("Migas > Impor", 2026, "Q2"): -9000.0,
+    ("Kredit Pemilikan Rumah", 2026, "Q2"): 1.0,
+})
+
+
+def test_the_subject_must_be_copied_from_the_sentence():
+    quote = "Impor minyak mentah turun pada triwulan II 2026."
+    assert not subject_is_covered("impor migas", quote, ["Migas > Impor"], _source(_NPI))
+
+
+def test_a_subject_word_missing_from_row_and_title_fails():
+    quote = "Impor minyak mentah turun pada triwulan II 2026."
+    assert not subject_is_covered("Impor minyak mentah", quote, ["Migas > Impor"], _source(_NPI))
+
+
+def test_subject_words_found_in_the_row_path_or_title_pass():
+    quote = "Impor migas turun pada triwulan II 2026."
+    assert subject_is_covered("Impor migas", quote, ["Migas > Impor"], _source(_NPI))
+    quote = "Neraca pembayaran impor migas turun."
+    assert subject_is_covered("Neraca pembayaran impor migas", quote, ["Migas > Impor"], _source(_NPI))
+
+
+def test_a_derivational_prefix_counts_as_the_same_word():
+    quote = "Kredit kepemilikan rumah tumbuh 5%."
+    assert subject_is_covered("Kredit kepemilikan rumah", quote, ["Kredit Pemilikan Rumah"], _source(_NPI))
+
+
+def test_generic_words_and_numbers_are_ignored():
+    quote = "Pertumbuhan kredit modal kerja tahunan 2026 tercatat 10%."
+    assert subject_is_covered(
+        "Pertumbuhan kredit modal kerja tahunan 2026", quote, ["Kredit Modal Kerja"], _source(_KREDIT)
+    )

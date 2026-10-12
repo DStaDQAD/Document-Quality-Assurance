@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from excel_parser_bi import BITableData
 from paired_verifier import _ExcelSource, _period_ordinal
+from table_model import TableData, _label_words, _same_root, _sig_words
 
 logger = logging.getLogger(__name__)
 
@@ -117,3 +118,33 @@ def read_cells(
             return None
         keyed.append((label, suffix, value))
     return src, keyed
+
+
+# Words that say HOW a series moved or is measured, never WHICH series it is. A subject made
+# only of these ("pertumbuhan tahunan") puts no constraint on the row, which is intended: the
+# engine still has to reproduce the number.
+_GENERIC_SUBJECT_WORDS = TableData._TITLE_STOP_WORDS | frozenset({
+    "nilai", "sebesar", "tumbuh", "tahunan", "yoy", "mtm", "qtq", "persen", "triliun", "miliar",
+    "juta", "usd", "dolar", "rupiah", "meningkat", "menurun", "naik", "turun", "kenaikan",
+    "penurunan", "bulan", "triwulan", "tahun", "periode", "sebelumnya", "level", "indeks",
+    "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september",
+    "oktober", "november", "desember",
+})
+
+
+def subject_is_covered(subject: str, quote: str, rows: List[str], src: _ExcelSource) -> bool:
+    """True when the subject is the sentence's own words and every significant one of them is
+    in a cited row (its 'Parent > ' path included), the table title or the sheet name.
+
+    This is the deterministic backstop for the one mistake the spike showed the model makes
+    despite being told not to: answering a breakdown ("impor minyak") with its total row
+    ("Migas > Impor"). Words are compared whole or one derivational prefix apart
+    (_same_root), so 'kepemilikan' meets 'Pemilikan' but 'usaha' never meets 'Perusahaan'.
+    An abbreviation the table spells out differently (KPR) fails the guard — the verdict then
+    simply stays as the code left it.
+    """
+    if not subject.strip() or _norm(subject) not in _norm(quote):
+        return False
+    words = [w for w in _sig_words(subject) if w not in _GENERIC_SUBJECT_WORDS and not w.isdigit()]
+    known = _label_words(" ".join(rows) + " " + src.table.title + " " + src.sheet)
+    return all(any(_same_root(w, k) for k in known) for w in words)
