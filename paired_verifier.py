@@ -942,7 +942,14 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             ),
         )
 
-    computed = round((curr_raw - prior_raw) / abs(prior_raw) * 100, 4)
+    # A row stored negative — a debit such as imports in SEKI V.1, or a deficit — grows when its
+    # SIZE grows: imports -48.487 -> -58.323 are up 20,3%, which the signed formula read as -20,3%.
+    size_note = ""
+    if curr_raw < 0 and prior_raw < 0:
+        computed = round((abs(curr_raw) - abs(prior_raw)) / abs(prior_raw) * 100, 4)
+        size_note = ", dihitung dari besarnya karena baris ini bernilai negatif"
+    else:
+        computed = round((curr_raw - prior_raw) / abs(prior_raw) * 100, 4)
     tolerance = _growth_tolerance(curr_raw, prior_raw)
     delta, verdict = _numeric_verdict(fact.claimed_value, computed, tolerance)
     periods = [current_period, PeriodResult(metric_label=prior_label, year=prior_year, month=p.month, excel_value=round(prior_raw, 4))]
@@ -951,7 +958,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
         reasoning=(
             f"PDF: {fact.claimed_value}% yoy | "
             f"Excel [{matched_source}] ({matched_label}): {computed}% yoy "
-            f"({curr_raw:.2f} vs {prior_raw:.2f} {src.table.unit}) | "
+            f"({curr_raw:.2f} vs {prior_raw:.2f} {src.table.unit}{size_note}) | "
             f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {tolerance}%"
         ),
     )

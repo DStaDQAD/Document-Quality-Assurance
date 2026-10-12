@@ -2868,3 +2868,37 @@ def test_a_value_claim_without_a_unit_is_checked_against_a_growth_table_without_
     result = _evaluate_fact(fact, [_make_source(table)])
 
     assert result.verdict == "Entailed"
+
+
+def _debit_yoy_case(claimed, prior=-48487.59, current=-58322.94):
+    # SEKI V.1 records imports (a debit) as negative numbers.
+    table = _make_table(
+        title="Neraca Pembayaran Indonesia", unit="Juta USD",
+        data={("Nonmigas > Impor", 2025, "Q2"): prior, ("Nonmigas > Impor", 2026, "Q2"): current},
+    )
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=claimed, unit="persen",
+        context_quote=f"impor nonmigas tumbuh {claimed}% (yoy)",
+        periods=[_make_period(metric_label="Nonmigas > Impor", month="Q2")],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+def test_growth_of_a_row_stored_negative_is_the_growth_of_its_size():
+    # NPI e2e: imports -48.487 -> -58.323 is a 20,3% rise; signed it read as -20,3%.
+    result = _debit_yoy_case(20.3)
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(20.2843, abs=1e-3)
+
+
+def test_the_opposite_sign_on_a_negative_row_is_still_wrong():
+    result = _debit_yoy_case(-20.3)
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_shrinking_debit_row_reads_as_a_fall():
+    result = _debit_yoy_case(-16.9, prior=-58322.94, current=-48487.59)
+
+    assert result.verdict == "Entailed"
