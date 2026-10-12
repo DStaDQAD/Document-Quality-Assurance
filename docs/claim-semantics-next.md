@@ -98,3 +98,16 @@ bisa membuat Tidak Sesuai baru. Uji ini menemukan dua hal yang lalu diperbaiki:
 
 Temuan tambahan: aturan F membaca label buatan LLM; bila LLM membuang kata topiknya ("SBT
 PERDAGANGAN …" untuk kalimat tentang SBT harga jual), klaim tetap jatuh ke tabel yang salah.
+
+### Lanjutan 2026-10-12 (branch `fix-pending-findings`)
+
+- Temuan 3 (tanda pertumbuhan baris debit) **diperbaiki**: bila nilai sekarang dan tahun lalu
+  sama-sama negatif, yoy dihitung dari besarnya. NPI e2e: impor nonmigas −20,28% → +20,28%. Klaim
+  impor yang tersisa tetap Tidak Sesuai karena angkanya memang beda (17,6 vs 20,28; "impor barang
+  modal" jatuh ke baris impor total) — kemungkinan beda basis, perlu dicek manual.
+- Temuan 1 (pointer ke sel total) **diperbaiki untuk rincian di belakang**: kata klaim setelah
+  kata terakhir yang dicakup baris tunjukan, yang tidak ada di sel/judul mana pun di sheet,
+  menolak pointer ("impor minyak mentah", "ekspor LNG"). Belum tertangani: baris tunjukan yang
+  tidak mencakup satu kata pun ("Defisit neraca minyak" → baris Migas, lolos lewat kata 'neraca'
+  di judul) — memperketatnya berisiko memblokir singkatan murni ("Kredit Pemilikan Rumah" → 'KPR/KPA').
+- Sumber Excel PMI diisi di `PUBLICATIONS` (static/index.html).
