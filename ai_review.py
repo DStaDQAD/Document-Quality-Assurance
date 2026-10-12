@@ -16,8 +16,12 @@ of answer can be proved (spike 2026-10-12; spec docs/superpowers/specs/2026-10-1
 """
 
 import logging
+from collections import Counter
+from dataclasses import dataclass, field
 from typing import Dict, List, Literal, Optional, Tuple
 
+from langchain_core.language_models import BaseChatModel
+from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
 from excel_parser_bi import BITableData
@@ -269,3 +273,133 @@ def judge_review(
         "reasoning": (f"{result.reasoning} | Ditinjau AI: kemungkinan tidak sesuai — sel {cells} "
                       f"memberi {engine.computed_value}, klaim {result.claimed_value}; perlu ditinjau"),
     }), "flag"
+
+
+class ReviewBatch(BaseModel):
+    reviews: List[ClaimReview]
+
+
+SYSTEM = """Kamu memeriksa ulang klaim angka dari laporan statistik Bank Indonesia terhadap tabel
+sumbernya. Program sudah memeriksa klaim-klaim ini dan hasilnya Tidak Sesuai atau Tidak Cukup
+Data. Tugasmu: apakah tabel benar-benar memuat data yang dimaksud kalimat, dan jika ya, sel mana.
+
+Untuk SETIAP klaim, isi kolom berurutan:
+1. subject: frasa yang menyebut APA yang diukur, disalin PERSIS dari kalimat (mis. "impor minyak
+   mentah", "kredit modal kerja", "IKK"). Jangan diganti dengan nama baris tabel.
+2. Pilih baris yang paling cocok, lalu isi word_check: setiap kata penting subject, dan apakah
+   kata itu ada di label baris, induk barisnya (bagian sebelum " > "), atau judul tabel.
+   Contoh: "impor: ada; minyak: tidak ada; mentah: tidak ada".
+3. match:
+   - persis: baris itu mengukur hal yang sama dengan subject (semua kata penting ada, atau
+     singkatan resminya, mis. KPR = Kredit Pemilikan Rumah).
+   - total_atau_induk: baris itu total atau induk dari yang dimaksud. Contoh: klaim "impor
+     minyak", baris "Migas > Impor"; klaim "remitansi pekerja migran", baris "Pendapatan Sekunder".
+   - mirip: topik serupa tapi ukurannya lain. Contoh: sisi aset saja untuk posisi neto; tabel
+     pertumbuhan yoy untuk laju mtm/qtq; nilai nominal untuk klaim riil.
+   - tidak_ada: tidak ada baris yang relevan.
+4. verdict: "sesuai" atau "tidak_sesuai" HANYA boleh bila match = persis. Untuk match lain,
+   jawab "tidak_ada_di_tabel". JIKA RAGU, jawab "tidak_ada_di_tabel" — itu jawaban yang aman.
+5. operation dan cells: sebutkan SEMUA sel yang dipakai (kode sheet, label baris, header kolom,
+   nilai) persis seperti tertulis di tabel. Sel kosong tidak boleh dipakai.
+   value = angka langsung · yoy_growth = sel tahun lalu lalu sel sekarang · diff = lama lalu baru ·
+   sum · average · ratio = pembilang lalu penyebut (persen) · is_increasing / is_decreasing /
+   is_stable = sel urut waktu · above_threshold / below_threshold = sel yang dibandingkan dengan
+   angka ambang di klaim.
+6. explanation: alasan singkat, maksimal 2 kalimat.
+
+Catatan tentang tabel:
+- Laporan menulis besarnya defisit atau kewajiban neto sebagai angka positif; tabel menyimpannya
+  negatif. Impor (debit) juga disimpan negatif.
+- Satuan klaim (juta/miliar/triliun) boleh berbeda dari satuan tabel; program yang mengonversi.
+  Salin nilai sel apa adanya.
+- Laporan membulatkan ke 1-2 desimal; selisih karena pembulatan dianggap sesuai.
+- claim_no sama dengan nomor klaim, dan first_words adalah 5 kata pertama kalimatnya."""
+
+PROMPT = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM),
+    ("human", "TABEL:\n{tables}\n\nKLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor."),
+])
+
+
+def review_candidates(results: List[FactVerificationResult]) -> List[int]:
+    """Narrative claims the code did not confirm. Chart labels are left to the chart checks."""
+    return [
+        i for i, r in enumerate(results)
+        if r.verdict in ("Refuted", "Inconclusive") and r.checked_item == "narrative"
+    ]
+
+
+def _claim_line(n: int, r: FactVerificationResult) -> str:
+    quote = " ".join((r.context_quote or "").split())[:400]
+    value = "-" if r.claimed_value is None else f"{r.claimed_value} {r.claimed_unit or ''}".strip()
+    return (f'{n}. Kalimat: "{quote}" | metrik menurut ekstraktor: {r.metric_label} | '
+            f"angka diperiksa: {value} | operasi ekstraktor: {r.operation}")
+
+
+async def ask_reviews(
+    results: List[FactVerificationResult],
+    indices: List[int],
+    codes: Dict[str, _ExcelSource],
+    llm: BaseChatModel,
+    batch_size: int = BATCH_SIZE,
+) -> Dict[int, ClaimReview]:
+    """The model's answer per claim index. A batch that fails is logged and left unanswered."""
+    tables = "\n\n".join(table_markdown(code, src) for code, src in codes.items())
+    chain = PROMPT | llm.with_structured_output(ReviewBatch)
+    answers: Dict[int, ClaimReview] = {}
+    for start in range(0, len(indices), batch_size):
+        batch = indices[start:start + batch_size]
+        claims = "\n".join(_claim_line(n, results[i]) for n, i in enumerate(batch, 1))
+        try:
+            reply = await chain.ainvoke({"tables": tables, "claims": claims})
+        except Exception:
+            logger.warning("Tinjauan AI: batch %d gagal; klaimnya tetap dengan vonis kode",
+                           start // batch_size + 1, exc_info=True)
+            continue
+        for review in reply.reviews:
+            if 1 <= review.claim_no <= len(batch):
+                answers.setdefault(batch[review.claim_no - 1], review)
+    return answers
+
+
+@dataclass
+class ReviewStats:
+    candidates: int = 0
+    answered: int = 0
+    outcomes: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def changed(self) -> int:
+        return sum(n for kind, n in self.outcomes.items() if kind.startswith("to_"))
+
+    @property
+    def flagged(self) -> int:
+        return self.outcomes.get("flag", 0)
+
+
+async def review_claims(
+    results: List[FactVerificationResult],
+    sources: List[_ExcelSource],
+    llm: BaseChatModel,
+    *,
+    new_refuted: str = "note",
+    use_guard: bool = True,
+    batch_size: int = BATCH_SIZE,
+) -> Tuple[List[FactVerificationResult], ReviewStats]:
+    """Every unconfirmed narrative claim, after the model's second look and code's judgement."""
+    codes = reviewable_sources(sources)
+    indices = review_candidates(results)
+    stats = ReviewStats(candidates=len(indices))
+    if not codes or not indices:
+        return list(results), stats
+    answers = await ask_reviews(results, indices, codes, llm, batch_size)
+    stats.answered = len(answers)
+    reviewed = list(results)
+    counts: Counter = Counter()
+    for i, review in answers.items():
+        reviewed[i], outcome = judge_review(
+            results[i], review, codes, new_refuted=new_refuted, use_guard=use_guard
+        )
+        counts[outcome] += 1
+    stats.outcomes = dict(counts)
+    return reviewed, stats

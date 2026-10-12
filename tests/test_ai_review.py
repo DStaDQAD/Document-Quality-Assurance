@@ -240,3 +240,61 @@ def test_a_swapped_claim_number_is_ignored():
     original = _result(verdict="Refuted")
     review = _review(first_words="Penjualan eceran pada Juni 2026")
     assert judge_review(original, review, _CODES) == (original, "unchanged")
+
+
+import asyncio
+
+from ai_review import ReviewBatch, review_candidates, review_claims
+
+
+def _llm_answering(answer_for_batch, calls):
+    def _respond(prompt_value):
+        calls.append(prompt_value.to_string())
+        return answer_for_batch(len(calls))
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    return llm
+
+
+def test_review_candidates_are_the_narrative_claims_the_code_did_not_confirm():
+    results = [
+        _result(verdict="Entailed"), _result(verdict="Refuted"), _result(),
+        _result().model_copy(update={"checked_item": "chart"}),
+    ]
+    assert review_candidates(results) == [1, 2]
+
+
+def test_review_claims_batches_claims_and_maps_answers_back():
+    results = [_result(verdict="Entailed"), _result(verdict="Refuted"), _result(), _result()]
+    calls = []
+    llm = _llm_answering(lambda n: ReviewBatch(reviews=[_review(claim_no=1)]), calls)
+
+    reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=2))
+
+    assert len(calls) == 2                     # 3 candidates, 2 per batch
+    assert all("### S1 — sheet 'Tabel 1'" in c for c in calls)
+    assert "1. Kalimat: \"Kredit modal kerja pada Juni 2026" in calls[0]
+    # Each reply answers its batch's claim 1: indices 1 and 3. Index 2 got no answer.
+    assert [r.verdict for r in reviewed] == ["Entailed", "Entailed", "Inconclusive", "Entailed"]
+    assert (stats.candidates, stats.answered, stats.changed) == (3, 2, 2)
+
+
+def test_a_failed_batch_keeps_the_code_verdicts():
+    def _raise(_prompt_value):
+        raise RuntimeError("quota")
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_raise))
+    results = [_result(verdict="Refuted")]
+    reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT)], llm))
+    assert reviewed == results
+    assert stats.answered == 0
+
+
+def test_review_claims_without_reviewable_sources_makes_no_call():
+    llm = Mock()
+    results = [_result(verdict="Refuted")]
+    reviewed, stats = asyncio.run(review_claims(results, [_source(_KREDIT, origin="chart")], llm))
+    assert reviewed == results
+    llm.with_structured_output.assert_not_called()
