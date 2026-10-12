@@ -3020,6 +3020,8 @@ async def verify_paired(
     chart_readings: Optional[List[ChartReading]] = None,
     chart_pages_unread: Optional[List[int]] = None,
     publication: str = "",
+    review_llm: Optional[BaseChatModel] = None,
+    review_new_refuted: str = "note",
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -3058,6 +3060,10 @@ async def verify_paired(
         publication:    The publication type the checker picked ("sulni", "npi", ...). Its own
                         parser reads the sheets it covers before the generic cascade (see
                         _parse_table_with_fallback); empty means the generic cascade only.
+        review_llm:     Model for the Tinjauan AI stage (ai_review.py); None skips the stage, so
+                        the output is exactly the code path's. Thinking-enabled on Gemini.
+        review_new_refuted: "note" (default) flags a Tidak Sesuai the AI found on a Tidak Cukup
+                        Data claim; "verdict" lets it stand. See ai_review.judge_review.
 
     Returns:
         PairedVerificationResponse with per-fact verdicts.
@@ -3259,6 +3265,23 @@ async def verify_paired(
             for fact, result in zip(facts, results)
         ]
 
+    # Step 3c: Tinjauan AI — a second look at what the code left Tidak Sesuai / Tidak Cukup
+    # Data. Imported here because ai_review builds on this module. Any failure keeps the code's
+    # verdicts: the stage can only ever add to a finished check, never break one.
+    n_reviewed = n_flagged = 0
+    if review_llm is not None:
+        from ai_review import review_candidates, review_claims
+        n_candidates = len(review_candidates(results))
+        if n_candidates:
+            emit("compare", "running", detail=f"tinjauan AI: {n_candidates} klaim")
+            try:
+                results, review_stats = await review_claims(
+                    results, table_sources, review_llm, new_refuted=review_new_refuted
+                )
+                n_reviewed, n_flagged = review_stats.changed, review_stats.flagged
+            except Exception:
+                logger.warning("Tinjauan AI gagal; vonis kode dipertahankan", exc_info=True)
+
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")
     inconclusive = sum(1 for r in results if r.verdict == "Inconclusive")
@@ -3271,6 +3294,10 @@ async def verify_paired(
         compare_detail += f" · grafik: {n_ok} dari {len(chart_checks)} sesuai"
     if n_pointer:
         compare_detail += f" · {n_pointer} via sel AI"
+    if n_reviewed:
+        compare_detail += f" · {n_reviewed} diubah tinjauan AI"
+    if n_flagged:
+        compare_detail += f" · {n_flagged} perlu ditinjau"
     if conflicts:
         compare_detail += f" · {conflicts} sumber bertentangan"
     emit("compare", "done", detail=compare_detail)

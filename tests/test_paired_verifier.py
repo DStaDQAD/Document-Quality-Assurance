@@ -2904,3 +2904,70 @@ def test_a_shrinking_debit_row_reads_as_a_fall():
     result = _debit_yoy_case(-16.9, prior=-58322.94, current=-48487.59)
 
     assert result.verdict == "Entailed"
+
+
+# ---------------------------------------------------------------------------
+# Tinjauan AI stage inside verify_paired
+# ---------------------------------------------------------------------------
+
+from ai_review import ClaimReview, ReviewBatch  # noqa: E402
+
+
+def _review_llm(batch):
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(lambda _p: batch))
+    return llm
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_runs_the_review_stage_on_unconfirmed_claims(mock_parse, mock_extract_facts):
+    # The code path refutes the claim (10.355,1 against 1,0); the AI says the table does not
+    # hold what the sentence means, which turns it Tidak Cukup Data — and the counts follow.
+    mock_parse.return_value = _make_table(data={("Total", 2026, "Apr"): 1.0})
+    mock_extract_facts.return_value = [_make_fact()]
+    review = ClaimReview(
+        claim_no=1, first_words="quote", subject="quote", word_check="-", match="tidak_ada",
+        verdict="tidak_ada_di_tabel", explanation="Tabel tidak memuat metrik ini.",
+    )
+    events = []
+    response = asyncio.run(verify_paired(
+        narrative_text="[== Halaman 1 ==]\n" + "x" * 250,
+        excel_sources=[(b"xls-bytes", "I.1", "TABEL1_1.xls")],
+        llm=Mock(), progress_cb=events.append,
+        review_llm=_review_llm(ReviewBatch(reviews=[review])),
+    ))
+    r = response.results[0]
+    assert (r.verdict, r.resolved_via) == ("Inconclusive", "ai_review")
+    assert (response.refuted_count, response.inconclusive_count) == (0, 1)
+    details = [e.get("detail") or "" for e in events]
+    assert "tinjauan AI: 1 klaim" in details
+    assert any("1 diubah tinjauan AI" in d for d in details)
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_without_review_llm_makes_no_review_call(mock_parse, mock_extract_facts):
+    mock_parse.return_value = _make_table(data={("Total", 2026, "Apr"): 1.0})
+    mock_extract_facts.return_value = [_make_fact()]
+    with patch("ai_review.review_claims") as mock_review:
+        asyncio.run(verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "x" * 250,
+            excel_sources=[(b"xls-bytes", "I.1", "TABEL1_1.xls")], llm=Mock(),
+        ))
+    mock_review.assert_not_called()
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier.parse_bi_table")
+def test_a_failing_review_stage_keeps_the_code_verdicts(mock_parse, mock_extract_facts):
+    mock_parse.return_value = _make_table(data={("Total", 2026, "Apr"): 1.0})
+    mock_extract_facts.return_value = [_make_fact()]   # claims 10355,1 against 1,0 → Refuted
+    with patch("ai_review.review_claims", side_effect=RuntimeError("boom")):
+        response = asyncio.run(verify_paired(
+            narrative_text="[== Halaman 1 ==]\n" + "x" * 250,
+            excel_sources=[(b"xls-bytes", "I.1", "TABEL1_1.xls")], llm=Mock(),
+            review_llm=Mock(),
+        ))
+    assert response.results[0].verdict == "Refuted"
+    assert response.results[0].resolved_via is None
