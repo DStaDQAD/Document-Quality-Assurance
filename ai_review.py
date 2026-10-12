@@ -184,6 +184,12 @@ class ClaimReview(BaseModel):
     explanation: str = Field(description="Alasan singkat, Bahasa Indonesia, maks 2 kalimat")
 
 
+# Operations the engine computes from a fixed number of cells. The model sometimes cites more
+# (two numerators over a total for a "ratio"), which the engine cannot take: such an answer is
+# refused here rather than left to raise inside _evaluate_fact.
+_EXACT_CELLS = {"value": 1, "ratio": 2, "diff": 2}
+
+
 def _same_claim(review: ClaimReview, quote: str) -> bool:
     """The answer is about this sentence: its first words open the sentence too."""
     said = review.first_words.lower().split()[:2]
@@ -255,7 +261,10 @@ def judge_review(
     if read is None:
         return unchanged
     src, keyed = read
-    engine = _evaluate_on_cells(result, review.operation or result.operation, src, keyed)
+    operation = review.operation or result.operation
+    if len(keyed) != _EXACT_CELLS.get(operation, len(keyed)):
+        return unchanged
+    engine = _evaluate_on_cells(result, operation, src, keyed)
     if engine.verdict == "Inconclusive" or (engine.verdict == "Entailed") != (review.verdict == "sesuai"):
         return unchanged
     cells = _cells_note(src, keyed)

@@ -371,3 +371,17 @@ def test_the_prompt_spells_out_the_readings_that_split_the_two_runs():
     assert "−223.049 ke −197.431" in SYSTEM
     assert "SBT" in SYSTEM and "bernilai positif" in SYSTEM
     assert "3 bulan yang akan datang" in SYSTEM and "Oktober" in SYSTEM
+
+
+def test_a_cell_count_the_operation_cannot_take_is_refused_without_an_engine_error(caplog):
+    # 2026-10-12 SULNI/PII: the model cited three cells for a ratio (two numerators over a total);
+    # _compute_ratio raised, the error was contained, and every such answer logged a traceback.
+    review = _review(operation="ratio", cells=[
+        CitedCell(sheet="S1", row="Kredit Modal Kerja", period="Jun 2026", value=110.0),
+        CitedCell(sheet="S1", row="Kredit Konsumsi", period="Jun 2026", value=55.0),
+        CitedCell(sheet="S1", row="Kredit Modal Kerja", period="Jun 2025", value=100.0),
+    ])
+    original = _result(verdict="Refuted", operation="ratio", claimed_value=66.7, unit="persen")
+    with caplog.at_level("ERROR"):
+        assert judge_review(original, review, _CODES) == (original, "unchanged")
+    assert not [r for r in caplog.records if r.levelname == "ERROR"]
