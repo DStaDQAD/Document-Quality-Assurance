@@ -38,9 +38,19 @@ _PERIOD_TOKENS = frozenset(_MONTH_ABBREVS) | frozenset(_QUARTER_CANON)
 
 logger = logging.getLogger("fact-checker")
 
-_SNAPSHOT_ROWS = 20   # rows shown to the LLM
-_SNAPSHOT_COLS = 30   # columns shown to the LLM
-_CELL_TEXT_MAX = 40   # truncate long cell strings in the snapshot
+# _grid_snapshot defaults — the cell pointer passes its own caps (cell_pointer.py).
+_SNAPSHOT_ROWS = 20
+_SNAPSHOT_COLS = 30
+_CELL_TEXT_MAX = 40
+
+# What the structure mapper sees (_structure_snapshot). A BI sheet runs years to the right, so
+# its first 30 columns are long-gone periods: on the 2026-10-13 spike the old 20 x 30 window
+# found 0 of 28 golden values. Every row is shown, with the label columns on the left and the
+# newest periods on the right; the middle is elided.
+_STRUCTURE_ROWS = 300
+_STRUCTURE_LEFT_COLS = 8
+_STRUCTURE_RIGHT_COLS = 40
+_STRUCTURE_CELL_TEXT_MAX = 60
 
 
 # ---------------------------------------------------------------------------
@@ -72,8 +82,13 @@ class _ColumnSpec(BaseModel):
 
 class _TableSpec(BaseModel):
     """Structural map of one sheet. All indices are 0-based."""
-    header_row: int = Field(..., description="0-based index of the (last) header row.")
-    label_col: int = Field(..., description="0-based index of the column holding row labels.")
+    label_cols: List[int] = Field(
+        ...,
+        description=(
+            "Columns holding row names, left to right. A row's name is its RIGHTMOST non-empty "
+            "cell among them; a cell further left is its group."
+        ),
+    )
     data_start_row: int = Field(..., description="0-based index of the first data row.")
     axis_type: Literal["temporal", "categorical"] = Field(
         ...,
@@ -87,35 +102,43 @@ class _TableSpec(BaseModel):
 
 
 _SYSTEM_PROMPT = """\
-You are a precise spreadsheet-structure mapper. You are given a textual snapshot of a
-spreadsheet grid: one line per row, each cell shown as [c]=value with its 0-based column
-index c. Long cells are truncated; empty cells are omitted.
+You are a precise spreadsheet-structure mapper for statistical tables. You are given a textual
+snapshot of a spreadsheet grid: one line per row, each cell shown as [c]=value with its 0-based
+column index c. Long cells are truncated; empty cells are omitted. On a wide sheet only the
+leftmost and the rightmost (newest) columns are shown; '…' marks the skipped middle.
 
 Your task is to return the table's STRUCTURE as a mapping spec — NOT its data:
-  - header_row     : the 0-based row index of the header row (the last one, if stacked)
-  - label_col      : the 0-based column index whose cells name each data row
+  - label_cols     : the columns whose cells name the rows, left to right. Use MORE THAN ONE
+                     when names are spread over several columns: a total in column 0 with its
+                     components indented in column 1, or a group column next to a detail
+                     column. A row's name is its RIGHTMOST non-empty cell among label_cols; a
+                     cell further left is read as its group. Leave out an English-translation
+                     column when an Indonesian one names the same rows.
   - data_start_row : the 0-based row index where data rows begin
-  - axis_type      : 'temporal' if the data columns are calendar months, else 'categorical'
+  - axis_type      : 'temporal' if the data columns are calendar periods, else 'categorical'
   - title / unit   : the table title and measurement-unit annotation if visible (else null)
-  - columns        : EVERY data column with its meaning:
+  - columns        : every SHOWN data column with its meaning:
         period columns    -> kind='period', with year (e.g. 2026) and month as a 3-letter
                              English abbreviation (Jan Feb Mar Apr May Jun Jul Aug Sep Oct
-                             Nov Dec). Indonesian months: Mei=May, Agu/Agustus=Aug, Okt=Oct,
-                             Des=Dec, Peb/Feb=Feb, Mar=Mar, Jan=Jan, Jun=Jun, Jul=Jul.
+                             Nov Dec), or Q1..Q4 for a quarter. Indonesian months: Mei=May,
+                             Agu/Agustus=Aug, Okt=Oct, Des=Dec, Peb/Feb=Feb.
         attribute columns -> kind='attribute', with name copied from the sheet.
 
 Rules:
 1. NEVER copy numeric data values into the spec — only structure (indices, period identities,
    attribute names).
-2. Skip columns that hold row numbers, notes, or free text: list only real data columns.
-3. If year headers appear on a different row than month headers, combine them per column.
-   Quarter headers 'I','II','III','IV' (or Tw/Triwulan/Kuartal forms) under a year row are
-   period columns too: month='Q1'..'Q4' (Triwulan I=Q1 .. Triwulan IV=Q4).
-4. label_col must not be listed in columns.
+2. Skip columns that hold row numbers, units, notes, dates as text, or free text.
+3. A column's period need not be written in its own header. If year headers sit on a different
+   row than month headers, combine them per column. Quarter headers 'I','II','III','IV' (or
+   Tw/Triwulan/Kuartal forms) under a year row are periods: month='Q1'..'Q4'. Relative headers
+   ("Latest Data", "Latest Data -1", "t", "t-1", "Data Terakhir") are periods too: read the
+   date written elsewhere (e.g. a "Date of Latest Observation" cell holding "September/26")
+   and map "Latest Data" to September 2026 and "Latest Data -1" to the month before.
+4. No column may be both in label_cols and in columns.
 """
 
 _HUMAN_TEMPLATE = """\
-Sheet has {n_rows} rows and {n_cols} columns. Snapshot of the first {shown_rows} rows:
+Sheet has {n_rows} rows and {n_cols} columns.
 
 {snapshot}
 """
@@ -155,16 +178,45 @@ def _grid_snapshot(
     return "\n".join(lines)
 
 
-def _layout_fingerprint(grid: List[List]) -> str:
-    """Structural signature: the text/number/empty pattern of the top rows + column count.
+def _structure_snapshot(grid: List[List]) -> str:
+    """What the structure mapper sees: every row (up to _STRUCTURE_ROWS), the leftmost
+    _STRUCTURE_LEFT_COLS columns (where the names are) and the rightmost _STRUCTURE_RIGHT_COLS
+    (the newest periods), with '…' where columns were skipped."""
+    n_cols = max((len(r) for r in grid), default=0)
+    keep = sorted(set(range(min(_STRUCTURE_LEFT_COLS, n_cols)))
+                  | set(range(max(0, n_cols - _STRUCTURE_RIGHT_COLS), n_cols)))
+    lines = []
+    for r, row in enumerate(grid[:_STRUCTURE_ROWS]):
+        cells, prev = [], None
+        for c in keep:
+            if c >= len(row) or _is_empty(row[c]):
+                continue
+            if prev is not None and any(k not in keep for k in range(prev + 1, c)):
+                cells.append("…")
+            text = str(row[c])
+            if len(text) > _STRUCTURE_CELL_TEXT_MAX:
+                text = text[:_STRUCTURE_CELL_TEXT_MAX] + "…"
+            cells.append(f"[{c}]={text!r}")
+            prev = c
+        lines.append(f"row {r}: " + (" ".join(cells) if cells else "(empty)"))
+    if len(grid) > _STRUCTURE_ROWS:
+        lines.append(f"… ({len(grid) - _STRUCTURE_ROWS} more rows not shown)")
+    return "\n".join(lines)
 
-    Data VALUES are deliberately excluded so the same layout with refreshed numbers
-    (monthly update of one report) hits the cache.
+
+def _layout_fingerprint(grid: List[List]) -> str:
+    """Structural signature: the top rows' text, their pattern of numeric/empty cells, and the
+    column count.
+
+    Numbers are left out so the same layout with refreshed figures hits the cache, but TEXT is
+    kept: a spec can now read a period off a date cell ("Latest Data" = the "September/26"
+    written beside it), and next month's sheet, identical but for "October/26", must not be
+    served September's map.
     """
     sig_rows = []
     for row in grid[:_SNAPSHOT_ROWS]:
-        sig_rows.append("".join(
-            "n" if _is_number(v) else ("t" if not _is_empty(v) else ".")
+        sig_rows.append("|".join(
+            "n" if _is_number(v) else ("." if _is_empty(v) else str(v).strip())
             for v in row[:_SNAPSHOT_COLS]
         ))
     n_cols = max((len(r) for r in grid), default=0)
@@ -184,13 +236,13 @@ def _validate_spec(spec: _TableSpec, grid: List[List]) -> None:
     n_rows = len(grid)
     n_cols = max((len(r) for r in grid), default=0)
 
-    if not (0 <= spec.header_row < spec.data_start_row <= n_rows - 1):
-        raise ValueError(
-            f"Spec row indices out of order/range: header_row={spec.header_row}, "
-            f"data_start_row={spec.data_start_row}, sheet has {n_rows} rows."
-        )
-    if not (0 <= spec.label_col < n_cols):
-        raise ValueError(f"label_col={spec.label_col} outside the sheet's {n_cols} columns.")
+    if not (0 <= spec.data_start_row <= n_rows - 1):
+        raise ValueError(f"data_start_row={spec.data_start_row} outside the sheet's {n_rows} rows.")
+    if not spec.label_cols:
+        raise ValueError("Spec names no label column.")
+    for lc in spec.label_cols:
+        if not (0 <= lc < n_cols):
+            raise ValueError(f"label column {lc} outside the sheet's {n_cols} columns.")
     if not spec.columns:
         raise ValueError("Spec lists no data columns.")
 
@@ -198,8 +250,8 @@ def _validate_spec(spec: _TableSpec, grid: List[List]) -> None:
     for col_spec in spec.columns:
         if not (0 <= col_spec.col < n_cols):
             raise ValueError(f"Column index {col_spec.col} outside the sheet's {n_cols} columns.")
-        if col_spec.col == spec.label_col or col_spec.col in seen_cols:
-            raise ValueError(f"Column index {col_spec.col} duplicated or equal to label_col.")
+        if col_spec.col in spec.label_cols or col_spec.col in seen_cols:
+            raise ValueError(f"Column index {col_spec.col} duplicated or also a label column.")
         seen_cols.add(col_spec.col)
         if col_spec.kind == "period":
             if spec.axis_type != "temporal":
@@ -214,14 +266,14 @@ def _validate_spec(spec: _TableSpec, grid: List[List]) -> None:
             if not (col_spec.name or "").strip():
                 raise ValueError(f"Attribute column {col_spec.col} has no name.")
 
-    # Plausibility against the actual data region: the label column must name at least one
-    # row and the mapped columns must hold at least one numeric value.
+    # Plausibility against the actual data region: some label column must name a row and the
+    # mapped columns must hold at least one numeric value.
     data_rows = grid[spec.data_start_row:]
     has_label = any(
-        spec.label_col < len(row) and not _is_empty(row[spec.label_col]) for row in data_rows
+        lc < len(row) and not _is_empty(row[lc]) for row in data_rows for lc in spec.label_cols
     )
     if not has_label:
-        raise ValueError("Label column is empty in the data region.")
+        raise ValueError("Label columns are empty in the data region.")
     has_value = any(
         c < len(row) and _is_number(row[c])
         for row in data_rows for c in seen_cols
@@ -233,6 +285,24 @@ def _validate_spec(spec: _TableSpec, grid: List[List]) -> None:
 # ---------------------------------------------------------------------------
 # Deterministic extraction from a validated spec
 # ---------------------------------------------------------------------------
+
+def _row_names(spec: _TableSpec, grid: List[List], first_data_col: int):
+    """(name, group, row) of every data-region row that has a name.
+
+    The name is the rightmost non-empty label cell and the group the one left of it (SBank:
+    "Kredit Konsumsi" | "KPR/KPA"). A row with numbers but no label cell at all takes the
+    leftmost text before the data (Cadev ORA: the total named in column 0 while the model
+    named column 1, where the components sit).
+    """
+    for row in grid[spec.data_start_row:]:
+        texts = [str(row[lc]).strip() for lc in spec.label_cols
+                 if lc < len(row) and not _is_empty(row[lc])]
+        if not texts:
+            texts = [str(v).strip() for v in row[:first_data_col]
+                     if not _is_empty(v) and not _is_number(v)][:1]
+        if texts:
+            yield texts[-1], (texts[-2] if len(texts) > 1 else None), row
+
 
 def _extract(spec: _TableSpec, grid: List[List]) -> TableData:
     col_keys: Dict[int, tuple] = {}
@@ -246,19 +316,39 @@ def _extract(spec: _TableSpec, grid: List[List]) -> TableData:
                 col_labels.append(name)
                 col_keys[col_spec.col] = (name,)
 
+    rows = []
+    for name, group, row in _row_names(spec, grid, min(col_keys)):
+        values = {key: float(row[c]) for c, key in col_keys.items()
+                  if c < len(row) and _is_number(row[c])}
+        rows.append((name, group, values))
+
+    # A name used twice is qualified by its group — the label column to its left, else the
+    # last row without numbers (a section heading) — as "Group > Name", the convention the
+    # rest of the pipeline matches. A name STILL used twice is dropped: a row the table does
+    # not name unambiguously is a missing row, never a guess.
+    uses: Dict[str, int] = {}
+    for name, _g, _v in rows:
+        uses[name] = uses.get(name, 0) + 1
+    named, section = [], None
+    for name, group, values in rows:
+        if not values:
+            section = name
+        parent = group or section
+        named.append((f"{parent} > {name}" if uses[name] > 1 and parent and parent != name else name,
+                      values))
+    counts: Dict[str, int] = {}
+    for name, values in named:
+        if values:
+            counts[name] = counts.get(name, 0) + 1
+
     table_data: Dict[tuple, float] = {}
     row_labels: List[str] = []
-    for row in grid[spec.data_start_row:]:
-        if spec.label_col >= len(row) or _is_empty(row[spec.label_col]):
+    for name, values in named:
+        if not values or counts[name] > 1:
             continue
-        label = str(row[spec.label_col]).strip()
-        stored = False
-        for c, key_part in col_keys.items():
-            if c < len(row) and _is_number(row[c]):
-                table_data.setdefault((label, *key_part), float(row[c]))
-                stored = True
-        if stored and label not in row_labels:
-            row_labels.append(label)
+        for key, value in values.items():
+            table_data[(name, *key)] = value
+        row_labels.append(name)
 
     if not row_labels or not table_data:
         raise ValueError("Spec extracted no labelled numeric rows from the sheet.")
@@ -314,8 +404,7 @@ def parse_grid_with_llm(grid: List[List], llm: BaseChatModel) -> TableData:
         spec = chain.invoke({
             "n_rows": len(grid),
             "n_cols": n_cols,
-            "shown_rows": min(_SNAPSHOT_ROWS, len(grid)),
-            "snapshot": _grid_snapshot(grid),
+            "snapshot": _structure_snapshot(grid),
         })
     except Exception as exc:
         raise ValueError(f"LLM structure mapping failed: {exc}") from exc
