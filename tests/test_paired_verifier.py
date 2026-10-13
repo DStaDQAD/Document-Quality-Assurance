@@ -63,6 +63,15 @@ def _make_fact(**overrides):
 # _unit_factor
 # ---------------------------------------------------------------------------
 
+def test_unit_factor_reads_an_english_sdds_unit():
+    # Tabel Cadev ORA (SDDS template, DSTA SharePoint 2026-10): the right row was matched, but
+    # 'Millions of US$' parsed as no unit at all, so 146.320 (juta USD) was compared as 0,0001
+    # miliar against the report's 146,3 — a false Tidak Sesuai.
+    assert _unit_factor("miliar dolar AS", "Millions of US$") == 1000.0
+    assert _unit_factor("juta dolar AS", "Thousands of US$") == 1000.0
+    assert _unit_factor("triliun Rp", "Billions of Rupiah") == 1000.0
+
+
 def test_unit_factor_returns_none_for_unknown_pair():
     assert _unit_factor("foo", "bar") is None
 

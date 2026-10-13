@@ -217,15 +217,17 @@ _UNIT_FACTORS: Dict[Tuple[str, str], float] = {
 # Decimal scale words and currency tokens for units the explicit _UNIT_FACTORS table does not
 # list. Parsing these keeps unit handling deterministic for arbitrary sources (the generic
 # parser can encounter any wording) without enumerating every pair by hand.
+# English plurals and 'US$' are how SDDS-template sheets write units ("Millions of US$", Tabel
+# Cadev ORA); '$' is not a word character, so 'US$' reaches the parser as 'us'.
 _SCALE_WORDS: Dict[str, float] = {
-    "ribu": 1e3, "thousand": 1e3,
-    "juta": 1e6, "million": 1e6,
-    "miliar": 1e9, "milyar": 1e9, "billion": 1e9,
-    "triliun": 1e12, "trillion": 1e12,
+    "ribu": 1e3, "thousand": 1e3, "thousands": 1e3,
+    "juta": 1e6, "million": 1e6, "millions": 1e6,
+    "miliar": 1e9, "milyar": 1e9, "billion": 1e9, "billions": 1e9,
+    "triliun": 1e12, "trillion": 1e12, "trillions": 1e12,
 }
 _CURRENCY_TOKENS: Dict[str, str] = {
     "rp": "rp", "rupiah": "rp", "idr": "rp",
-    "usd": "usd", "dolar": "usd", "dollar": "usd",
+    "usd": "usd", "dolar": "usd", "dollar": "usd", "us": "usd",
 }
 
 
@@ -253,6 +255,10 @@ def _parse_scale_unit(unit: Optional[str]) -> Optional[Tuple[float, Optional[str
     while i < len(words):
         for span in (1, 2, 3):
             if i + span > len(words):
+                # Out of words to join: step over just this one. Leaving `span` at the length
+                # that ran out skipped the next word too — 'of' swallowed 'us' in 'Millions of
+                # US$', and the unit lost its currency.
+                span = 1
                 break
             token = "".join(words[i:i + span])
             if token in _SCALE_WORDS:
