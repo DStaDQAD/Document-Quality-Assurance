@@ -227,9 +227,18 @@ Available operations:
                    several metrics are each above the bound (e.g. "mayoritas komponen berada pada
                    fase ekspansi, yaitu Volume Produksi, Volume Persediaan Barang Jadi, dan Volume
                    Total Pesanan"), emit a SEPARATE above_threshold fact PER METRIC.
+                   The bound is the index's FIXED reference point, never the metric's own value:
+                     PMI and its components: 50 (above = "ekspansi", below = "kontraksi");
+                     SBT / saldo bersih (SKDU, Survei Perbankan): 0 (positive = "ekspansi" /
+                       "tumbuh", negative = "kontraksi");
+                     IKK / IEK / IKE (Survei Konsumen): 100 (above = "optimis", below = "pesimis").
+                   When the sentence ALSO states the value, emit TWO facts — a 'value' fact for the
+                   number and an above/below_threshold fact for the phase:
+                     "PMI-BI sebesar 51,43%, berada pada fase ekspansi"
+                       → value '51,43' AND above_threshold '50'  (NOT above_threshold '51,43').
   below_threshold: same as above_threshold but for a value BELOW the bound (e.g. "fase kontraksi
                    (indeks <50%)" → below 50). periods = exactly ONE point. claimed_value_raw =
-                   the threshold number.
+                   the threshold number — the fixed reference point, as above.
 
 TWO KINDS OF REFERENCE TABLES:
   - Time-series tables (e.g. BI monetary statistics): every data point is identified by
