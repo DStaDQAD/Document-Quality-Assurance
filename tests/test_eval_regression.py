@@ -139,3 +139,31 @@ def test_diff_marks_a_change_the_ai_review_made():
     new = [_r("Toko A naik.", "Entailed", reasoning="x | Ditinjau AI: sel ...")]
     [change] = diff_runs(base, new)
     assert change.ai_review
+
+
+def test_diff_pairs_an_anchor_only_quote_with_the_sentence_that_contains_it():
+    """When the model's anchor is not found, the quote IS the anchor ('sebesar 109,2'); in the
+    next run it may be located and become the whole sentence. Same claim."""
+    base = [_r("sebesar 109,2", "Entailed", "value", 109.2, "Indeks > Usia 31-40")]
+    new = [_r("Indeks tertinggi pada usia 20-30 dan 31-40, masing-masing 116,1 dan 109,2.",
+              "Entailed", "value", 109.2, "Indeks > Usia 31-40")]
+    [change] = diff_runs(base, new)
+    assert change.kind == "sama"
+
+
+def test_a_claim_restructured_into_other_facts_of_the_same_sentence_is_not_flagged():
+    """Five per-group facts became one 'seluruh kelompok' fact for the same sentence, with the
+    same verdict. That is a different shape of the same check, not a lost Sesuai."""
+    q = "Indeks berada pada level optimis pada seluruh kelompok pengeluaran."
+    base = [_r(q, "Entailed", "above_threshold", 100.0, f"Indeks > Kelompok {i}") for i in range(3)]
+    new = [_r(q, "Entailed", "above_threshold", 100.0, "Indeks (seluruh kelompok)")]
+    changes = diff_runs(base, new)
+    assert {c.kind for c in changes} <= {"sama", "dibentuk_ulang"}
+    assert not any(c.needs_review for c in changes)
+
+
+def test_a_restructured_sentence_with_a_different_verdict_is_still_flagged():
+    q = "Indeks berada pada level optimis pada seluruh kelompok pengeluaran."
+    base = [_r(q, "Entailed", "above_threshold", 100.0, "Indeks > Kelompok A")]
+    new = [_r(q, "Refuted", "above_threshold", 100.0, "Indeks (seluruh kelompok)")]
+    assert any(c.needs_review for c in diff_runs(base, new))

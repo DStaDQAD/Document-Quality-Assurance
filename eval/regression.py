@@ -131,13 +131,15 @@ def score_label(label: Label, results: List[dict]) -> LabelScore:
 
 @dataclass(frozen=True)
 class Change:
-    kind: str                  # sama | berubah | hilang | baru
+    kind: str                  # sama | berubah | hilang | baru | dibentuk_ulang
     base: Optional[dict]
     new: Optional[dict]
 
     @property
     def needs_review(self) -> bool:
         """Rule #2: a Sesuai lost (changed or gone) or a Tidak Sesuai gained must be explained."""
+        if self.kind == "dibentuk_ulang":
+            return False
         before = self.base.get("verdict") if self.base else None
         after = self.new.get("verdict") if self.new else None
         if before == after:
@@ -192,11 +194,40 @@ def diff_runs(base: List[dict], new: List[dict]) -> List[Change]:
         lambda b, n: _key(b)[:2] == _key(n)[:2]
         and _similarity(b.get("context_quote"), n.get("context_quote")) >= 0.6,
     )
+    # A quote that fell back to the model's anchor ('sebesar 109,2') in one run and was located
+    # in the other: same operation, number and metric label is the same claim.
+    by_label, rest_b, rest_n = _pair(
+        rest_b, rest_n,
+        lambda b, n: _key(b)[:2] == _key(n)[:2]
+        and _norm(b.get("metric_label")) == _norm(n.get("metric_label")),
+    )
     changes = [Change("sama" if b.get("verdict") == n.get("verdict") else "berubah", b, n)
-               for b, n in exact + loose]
-    changes += [Change("hilang", b, None) for b in rest_b]
-    changes += [Change("baru", None, n) for n in rest_n]
+               for b, n in exact + loose + by_label]
+    # A claim gone from one run whose sentence the other run checks with facts of another shape
+    # (five per-group facts -> one "seluruh kelompok" fact), all reaching the same verdict, is
+    # the same check restructured — not a lost Sesuai or a new finding.
+    changes += [Change("dibentuk_ulang" if _restructured(b, base, new) else "hilang", b, None)
+                for b in rest_b]
+    changes += [Change("dibentuk_ulang" if _restructured(n, new, base) else "baru", None, n)
+                for n in rest_n]
     return changes
+
+
+def _same_sentence(a: str, b: str) -> bool:
+    return len(a) > 15 and len(b) > 15 and (a in b or b in a)
+
+
+def _sentence_verdicts(quote: str, run: List[dict]) -> set:
+    return {r.get("verdict") for r in run if _same_sentence(quote, _norm(r.get("context_quote")))}
+
+
+def _restructured(claim: dict, own_run: List[dict], other_run: List[dict]) -> bool:
+    """The other run checks this claim's sentence, reaches the claim's verdict there, and
+    reaches no verdict on it that this run did not (a fact both runs leave Tidak Cukup Data
+    does not stop a restructured sentence from counting as the same check)."""
+    quote = _norm(claim.get("context_quote"))
+    other = _sentence_verdicts(quote, other_run)
+    return claim.get("verdict") in other and other <= _sentence_verdicts(quote, own_run)
 
 
 def summarize(changes: List[Change]) -> Dict[str, int]:
