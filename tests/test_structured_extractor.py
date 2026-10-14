@@ -839,6 +839,45 @@ def test_extraction_keeps_a_fact_whose_number_the_pdf_split_with_a_space():
     assert facts[0].claimed_value == 16.6
 
 
+def test_extraction_keeps_a_contraction_whose_minus_sign_the_prompt_added():
+    """Prompt rule 2b makes the model write a contraction as '-0,3' although the text prints
+    "kontraksi sebesar 0,3%". When the anchor is not verbatim either (here the model joined
+    words across "masing-masing"), the guard looked for '-0,3', did not find it, and threw a
+    real claim away. The number IS in the text — without the sign the prompt told the model to
+    add — and the signed value must still be what gets compared."""
+    narrative = (
+        "[== Halaman 1 ==]\n"
+        "Penjualan toko A dan toko B pada Mei 2026 masing-masing mengalami kontraksi "
+        "sebesar 1,4% (yoy) dan 0,3% (yoy).\n"
+    )
+    fact = _fake_fact(
+        operation="yoy_growth", unit="persen_yoy", claimed_value_raw="-0,3",
+        anchor_quote="toko B mengalami kontraksi sebesar 0,3% (yoy)",
+    )
+
+    facts = extract_structured_facts(narrative, ROW_LABELS, _llm_with_facts([fact]))
+
+    assert len(facts) == 1
+    assert facts[0].claimed_value == -0.3
+
+
+def test_extraction_still_drops_a_negative_number_that_is_nowhere_in_the_text():
+    """Accepting the unsigned form must not reopen the door for invented numbers: '-0,7' whose
+    magnitude 0,7 the text never prints is still not a claim this document makes."""
+    narrative = (
+        "[== Halaman 1 ==]\n"
+        "Penjualan toko B pada Mei 2026 mengalami kontraksi sebesar 0,3% (yoy).\n"
+    )
+    fact = _fake_fact(
+        operation="yoy_growth", unit="persen_yoy", claimed_value_raw="-0,7",
+        anchor_quote="toko B terkontraksi 0,7% (yoy)",
+    )
+
+    facts = extract_structured_facts(narrative, ROW_LABELS, _llm_with_facts([fact]))
+
+    assert facts == []
+
+
 # ---------------------------------------------------------------------------
 # on_progress — drives the UI's per-chunk progress row (see /api/verify-paired-stream)
 # ---------------------------------------------------------------------------

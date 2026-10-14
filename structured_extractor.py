@@ -1133,8 +1133,15 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
             # Compared with the spaces removed, because this report's own text layer splits
             # numerals ("1 6,6%" for 16,6%) — a verbatim test would throw away real claims.
             # Trend claims (is_increasing and friends) carry no number and are never dropped.
-            raw_value = (f.claimed_value_raw or "").strip()
-            if raw_value and raw_value.replace(" ", "") not in normalized.replace(" ", ""):
+            #
+            # A leading minus is looked up without its sign as well: prompt rules 2b and 2f tell
+            # the model to sign a contraction or a fall ("kontraksi sebesar 0,3%" → '-0,3') that
+            # the text prints unsigned, and on SULNI Sept 2026 that real claim was thrown away.
+            # Only the lookup drops the sign — claimed_value above keeps it for the comparison.
+            raw_value = (f.claimed_value_raw or "").replace(" ", "")
+            text_compact = normalized.replace(" ", "")
+            unsigned = raw_value.lstrip("-−")
+            if raw_value and raw_value not in text_compact and unsigned not in text_compact:
                 logger.warning(
                     "Dropping fact for %r: neither its anchor nor its value %r occurs in the "
                     "narrative", f.operation, raw_value,
