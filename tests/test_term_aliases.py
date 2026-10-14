@@ -54,3 +54,19 @@ def test_the_sulni_parser_carries_the_official_definition(monkeypatch):
     table = sulni.parse(b"", "TabI.1")
     assert table.lookup_fuzzy("ULN publik", 2026, "Jul")[0] == "Pemerintah dan Bank Sentral"
     assert table.lookup_fuzzy("ULN sektor publik", 2026, "Jul")[0] == "Pemerintah dan Bank Sentral"
+
+
+def test_the_sk_parser_carries_its_report_wording(monkeypatch):
+    """SK writes "proporsi pembayaran cicilan/utang" and "pendapatan yang ditabung" for its
+    'Cicilan pinjaman' and 'Tabungan' rows; a claim labelled that way found no row."""
+    import publication_parsers.sk as sk
+    table = BITableData(title="Komposisi penggunaan pendapatan", unit="%", row_labels=[])
+    for label, value in (("Total > Cicilan pinjaman", 9.7), ("Total > Tabungan", 15.4),
+                         ("Kelompok A > Cicilan pinjaman", 8.0)):
+        table.row_labels.append(label)
+        table._data[(label, 2026, "Sep")] = value
+    monkeypatch.setattr(sk, "parse_with_generic_reader", lambda data, sheet, unit=None: table)
+    parsed = sk.parse(b"", "Tabel 5")
+    assert parsed.lookup_fuzzy("pembayaran cicilan", 2026, "Sep")[0] == "Total > Cicilan pinjaman"
+    assert parsed.lookup_fuzzy("Proporsi pembayaran cicilan/utang", 2026, "Sep")[0] == "Total > Cicilan pinjaman"
+    assert parsed.lookup_fuzzy("Proporsi pendapatan konsumen yang disimpan", 2026, "Sep")[0] == "Total > Tabungan"

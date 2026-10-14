@@ -136,7 +136,8 @@ class _ExtractedFact(BaseModel):
             "the order they appear/matter (chronological for average/sum/diff/is_increasing/"
             "is_decreasing/is_stable; numerator-then-denominator for ratio). "
             "'value', 'yoy_growth', 'above_threshold', 'below_threshold' need exactly 1. "
-            "'diff' and 'ratio' need exactly 2. 'average', 'sum' need 2 or more. "
+            "'diff' needs exactly 2; 'ratio' needs 2 (or more: several numerator rows, then the "
+            "denominator). 'average', 'sum' need 2 or more. "
             "'is_increasing', 'is_decreasing', 'is_stable' take the periods EXPLICITLY stated "
             "(a single current period is fine — the baseline is completed automatically); "
             "list EVERY month in a stated range individually, never as a range description."
@@ -216,6 +217,9 @@ Available operations:
   ratio          : the stated ratio/percentage of one metric relative to ANOTHER metric (or point),
                    e.g. "kredit terhadap DPK sebesar 85%". periods = [numerator point, denominator
                    point] in the order named ("A terhadap/dibanding B" → A first, B second).
+                   A share held by SEVERAL rows together ("pangsa sektor A, B dan C mencapai
+                   80,6% dari total") lists one numerator point per row, then the denominator
+                   point — the code sums the numerators.
   is_increasing  : a claim that ONE metric rose/kept rising over time, no explicit number. Emit a
                    SEPARATE is_increasing fact PER METRIC — never mix different metrics in one fact.
                    periods: list every period the sentence EXPLICITLY states, chronological order
@@ -462,7 +466,7 @@ class ExtractedFact:
     the LLM never emits whole sentences, to keep extraction output-token cost down.
     """
     __slots__ = ("operation", "periods", "claimed_value", "unit", "context_quote", "page_number",
-                 "group_scope", "group_exclude")
+                 "group_scope", "group_exclude", "rank_group", "rank_clause")
 
     def __init__(
         self,
@@ -487,6 +491,10 @@ class ExtractedFact:
         # names separately (the exception of "kecuali X", the named groups before "lainnya").
         self.group_scope = group_scope
         self.group_exclude: List[str] = []
+        # The named groups a superlative ranks together ("peningkatan tertinggi di A, B dan C"),
+        # filled by paired_verifier._attach_rankings; empty for a plain trend.
+        self.rank_group: List[str] = []
+        self.rank_clause: str = ""
 
     @property
     def display_label(self) -> str:

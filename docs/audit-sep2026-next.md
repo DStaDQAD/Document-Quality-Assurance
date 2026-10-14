@@ -100,6 +100,16 @@ Penyebab dari sisi desain:
 - **B4 (sedang).** Klaim peringkat ("tertinggi/terbesar di A, B, C") dicek sebagai urutan teratas, bukan hanya naik atau turun.
 - **B5 (rendah).** Alasan Tidak Cukup Data yang lebih tepat, misalnya "tabel hanya punya data triwulanan".
 
+**Perbaikan tanpa LLM (2026-10-14, atas permintaan pengguna untuk hemat kredit):**
+- **B3 SELESAI.** Pangsa gabungan: `ratio` dengan beberapa titik pembilang dijumlah lalu dibagi titik terakhir; satu label pembilang yang menyebut beberapa baris dipecah pada tabel (setiap kata label harus terjelaskan oleh baris yang ditemukan, judul tabel, atau penyebut; kalau ada sektor yang tidak ada di tabel → Tidak Cukup Data, bukan jumlah yang kurang). Tabel yang judulnya paling cocok dengan kalimat didahulukan ("ULN swasta" → Tbl III.2, bukan TabI.2). SULNI #16 kini Sesuai: 80,59%.
+- **B4 SELESAI (untuk perubahan).** "peningkatan/penurunan tertinggi/terbesar di A, B, C" dicek sebagai peringkat: kelompok yang disebut harus termasuk k perubahan terbesar di rinciannya, dalam poin **atau** persen. k diambil dari kelompok yang disebut kalimat, bukan dari jumlah fakta. Superlatif tingkat ("indeks tertinggi di X") belum dicek sebagai peringkat.
+- **B5 SELESAI.** Klaim bulanan pada baris yang hanya triwulanan: alasan menyebut tabel, baris, dan triwulan terakhir (SULNI #17).
+- **A4 sebagian.** Fakta "pengganti" (kelompok yang tidak disebut kalimat, padahal kalimat sudah punya fakta berkuantor dengan operasi yang sama) dibuang. Label salah dimensi di luar kasus ini belum.
+- Pencarian baris: level dengan singkatan yang kehilangan kata ("Indeks Kondisi Ekonomi (IKE)" untuk "... Saat Ini (IKE)") kini ketemu, selama semua katanya milik nama itu. Padanan istilah SK: "pembayaran cicilan/utang" → Cicilan pinjaman, "pendapatan yang disimpan/ditabung" → Tabungan. Rentang Rp ↔ pengeluaran/pendapatan, rentang tahun ↔ usia, untuk mencari rincian dari kata kalimat.
+- Prompt: rasio dengan beberapa pembilang dijelaskan (belum diuji ke LLM).
+- **Verifikasi tanpa biaya:** `python -m eval.run_regression replay` menilai ulang fakta tersimpan dengan kode baru. Replay 12 dokumen (818 klaim): **0 klaim yang perlu dijelaskan** dibanding replay kode sebelumnya; semua perubahan TCD → Sesuai pada klaim yang menurut audit benar, plus satu kesalahan sisipan yang kini tertangkap. Skor label E1/E2 di replay 84 → 87 benar.
+- Belum: C1 (urutan field Tinjauan AI), regresi e2e berbayar 12 publikasi (perlu persetujuan), superlatif tingkat.
+
 ### C. Tinjauan AI
 - **C1 (tinggi, murah).** Urutan field jawaban: alasan dan sel dulu, baru `verdict`.
 - **C2 (sedang).** Batch lebih kecil (5–10 klaim) dengan budget berpikir yang sebanding.

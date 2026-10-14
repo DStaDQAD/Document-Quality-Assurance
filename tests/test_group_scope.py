@@ -283,3 +283,90 @@ def test_a_quantified_claim_on_a_single_named_series_is_judged_on_that_series():
     fact = ExtractedFact("above_threshold", [PeriodPoint("Indeks Omzet", 2026, "Sep")], 100.0, None,
                          "Optimisme bersumber dari seluruh komponen, yaitu Indeks Omzet.", group_scope="all")
     assert _evaluate_fact(fact, [_ExcelSource(table=table, filename="t.xlsx", sheet="T")]).verdict == "Entailed"
+
+
+# --- A4: a stand-in fact for a quantified claim -----------------------------------------------
+
+def test_a_group_the_sentence_never_names_is_dropped_when_a_quantified_fact_covers_it():
+    """'optimis di Cabang Utara, sedangkan cabang lainnya pesimis' came back with a 'rest' fact
+    AND a below_threshold fact on a group of another breakdown ('Penjualan > Usia 20-30 th') —
+    the model's stand-in for the same 'lainnya'. It is not a claim of the sentence."""
+    from paired_verifier import _drop_group_stand_ins
+    q = "Indeks optimis di Cabang Utara, sedangkan kelompok cabang lainnya pesimis."
+    named = _fact("above_threshold", ["Cabang Utara"], None, q, value=100.0)
+    rest = _fact("below_threshold", BRANCHES[1:], "rest", q, value=100.0)
+    stand_in = _fact("below_threshold", ["Usia 20-30 th"], None, q, value=100.0)
+    assert _drop_group_stand_ins([named, rest, stand_in]) == [named, rest]
+
+
+def test_a_stand_in_is_kept_when_no_quantified_fact_covers_its_sentence():
+    from paired_verifier import _drop_group_stand_ins
+    q = "Indeks optimis pada sebagian besar kelompok cabang."
+    stand_in = _fact("above_threshold", ["Cabang Barat"], None, q, value=100.0)
+    assert _drop_group_stand_ins([stand_in]) == [stand_in]
+
+
+# --- B4: superlatives are rankings, not just directions --------------------------------------
+
+CITIES = {"Kota Utara": (100.0, 108.0), "Kota Selatan": (100.0, 106.0), "Kota Timur": (100.0, 101.0),
+          "Kota Barat": (100.0, 96.0), "Kota Tengah": (100.0, 92.0)}
+RANK_Q = ("Indeks mengalami peningkatan tertinggi di Kota Utara dan Kota Selatan, sementara "
+          "penurunan terbesar terjadi di Kota Tengah dan Kota Barat.")
+
+
+def _ranked(operation, cities, rows=CITIES, quote=RANK_Q):
+    from paired_verifier import _attach_rankings
+    facts = [_fact(operation, [c], None, quote) for c in cities]
+    _attach_rankings(facts)
+    src = _source(rows)
+    return [_evaluate_fact(f, [src]).verdict for f in facts]
+
+
+def test_the_named_groups_with_the_largest_moves_are_entailed():
+    assert _ranked("is_increasing", ["Kota Utara", "Kota Selatan"]) == ["Entailed", "Entailed"]
+    assert _ranked("is_decreasing", ["Kota Tengah", "Kota Barat"]) == ["Entailed", "Entailed"]
+
+
+def test_a_group_that_rose_but_is_not_among_the_highest_is_refuted():
+    q = RANK_Q.replace("Kota Selatan, sementara", "Kota Timur, sementara")
+    assert _ranked("is_increasing", ["Kota Utara", "Kota Timur"], quote=q) == ["Entailed", "Refuted"]
+
+
+def test_a_ranking_holds_when_it_holds_in_percent_even_if_not_in_points():
+    rows = dict(CITIES, **{"Kota Timur": (50.0, 56.5)})   # +6,5 points (2nd) but +13% (1st)
+    q = RANK_Q.replace("Kota Selatan, sementara", "Kota Timur, sementara")
+    assert _ranked("is_increasing", ["Kota Utara", "Kota Timur"], rows=rows, quote=q) == ["Entailed", "Entailed"]
+
+
+def test_a_superlative_about_a_level_is_not_read_as_a_ranking_of_changes():
+    """'indeks tertinggi di Kota Timur' ranks levels; the trend fact keeps its plain check."""
+    q = "Indeks meningkat di Kota Timur, dengan indeks tertinggi di Kota Timur."
+    assert _ranked("is_increasing", ["Kota Timur"], quote=q) == ["Entailed"]
+
+
+def test_the_number_ranked_comes_from_the_sentence_not_from_the_facts_extracted():
+    """'peningkatan tertinggi di Kota Utara, Kota Selatan dan Kota Timur' with the Kota Selatan
+    fact missing: Kota Timur is third, and the sentence names three — it is among them."""
+    from paired_verifier import _attach_rankings
+    rows = dict(CITIES, **{"Kota Timur": (100.0, 104.0)})
+    q = "Indeks mengalami peningkatan tertinggi di Kota Utara, Kota Selatan, dan Kota Timur."
+    facts = [_fact("is_increasing", [c], None, q) for c in ("Kota Utara", "Kota Timur")]
+    _attach_rankings(facts)
+    assert [_evaluate_fact(f, [_source(rows)]).verdict for f in facts] == ["Entailed", "Entailed"]
+
+
+def test_range_groups_are_found_by_the_dimension_word_of_their_unit():
+    """'porsi tabungan turun pada sebagian besar kelompok pengeluaran' on rows named only by a
+    rupiah range ('Rp 1 - 2 juta > Tabungan'): the range's unit is what says 'pengeluaran'."""
+    table = BITableData(title="Komposisi pendapatan", unit="%", row_labels=[])
+    for band, (aug, sep) in {"Rp 1 - 2 juta": (10.0, 9.0), "Rp 2,1 - 3 juta": (12.0, 11.0),
+                             "Rp 3,1 - 4 juta": (13.0, 13.0), "> Rp 4 juta": (15.0, 14.0)}.items():
+        for leaf, shift in (("Tabungan", 0.0), ("Konsumsi", 50.0)):
+            label = f"{band}{SEP}{leaf}"
+            table.row_labels.append(label)
+            table._data[(label, 2026, "Aug")] = aug + shift
+            table._data[(label, 2026, "Sep")] = sep + shift
+    fact = ExtractedFact("is_decreasing", [PeriodPoint("Tabungan", 2026, "Sep")], None, None,
+                         "Porsi tabungan menurun pada sebagian besar kelompok pengeluaran.", group_scope="majority")
+    result = _evaluate_fact(fact, [_ExcelSource(table=table, filename="t.xlsx", sheet="T")])
+    assert result.verdict == "Entailed" and "dari 4 kelompok" in result.reasoning and "Konsumsi" not in result.reasoning

@@ -1641,6 +1641,20 @@ _SCOPE_FILLER_WORDS = frozenset(
 )
 
 
+# The dimension a RANGE group belongs to, by its unit: a rupiah band is an expenditure/income
+# group, a band of years an age group. Lets "kelompok pengeluaran" find rows named only
+# 'Rp 1 - 2 juta'.
+_SPAN_DIMENSION_WORDS = {"rp": {"pengeluaran", "pendapatan", "penghasilan"}, "age": {"usia", "umur"}}
+
+
+def _group_dimension_words(level: str) -> set:
+    words = set(_label_tokens(level)[0])
+    span = _GROUP_SPAN_RE.search(level)
+    if span:
+        words |= _SPAN_DIMENSION_WORDS.get(_span(span)[0], set())
+    return words
+
+
 def _family_from_sentence(fact: ExtractedFact, sources: List[_ExcelSource]):
     """(family, series, source) for a quantified fact that lists only its indicator.
 
@@ -1668,13 +1682,47 @@ def _family_from_sentence(fact: ExtractedFact, sources: List[_ExcelSource]):
             for i, level in enumerate(levels):
                 other = levels[1 - i]
                 if (series_words <= _sig_words(level) and not _AGGREGATE_GROUP_RE.match(other)
-                        and (_label_tokens(other)[0] - series_words) & quote_words):
+                        and (_group_dimension_words(other) - series_words) & quote_words):
                     by_position.setdefault(1 - i, []).append(row)
         for rows in by_position.values():
             found = _group_family(rows, src)
             if found and (best is None or len(found[0]) > len(best[0])):
                 best = (found[0], found[1], src)
     return best
+
+
+def _series_of(label: str) -> str:
+    return _normalize_quote(label.rsplit(QUAL_SEP, 1)[0] if QUAL_SEP in label else label)
+
+
+def _drop_group_stand_ins(facts: List[ExtractedFact]) -> List[ExtractedFact]:
+    """Drop the model's stand-ins for a quantified claim of the same sentence (A4).
+
+    SK Sept 2026: "optimis pada kelompok usia 20-30 tahun, sedangkan kelompok usia lainnya
+    pesimis" came back with a 'rest' fact for the other ages AND a below_threshold fact on
+    'IKLK > SMA' — an education group the sentence never names, put there to stand for the same
+    'lainnya'. Kept, it shows as Tidak Cukup Data beside a claim that is fully checked. A fact
+    is a stand-in when its group is not named in its sentence (see _quote_names_qualifier) and
+    the sentence has a quantified fact of the same operation on the same series; a fact whose
+    group the sentence does name is always kept.
+    """
+    scoped = {}
+    for f in facts:
+        if f.group_scope and f.operation in _TREND_OPS | _THRESHOLD_OPS:
+            key = (_normalize_quote(f.context_quote), f.operation)
+            scoped.setdefault(key, set()).update(_series_of(p.metric_label) for p in f.periods)
+    kept = []
+    for f in facts:
+        series = scoped.get((_normalize_quote(f.context_quote), f.operation))
+        quote = f.context_quote or ""
+        if (series and not f.group_scope and all(QUAL_SEP in p.metric_label for p in f.periods)
+                and not any(_quote_names_qualifier(p.metric_label, quote) for p in f.periods)
+                and {_series_of(p.metric_label) for p in f.periods} <= series):
+            logger.info("Dropping stand-in fact %r for a quantified claim of its sentence",
+                        f.display_label)
+            continue
+        kept.append(f)
+    return kept
 
 
 def _attach_group_exclusions(facts: List[ExtractedFact]) -> None:
@@ -1940,6 +1988,233 @@ def _judge_group_scope_members(
     })
 
 
+# Words of a combined-share numerator that join or frame the rows rather than name one.
+_SHARE_FRAME_WORDS = frozenset("sektor serta dan atau pangsa total posisi terutama berasal dari".split())
+
+
+def _row_words(text: str) -> set:
+    return _sig_words(text.replace("&", " dan ")) - _SHARE_FRAME_WORDS
+
+
+def _rows_named_in(text: str, src: _ExcelSource, exclude: str) -> Optional[List[str]]:
+    """The rows of `src` that one numerator label names together — 'Sektor Industri Pengolahan,
+    Jasa Keuangan dan Asuransi, serta Pertambangan dan Penggalian' — or None unless at least two
+    are named AND every word of the label is accounted for by them, the table's title or the
+    denominator. A word left over is a row the table lacks, and summing without it would
+    understate the share."""
+    wanted = _row_words(text)
+    found = []
+    for row in src.table.row_labels:
+        words = _row_words(row)
+        if row != exclude and words and words <= wanted:
+            found.append((row, words))
+    # A row whose words are all part of another named row is that row's fragment, not a sector.
+    found = [(r, w) for r, w in found if not any(w < other for _, other in found)]
+    covered = set().union(*(w for _, w in found)) if found else set()
+    leftover = wanted - covered - _row_words(src.table.title or "") - _row_words(exclude)
+    if len(found) < 2 or leftover:
+        return None
+    return [r for r, _ in found]
+
+
+def _combined_share(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[FactVerificationResult]:
+    """A share held by several rows together, judged as their sum over the last point (B3).
+
+    Either the extractor listed one numerator point per row (3+ points) or one numerator label
+    names the rows (see _rows_named_in). None when the claim is an ordinary two-point ratio.
+    """
+    if fact.claimed_value is None:
+        return None
+    denominator = fact.periods[-1]
+    numerators = fact.periods[:-1]
+    # The same sector rows can sit in a table of ALL debt and in one of private debt; the
+    # sentence's own words ('ULN swasta') say which table it is about. Best title fit first,
+    # upload order on a tie.
+    claim_words = _sig_words(" ".join([fact.context_quote or ""] + [p.metric_label for p in fact.periods]))
+    sources = sorted(sources, key=lambda src: -len(_sig_words(src.table.title or "") & claim_words))
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        den = _try_resolve([denominator], src)[0]
+        if not den:
+            continue
+        den_label, den_value = den[0]
+        if len(numerators) >= 2:
+            resolved, missing, _ = _try_resolve(numerators, src)
+            if missing:
+                continue
+            rows = [label for label, _ in resolved]
+        else:
+            # Several rows that account for every word of the label beat a looser match of the
+            # whole label to one of them ('Sektor Industri Kayu, serta Pertanian' also contains
+            # the row 'Industri Kayu'); only without such a split is it an ordinary ratio.
+            rows = _rows_named_in(numerators[0].metric_label, src, den_label)
+            if not rows:
+                if _try_resolve(numerators, src)[0]:
+                    return None
+                continue
+            resolved = _try_resolve([PeriodPoint(r, denominator.year, denominator.month, denominator.col_label)
+                                     for r in rows], src)[0]
+            if len(resolved) != len(rows):
+                continue
+        if den_value == 0 or len(set(rows)) != len(rows):
+            continue
+        total = sum(value for _, value in resolved)
+        computed = round(total / den_value * 100, 4)
+        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        periods = [PeriodResult(metric_label=label, year=denominator.year, month=denominator.month,
+                                excel_value=round(value, 4)) for label, value in resolved + [den[0]]]
+        parts = " + ".join(f"{label}={round(value, 4)}" for label, value in resolved)
+        return _make_result(
+            fact, periods, src.label, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
+            reasoning=(
+                f"PDF: pangsa gabungan {fact.claimed_value} {fact.unit} | Excel [{src.label}]: "
+                f"({parts}) / {den_label}={round(den_value, 4)} = {computed} persen | "
+                f"Δ = {delta} → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}"
+            ),
+        )
+    return None
+
+
+# B4: a superlative over a CHANGE ("peningkatan tertinggi di A, B dan C") ranks the named groups.
+_SUPERLATIVE_RE = re.compile(r"\b(?:tertinggi|terbesar|terdalam|terkuat|paling\s+\w+)\b", re.IGNORECASE)
+_RISE_WORD_RE = re.compile(r"\b(?:peningkatan|kenaikan|meningkat|naik|menguat|penguatan)\b", re.IGNORECASE)
+_FALL_WORD_RE = re.compile(r"\b(?:penurunan|menurun|turun|melemah|pelemahan)\b", re.IGNORECASE)
+_CLAUSE_SPLIT_RE = re.compile(r"\s*(?:;|\bsementara(?:\s+itu)?\b|\bsedangkan\b|\bnamun\b)\s*",
+                              re.IGNORECASE)
+
+
+def _attach_rankings(facts: List[ExtractedFact]) -> None:
+    """Link the named-group trend facts one superlative ranks together.
+
+    "IKE mengalami penurunan terbesar di Mataram, Bandung, dan Ambon, sementara peningkatan
+    tertinggi di Pontianak, Medan, dan Makassar" says more than that each city fell or rose:
+    those three are the largest moves. A clause (split at 'sementara' / 'sedangkan' / ';', not
+    at the commas between names) counts when it has a superlative AND the fact's own direction
+    word — 'indeks tertinggi di X' ranks a level, not a change, and is left alone.
+    """
+    for fact in facts:
+        fact.rank_group = []
+    clusters: Dict[Tuple[str, str, int], List[ExtractedFact]] = {}
+    for fact in facts:
+        labels = {p.metric_label for p in fact.periods}
+        if (fact.group_scope or fact.operation not in ("is_increasing", "is_decreasing")
+                or len(labels) != 1 or QUAL_SEP not in next(iter(labels))):
+            continue
+        label = next(iter(labels))
+        direction = _RISE_WORD_RE if fact.operation == "is_increasing" else _FALL_WORD_RE
+        for i, clause in enumerate(_CLAUSE_SPLIT_RE.split(fact.context_quote or "")):
+            if any(_level_named_in(level, clause) for level in _levels(label)[1:]) or (
+                    _level_named_in(_levels(label)[0], clause) and len(_levels(label)) > 1
+                    and not _level_named_in(_levels(label)[-1], clause)):
+                if _SUPERLATIVE_RE.search(clause) and direction.search(clause):
+                    key = (_normalize_quote(fact.context_quote), fact.operation, i)
+                    clusters.setdefault(key, []).append((fact, clause))
+                break
+    for members in clusters.values():
+        labels = list(dict.fromkeys(f.periods[0].metric_label for f, _ in members))
+        for fact, clause in members:
+            fact.rank_group = labels
+            fact.rank_clause = clause
+
+
+def _check_ranking(fact: ExtractedFact, result: FactVerificationResult,
+                   sources: List[_ExcelSource]) -> FactVerificationResult:
+    """A direction that held is also checked as a ranking: the named groups must be the
+    largest moves of their breakdown — in points or in percent, either reading (a report may
+    rank by either, and refuting on the one it did not use would be a false Tidak Sesuai)."""
+    src = next((s for s in sources if s.label == result.matched_excel_source), None)
+    if result.verdict != "Entailed" or src is None:
+        return result
+    point = max(fact.periods, key=lambda p: (p.year or 0, _period_ordinal(p.month or "")))
+    named = _try_resolve([PeriodPoint(l, point.year, point.month) for l in fact.rank_group], src)[0]
+    rows = list(dict.fromkeys(label for label, _ in named))
+    found = _group_family(rows, src) if len(rows) >= 2 else None
+    if found is None and len(rows) == 1:
+        own = _try_resolve([PeriodPoint(fact.periods[0].metric_label, point.year, point.month)], src)[0]
+        siblings = _bundled_family_of(own[0][0], src) if own else None
+        found = (siblings, "") if siblings else None
+    if found is None or len(found[0]) <= len(rows):
+        return result
+    # How many the sentence ranks is what it NAMES, not how many facts the extractor made: a
+    # city whose fact went missing still takes one of the top places.
+    pos = _group_level_index(found[0])
+    named_in_clause = [r for r in found[0] if _level_named_in(_levels(r)[pos], fact.rank_clause or "")]
+    k_named = max(len(rows), len(named_in_clause))
+    if k_named >= len(found[0]):
+        return result
+    sign = 1 if fact.operation == "is_increasing" else -1
+    moves = {}
+    for row in found[0]:
+        now = src.table.lookup(row, point.year, point.month)
+        before = _previous_period(src.table, row, point.year, point.month)
+        if now is None or before is None or before[1] is None:
+            continue
+        moves[row] = (sign * (now - before[1]), sign * (now - before[1]) / abs(before[1]) if before[1] else None)
+    own = _try_resolve([PeriodPoint(fact.periods[0].metric_label, point.year, point.month)], src)[0]
+    own_row = own[0][0] if own else None
+    if own_row not in moves or any(row not in moves for row in rows):
+        return result
+    k = k_named
+
+    def top(index):
+        ranked = sorted((m[index] for m in moves.values() if m[index] is not None), reverse=True)
+        if len(ranked) < k:
+            return None
+        bar = ranked[k - 1] - 1e-9
+        return {row for row, m in moves.items() if m[index] is not None and m[index] >= bar}
+
+    for index in (0, 1):
+        leaders = top(index)
+        if leaders is not None and own_row in leaders:
+            return result
+    by_points = sorted(moves, key=lambda r: -moves[r][0])[:k]
+    word = "kenaikan" if sign > 0 else "penurunan"
+    return result.model_copy(update={
+        "verdict": "Refuted",
+        "reasoning": (
+            f"{result.reasoning} | Kalimat menyebut {own_row} di antara {k} {word} terbesar, "
+            f"tetapi {k} {word} terbesar di [{src.label}] adalah {', '.join(by_points)}."
+        ),
+    })
+
+
+def _bundled_family_of(row: str, src: _ExcelSource) -> Optional[List[str]]:
+    """The breakdown one row belongs to, when its first level is the group (city tables
+    'Kota > Indeks'). Used only when a superlative names a single group."""
+    levels = _levels(row)
+    if len(levels) != 2:
+        return None
+    family = [r for r in src.table.row_labels
+              if len(_levels(r)) == 2 and _levels(r)[1] == levels[1]
+              and not _AGGREGATE_GROUP_RE.match(_levels(r)[0])]
+    return family if len(family) > 2 else None
+
+
+def _only_quarterly_reason(missing: List[PeriodPoint], sources: List[_ExcelSource]) -> Optional[str]:
+    """Why a MONTHLY point found nothing, when a source holds that series only per quarter (B5).
+
+    "Rasio ULN terhadap PDB 30,7% pada Juli 2026" against TabI.7, whose ratio row is quarterly
+    (Q2-2026 = 30,63): "data tidak ditemukan" sent the reader looking for a row that is there.
+    """
+    for point in missing:
+        if point.year is None or not point.month or point.month.startswith("Q"):
+            continue
+        for src in sources:
+            if src.table.axis_type != "temporal" or not src.table.row_labels:
+                continue
+            periods = src.table.available_periods(point.metric_label)
+            if periods and all(month.startswith("Q") for _, month in periods):
+                year, quarter = max(periods, key=lambda p: (p[0], _period_ordinal(p[1])))
+                row = src.table._resolve_label(point.metric_label)
+                return (
+                    f"Tabel [{src.label}] memuat '{row}' hanya per triwulan (terakhir {quarter} "
+                    f"{year}), sedangkan klaim menyebut {point.month} {point.year}; angka bulanan "
+                    "tidak tersedia untuk dibandingkan."
+                )
+    return None
+
+
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     # A time-only operation over categorical data points can never be computed — fail fast
     # with an explanation instead of scanning sources for data that cannot qualify.
@@ -1951,6 +2226,18 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 f"tetapi klaim ini merujuk atribut non-waktu ('{fact.display_label}')."
             ),
         )
+
+    # A superlative ranks the named groups as well as giving their direction (B4).
+    if fact.rank_group:
+        plain = ExtractedFact(fact.operation, fact.periods, fact.claimed_value, fact.unit,
+                              fact.context_quote, fact.page_number, group_scope=fact.group_scope)
+        return _check_ranking(fact, _evaluate_fact(plain, sources), sources)
+
+    # A share of several rows together ("pangsa sektor A, B dan C") — see _combined_share.
+    if fact.operation == "ratio" and fact.periods:
+        combined = _combined_share(fact, sources)
+        if combined is not None:
+            return combined
 
     # A quantified group claim ("seluruh", "sebagian besar", "lainnya") the extractor marked as
     # such is judged on every group of its breakdown — see _judge_group_scope.
@@ -2181,6 +2468,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         ))
 
     if not candidates:
+        if best_reason is None and best_missing:
+            best_reason = _only_quarterly_reason(best_missing, sources)
         return _inconclusive_result(fact, best_missing, best_reason)
 
     # Coverage first (a tie goes to the source whose title and matched rows carry the claim's
@@ -3592,7 +3881,9 @@ async def verify_paired(
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))
+    facts = _drop_group_stand_ins(facts)
     _attach_group_exclusions(facts)
+    _attach_rankings(facts)
     emit("extract", "done", detail=f"{len(facts)} klaim ditemukan")
 
     excel_filenames = [src.filename for src in parsed_sources]

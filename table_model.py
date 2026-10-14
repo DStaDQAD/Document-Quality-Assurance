@@ -801,10 +801,24 @@ class TableData:
         for pattern, row_name in self._alias_patterns():
             query = pattern.sub(row_name, query)
         abbreviations = self._abbreviations()
-        if not abbreviations or QUAL_SEP not in query and query.strip() not in abbreviations:
+        if not abbreviations:
             return query
         parts = [p.strip() for p in query.split(QUAL_SEP)]
-        return QUAL_SEP.join(abbreviations.get(p, p) for p in parts)
+        return QUAL_SEP.join(self._spelled_out(p, abbreviations) for p in parts)
+
+    def _spelled_out(self, level: str, abbreviations: Dict[str, str]) -> str:
+        """A level as this table spells it: a bare abbreviation ('IKK'), or the abbreviated name
+        with words missing — 'Indeks Kondisi Ekonomi (IKE)' for 'Indeks Kondisi Ekonomi Saat Ini
+        (IKE)', which the containment tiers cannot bridge. Only when every word the level does
+        give belongs to that name: a level whose words contradict its abbreviation stays as it
+        is rather than being read as the abbreviation's index."""
+        if level in abbreviations:
+            return abbreviations[level]
+        match = self._ABBREVIATION_RE.search(level)
+        full = abbreviations.get(match.group(1)) if match else None
+        if full and full != level and _sig_words(level) <= _sig_words(full):
+            return full
+        return level
 
     def _alias_patterns(self) -> List[Tuple["re.Pattern", str]]:
         """term_aliases as (pattern, row name), longest phrase first so 'uln sektor publik' wins
