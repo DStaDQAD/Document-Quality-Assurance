@@ -206,6 +206,30 @@ The JSON report records, per case, the mode and the sources that answered it —
 table came off a scanned page, so its numbers were read by the model rather than out of the
 PDF's text layer; that is the first thing to check when an internal-mode case scores badly.
 
+## Regression corpus — per-claim diff between two runs
+
+`run_comparison_eval` and the unit tests cannot see a correct verdict turning wrong on a real
+document; aggregate counts hide it too. `run_regression.py` checks a corpus of real documents
+through `/api/verify-paired` (in-process, Tinjauan AI on) and compares two runs claim by claim.
+
+```bash
+python -m eval.run_regression run   --manifest eval/cases/regression/publications.yaml --out runs/base
+python -m eval.run_regression diff  runs/base runs/new      # !! = Sesuai lost or Tidak Sesuai gained
+python -m eval.run_regression score runs/new --manifest <manifest with labels>
+```
+
+- `run` costs LLM credit (about Rp700 per document) and skips documents already written, so an
+  interrupted run resumes. For a baseline of another commit, run it from a `git worktree` of
+  that commit with `--data-root` pointing at the checkout holding the gitignored files.
+- The extractor varies run to run, so only a baseline run the same day is a fair comparison.
+- A claim is identified by its operation, stated number and sentence, never by the metric label
+  the extractor invents (it renames rows between runs).
+- Manifest labels (`quote`, `expected`, optional `operation`/`claimed_value`) are hand-checked
+  truths. A true claim split into several facts is right only when every fact is; a seeded
+  error is caught when any fact is Tidak Sesuai.
+- `eval/cases/regression/publications.yaml` holds one release per BI publication (files under
+  `tests/fixtures/publications/`, local only).
+
 ## Typo-checker eval (deterministic pass)
 
 The fact-checker is only half of what the pipeline shows a user; the other tab is the

@@ -1,0 +1,71 @@
+# One release per BI publication, checked against the sheets a user would tick — the same
+# selection as the 2026-10-07..12 e2e regressions. Files live under tests/fixtures/publications/
+# (gitignored), so this runs locally only. See eval/run_regression.py.
+- id: uang-beredar
+  publication: uang-beredar
+  doc: tests/fixtures/publications/uang-beredar/2026-07/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/uang-beredar/2026-07/TABEL1_1_1.xls, sheets: [I.1A]}
+    - {file: tests/fixtures/publications/uang-beredar/2026-07/TABEL1_1.xls, sheets: [I.1]}
+- id: uang-primer-m0
+  publication: uang-primer-m0
+  doc: tests/fixtures/publications/uang-beredar/2026-07/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/uang-primer-m0/2026-07/TABEL1_2.xls, sheets: [I.2]}
+    - {file: tests/fixtures/publications/uang-beredar/2026-07/TABEL1_1_1.xls, sheets: [I.1A]}
+- id: cadangan-devisa
+  publication: cadangan-devisa
+  doc: tests/fixtures/publications/cadangan-devisa/2026-08/siaran_pers.pdf
+  sources:
+    - {file: tests/fixtures/publications/cadangan-devisa/2026-08/TABEL5_9.xls, sheets: ['5.9']}
+- id: npi
+  publication: npi
+  doc: tests/fixtures/publications/npi/2026-Q2/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/npi/2026-Q2/TABEL5_1.xls, sheets: ['5.1']}
+- id: pii
+  publication: pii
+  doc: tests/fixtures/publications/pii/2026-Q2/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/pii/2026-Q2/TABEL5_39.xls, sheets: ['5.39']}
+- id: sk
+  publication: sk
+  doc: tests/fixtures/publications/sk/2026-08/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/sk/2026-08/Tabel Series Survei Konsumen Agustus 2026.xlsx,
+       sheets: [Tabel 1, Tabel 2, Tabel 3]}
+- id: spe
+  publication: spe
+  doc: tests/fixtures/publications/spe/2026-07/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/spe/2026-07/Tabel Series SPE -  Juli 2026.xlsx,
+       sheets: [Tabel 1, Tabel 2, Tabel 3, Tabel 5, Tabel 6, Tabel 9]}
+- id: skdu
+  publication: skdu
+  doc: tests/fixtures/publications/skdu/2026-Q2/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/skdu/2026-Q2/Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx,
+       sheets: [T1 Kegiatan Usaha, T2 Kapasitas Produksi, T4 Penggunaan Tenaga Kerja]}
+- id: sbank
+  publication: sbank
+  doc: tests/fixtures/publications/sbank/2026-Q2/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/sbank/2026-Q2/Data Series Survei Perbankan_ Triwulan II 2_026_.xlsx,
+       sheets: [Tabel1, Tabel3]}
+- id: shpr
+  publication: shpr
+  doc: tests/fixtures/publications/shpr/2026-Q2/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/shpr/2026-Q2/SHPR_Tw_II_2026.xlsx, sheets: [TABEL 1, TABEL 3]}
+- id: pmi
+  publication: pmi
+  doc: tests/fixtures/publications/pmi/2026-Q1/laporan.pdf
+  sources:
+    - {file: tests/fixtures/publications/pmi/2026-Q1/PMI-Triwulan-I-2026.xlsx, sheets: [T1 PMI, T2]}
+- id: sulni
+  publication: sulni
+  doc: tests/fixtures/publications/sulni/2026-07/siaran_pers.pdf
+  sources:
+    - {file: tests/fixtures/publications/sulni/2026-07/TABEL_INDONESIA Sep26_value.xlsx, sheets: [TabI.1]}
+    - {file: tests/fixtures/publications/sulni/2026-07/TABEL_SWASTA Sep26_value.xlsx, sheets: [Tbl III.2]}
+    - {file: tests/fixtures/publications/sulni/2026-07/TABEL_PEMERINTAH Sep26_value.xlsx, sheets: [Tbl II.2]}
