@@ -27,6 +27,15 @@ SPECS = (
 )
 SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 
+# The release's own names for rows the tables label otherwise. "ULN publik" / "sektor publik" is
+# BI's fixed definition of the government plus the central bank — the row 'Pemerintah dan Bank
+# Sentral' — in every SULNI release, not an interpretation of one sentence.
+TERM_ALIASES = {
+    "uln sektor publik": "Pemerintah dan Bank Sentral",
+    "uln publik": "Pemerintah dan Bank Sentral",
+    "sektor publik": "Pemerintah dan Bank Sentral",
+}
+
 
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)
@@ -35,4 +44,5 @@ def parse(data: bytes, sheet_name: str) -> TableData:
         r"Utang Luar Negeri", "Utang Luar Negeri (ULN)" + (" Indonesia" if national else ""),
         table.title, count=1, flags=re.IGNORECASE,
     )
+    table.term_aliases = dict(TERM_ALIASES)
     return table

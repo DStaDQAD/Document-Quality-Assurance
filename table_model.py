@@ -331,6 +331,11 @@ class TableData:
     # First occurrence wins for dupes.
     _data: Dict[Tuple, float] = field(default_factory=dict, repr=False)
 
+    # A publication's own name for a row its tables never print: {"uln publik": "Pemerintah
+    # dan Bank Sentral"}. Set by the publication parser (it is the publication's fixed
+    # definition, not a guess) and applied wherever a claim is read in this table's words.
+    term_aliases: Dict[str, str] = field(default_factory=dict, repr=False)
+
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
     # ------------------------------------------------------------------
@@ -793,11 +798,21 @@ class TableData:
         but the abbreviation is rewritten, and only when this table uses it for one name.
         """
         query = _expand_report_terms(query)
+        for pattern, row_name in self._alias_patterns():
+            query = pattern.sub(row_name, query)
         abbreviations = self._abbreviations()
         if not abbreviations or QUAL_SEP not in query and query.strip() not in abbreviations:
             return query
         parts = [p.strip() for p in query.split(QUAL_SEP)]
         return QUAL_SEP.join(abbreviations.get(p, p) for p in parts)
+
+    def _alias_patterns(self) -> List[Tuple["re.Pattern", str]]:
+        """term_aliases as (pattern, row name), longest phrase first so 'uln sektor publik' wins
+        over 'sektor publik'. Whole words, any case, any spacing."""
+        return [
+            (re.compile(r"\b" + r"\s+".join(map(re.escape, phrase.split())) + r"\b", re.IGNORECASE), row)
+            for phrase, row in sorted(self.term_aliases.items(), key=lambda kv: -len(kv[0]))
+        ]
 
     # The abbreviation a row level ends with: 'Indeks Keyakinan Konsumen (IKK)' -> 'IKK'.
     _ABBREVIATION_RE: ClassVar = re.compile(r"\(([A-Z]{2,6})\)\s*$")
