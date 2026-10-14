@@ -68,6 +68,7 @@ tests/fixtures/publications/**/*.pdf
 tests/fixtures/publications/**/*.zip
 # Tinjauan AI eval: snapshot of real report claims, model answers and hand labels â€” local only
 eval/cases/ai_review/
+eval/cases/audit_sep2026/
 
 # BI files downloaded from the DSTA SharePoint for manual checks — never committed
 sample_data/sharepoint/
