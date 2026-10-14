@@ -66,6 +66,10 @@ def cmd_run(args) -> int:
     os.environ["AI_REVIEW"] = "" if args.no_ai_review else "1"
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
+    data_root = Path(args.data_root) if args.data_root else REPO_ROOT
+    # A worktree has no .env of its own (it is gitignored); the keys live with the data.
+    from dotenv import load_dotenv
+    load_dotenv(data_root / ".env")
 
     import check_history
     check_history.LOCAL_DB_PATH = out / "history.db"     # never the production history
@@ -77,7 +81,6 @@ def cmd_run(args) -> int:
         wanted = set(args.only.split(","))
         docs = [d for d in docs if d.id in wanted]
     client = TestClient(main.app)
-    data_root = Path(args.data_root) if args.data_root else REPO_ROOT
     for doc in docs:
         target = out / f"{doc.id}.json"
         if target.exists():
