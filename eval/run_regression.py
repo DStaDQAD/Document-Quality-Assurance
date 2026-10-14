@@ -4,6 +4,7 @@
                                         [--only id1,id2] [--data-root PATH] [--no-ai-review]
     python -m eval.run_regression diff  BASE_DIR NEW_DIR [--all]
     python -m eval.run_regression score DIR --manifest M.yaml [...]
+    python -m eval.run_regression replay DIR --manifest M.yaml --out REPLAY_DIR
 
 `run` sends every document through /api/verify-paired in-process — the same request the UI
 makes — and writes DIR/<id>.json. It calls the real LLM provider (costs money) and skips a
@@ -23,7 +24,10 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
-from eval.regression import Document, diff_runs, load_manifest, score_label, summarize
+from eval.regression import (
+    Document, diff_runs, fact_from_dict, fact_from_result, fact_to_dict, load_manifest, score_label,
+    summarize,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 _SHORT = {"Entailed": "Sesuai", "Refuted": "TIDAK SESUAI", "Inconclusive": "TCD", None: "-"}
@@ -81,6 +85,16 @@ def cmd_run(args) -> int:
         wanted = set(args.only.split(","))
         docs = [d for d in docs if d.id in wanted]
     client = TestClient(main.app)
+    # Keep the extracted facts with each result, so `replay` can re-judge them exactly later.
+    import paired_verifier
+    captured: dict = {}
+    dedupe = paired_verifier._deduplicate_facts
+
+    def _capture(facts):
+        captured["facts"] = dedupe(facts)
+        return captured["facts"]
+
+    paired_verifier._deduplicate_facts = _capture
     for doc in docs:
         target = out / f"{doc.id}.json"
         if target.exists():
@@ -100,6 +114,7 @@ def cmd_run(args) -> int:
             print(f"[{doc.id}] GAGAL {response.status_code}: {str(body)[:300]}")
             continue
         body["_regression"] = {"seconds": round(time.time() - started), "sheets": len(sheets)}
+        body["_facts"] = [fact_to_dict(f) for f in captured.pop("facts", [])]
         target.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
         print(f"[{doc.id}] {time.time() - started:.0f}s · {body.get('total_facts')} klaim · "
               f"{body.get('entailed_count')}/{body.get('refuted_count')}/{body.get('inconclusive_count')}")
@@ -143,6 +158,64 @@ def cmd_diff(args) -> int:
     return 0
 
 
+def _parsed_sources(doc: Document, data_root: Path):
+    """The document's sheets parsed the way the endpoint parses them, with no LLM tier."""
+    from paired_verifier import _ExcelSource, _load_grid, _parse_table_with_fallback
+
+    files, sheets = _request_files(doc, data_root)
+    sources = []
+    for (_, (name, data, _ctype)), sheet in zip(files[1:], sheets):
+        try:
+            table, _ = _parse_table_with_fallback(data, sheet, llm=None, publication=doc.publication)
+        except ValueError:
+            continue
+        try:
+            grid = _load_grid(data, sheet)
+        except ValueError:
+            grid = None
+        sources.append(_ExcelSource(table=table, filename=name, sheet=sheet, grid=grid))
+    return sources
+
+
+def cmd_replay(args) -> int:
+    """Re-judge saved facts with the CURRENT comparison code — no LLM, no cost.
+
+    Uses the facts a run saved (`_facts`) when there are any, else rebuilds them from the saved
+    results (see fact_from_result). Not the whole pipeline: no extraction, no cell pointer, no
+    Tinjauan AI — so replay two commits and diff those, never a replay against a live run.
+    """
+    from paired_verifier import (
+        _attach_group_exclusions, _attach_rankings, _drop_group_stand_ins, _evaluate_fact_safely,
+    )
+
+    run_dir, out = Path(args.dir), Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    data_root = Path(args.data_root) if args.data_root else REPO_ROOT
+    for doc in load_manifest(args.manifest):
+        path = run_dir / f"{doc.id}.json"
+        if not path.exists():
+            continue
+        body = json.loads(path.read_text(encoding="utf-8"))
+        if body.get("_facts"):
+            facts, rebuilt = [fact_from_dict(f) for f in body["_facts"]], False
+        else:
+            facts, rebuilt = [fact_from_result(r) for r in body.get("results", [])], True
+        skipped = sum(f is None for f in facts)
+        facts = [f for f in facts if f is not None]
+        sources = _parsed_sources(doc, data_root)
+        facts = _drop_group_stand_ins(facts)
+        _attach_group_exclusions(facts)
+        _attach_rankings(facts)
+        results = [_evaluate_fact_safely(f, sources).model_dump() for f in facts]
+        (out / f"{doc.id}.json").write_text(json.dumps(
+            {"results": results, "_replay": {"rebuilt": rebuilt, "skipped": skipped}},
+            ensure_ascii=False, indent=1), encoding="utf-8")
+        print(f"[{doc.id}] {len(results)} klaim dinilai ulang"
+              + (f", {skipped} tidak bisa dibangun ulang" if skipped else "")
+              + (" (dari hasil, bukan fakta tersimpan)" if rebuilt else ""))
+    return 0
+
+
 def cmd_score(args) -> int:
     run_dir = Path(args.dir)
     totals = {"benar": 0, "salah": 0, "hilang": 0}
@@ -180,11 +253,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("base")
     p.add_argument("new")
     p.add_argument("--all", action="store_true", help="also list claims that did not change")
+    p = sub.add_parser("replay")
+    p.add_argument("dir")
+    p.add_argument("--manifest", type=Path, action="append", required=True)
+    p.add_argument("--out", required=True)
+    p.add_argument("--data-root")
     p = sub.add_parser("score")
     p.add_argument("dir")
     p.add_argument("--manifest", type=Path, action="append", required=True)
     args = parser.parse_args(argv)
-    return {"run": cmd_run, "diff": cmd_diff, "score": cmd_score}[args.cmd](args)
+    return {"run": cmd_run, "diff": cmd_diff, "score": cmd_score, "replay": cmd_replay}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -236,3 +236,73 @@ def summarize(changes: List[Change]) -> Dict[str, int]:
         out[c.kind] = out.get(c.kind, 0) + 1
     out["perlu_dijelaskan"] = sum(c.needs_review for c in changes)
     return out
+
+
+# --- replay: re-judging saved results with the current comparison code ------------------------
+
+_TREND_OPS = {"is_increasing", "is_decreasing", "is_stable"}
+_TIME_RE = re.compile(r"\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|Q[1-4]) (\d{4})\b")
+_MONTH_ORDER = {m: i for i, m in enumerate(
+    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
+_MONTH_ORDER.update({"Q1": 3, "Q2": 6, "Q3": 9, "Q4": 12})
+
+
+def _when(p) -> tuple:
+    return (p.year or 0, _MONTH_ORDER.get(p.month or "", 0))
+
+
+def fact_from_result(r: dict):
+    """The fact a saved result judged, rebuilt so the comparison can be re-run without the model.
+
+    Points that resolved carry the table's own row name, so a replay re-runs the arithmetic and
+    the verdict rules on exactly those rows; a claim that never resolved is rebuilt from its
+    reason ("... untuk: <metric> <Mon> <year>."). A yoy result lists the year-ago point the code
+    added — dropped again — and a quantified one is rebuilt on its series. Chart labels and
+    results that cannot be rebuilt return None.
+    """
+    from structured_extractor import ExtractedFact, PeriodPoint
+
+    if r.get("checked_item") == "chart":
+        return None
+    op = r.get("operation")
+    points = [PeriodPoint(p["metric_label"], p.get("year"), p.get("month"), p.get("col_label"))
+              for p in r.get("periods") or []]
+    if not points:
+        reason = r.get("reasoning") or ""
+        m = re.search(r"untuk: (.+?)\.\s*$", reason.split(" | ")[0])
+        times = _TIME_RE.findall(m.group(1)) if m else []
+        if not times:
+            return None
+        year, month = int(times[-1][1]), times[-1][0]
+        labels = [l.strip() for l in (r.get("metric_label") or "").split(" / ") if l.strip()]
+        points = [PeriodPoint(label, year, month) for label in labels]
+    if not points:
+        return None
+    scope = r.get("group_scope")
+    if scope:
+        series = re.sub(r"\s*\([^()]*kelompok[^()]*\)\s*$", "", r.get("metric_label") or "")
+        latest = max(points, key=_when)
+        points = [PeriodPoint(series, latest.year, latest.month, latest.col_label)]
+    elif op == "yoy_growth" and len(points) > 1:
+        points = [max(points, key=_when)]
+    fact = ExtractedFact(op, points, r.get("claimed_value"), r.get("claimed_unit"),
+                         r.get("context_quote") or "", r.get("page_number"), group_scope=scope)
+    return fact
+
+
+def fact_to_dict(f) -> dict:
+    return {"operation": f.operation, "claimed_value": f.claimed_value, "unit": f.unit,
+            "context_quote": f.context_quote, "page_number": f.page_number,
+            "group_scope": f.group_scope,
+            "periods": [{"metric_label": p.metric_label, "year": p.year, "month": p.month,
+                         "col_label": p.col_label} for p in f.periods]}
+
+
+def fact_from_dict(d: dict):
+    from structured_extractor import ExtractedFact, PeriodPoint
+    return ExtractedFact(
+        d["operation"], [PeriodPoint(p["metric_label"], p.get("year"), p.get("month"), p.get("col_label"))
+                         for p in d["periods"]],
+        d.get("claimed_value"), d.get("unit"), d.get("context_quote") or "", d.get("page_number"),
+        group_scope=d.get("group_scope"),
+    )

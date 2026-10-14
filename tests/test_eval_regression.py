@@ -167,3 +167,41 @@ def test_a_restructured_sentence_with_a_different_verdict_is_still_flagged():
     base = [_r(q, "Entailed", "above_threshold", 100.0, "Indeks > Kelompok A")]
     new = [_r(q, "Refuted", "above_threshold", 100.0, "Indeks (seluruh kelompok)")]
     assert any(c.needs_review for c in diff_runs(base, new))
+
+
+# --- replay: re-judging saved results without calling the model ------------------------------
+
+def test_a_saved_result_is_rebuilt_into_the_fact_it_judged():
+    from eval.regression import fact_from_result
+    r = {"operation": "yoy_growth", "metric_label": "Toko A", "claimed_value": -0.3,
+         "claimed_unit": "persen_yoy", "context_quote": "Toko A turun 0,3% (yoy).", "verdict": "Entailed",
+         "reasoning": "", "periods": [{"metric_label": "Penjualan > Toko A", "year": 2025, "month": "Jul"},
+                                      {"metric_label": "Penjualan > Toko A", "year": 2026, "month": "Jul"}]}
+    fact = fact_from_result(r)
+    assert fact.operation == "yoy_growth" and fact.claimed_value == -0.3
+    assert [(p.metric_label, p.year, p.month) for p in fact.periods] == [("Penjualan > Toko A", 2026, "Jul")]
+
+
+def test_an_unresolved_result_is_rebuilt_from_its_reason():
+    from eval.regression import fact_from_result
+    r = {"operation": "value", "metric_label": "pangsa toko", "claimed_value": 80.6, "claimed_unit": "persen",
+         "context_quote": "q", "verdict": "Inconclusive", "periods": [],
+         "reasoning": "Data tidak ditemukan di sumber Excel manapun untuk: pangsa toko Jul 2026."}
+    fact = fact_from_result(r)
+    assert [(p.metric_label, p.year, p.month) for p in fact.periods] == [("pangsa toko", 2026, "Jul")]
+
+
+def test_a_quantified_result_is_rebuilt_on_its_series():
+    from eval.regression import fact_from_result
+    r = {"operation": "is_increasing", "metric_label": "Penjualan (seluruh kelompok)", "group_scope": "all",
+         "context_quote": "q", "verdict": "Entailed", "reasoning": "", "claimed_value": None,
+         "periods": [{"metric_label": "Penjualan > Utara", "year": 2026, "month": "Aug"},
+                     {"metric_label": "Penjualan > Utara", "year": 2026, "month": "Sep"}]}
+    fact = fact_from_result(r)
+    assert fact.group_scope == "all"
+    assert [(p.metric_label, p.month) for p in fact.periods] == [("Penjualan", "Sep")]
+
+
+def test_a_chart_label_result_is_not_replayed():
+    from eval.regression import fact_from_result
+    assert fact_from_result({"checked_item": "chart", "operation": "value", "periods": []}) is None

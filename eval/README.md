@@ -229,6 +229,10 @@ python -m eval.run_regression score runs/new --manifest <manifest with labels>
   error is caught when any fact is Tidak Sesuai.
 - `eval/cases/regression/publications.yaml` holds one release per BI publication (files under
   `tests/fixtures/publications/`, local only).
+- `replay DIR --manifest M --out R` re-judges the saved facts with the CURRENT comparison code —
+  no LLM, no cost. `run` saves the extracted facts (`_facts`); older results are rebuilt from
+  their own periods and reasons. It skips extraction, the cell pointer and Tinjauan AI, so
+  compare two replays (before/after a change), never a replay against a live run.
 
 ## Typo-checker eval (deterministic pass)
 
