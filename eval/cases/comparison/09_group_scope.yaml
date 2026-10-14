@@ -1,0 +1,72 @@
+# Quantified group claims (group_scope): the group set comes from the table's sibling rows, and
+# the code decides "seluruh" / "kecuali" / "sebagian besar" / "lainnya". Synthetic shop data —
+# the shape of SK's per-group tables, none of its numbers.
+- id: group_all_up_entailed
+  description: "naik di seluruh cabang — every branch rose"
+  table: &shops
+    title: "Indeks penjualan per cabang"
+    unit: "Indeks"
+    data:
+      - {label: "Penjualan > Utara", year: 2026, month: Aug, value: 100.0}
+      - {label: "Penjualan > Utara", year: 2026, month: Sep, value: 104.0}
+      - {label: "Penjualan > Selatan", year: 2026, month: Aug, value: 100.0}
+      - {label: "Penjualan > Selatan", year: 2026, month: Sep, value: 102.0}
+      - {label: "Penjualan > Timur", year: 2026, month: Aug, value: 100.0}
+      - {label: "Penjualan > Timur", year: 2026, month: Sep, value: 101.0}
+      - {label: "Penjualan > Barat", year: 2026, month: Aug, value: 100.0}
+      - {label: "Penjualan > Barat", year: 2026, month: Sep, value: 96.0}
+      - {label: "Penjualan > Total", year: 2026, month: Aug, value: 100.0}
+      - {label: "Penjualan > Total", year: 2026, month: Sep, value: 99.0}
+  fact:
+    operation: is_increasing
+    group_scope: all
+    context_quote: "Penjualan meningkat di seluruh cabang, kecuali cabang Barat yang turun."
+    group_exclude: ["Penjualan > Barat"]
+    periods:
+      - {metric_label: "Penjualan > Utara", year: 2026, month: Sep}
+      - {metric_label: "Penjualan > Selatan", year: 2026, month: Sep}
+  expected: {verdict: Entailed}
+- id: group_all_refuted_by_unlisted_branch
+  description: "seluruh cabang naik, but Barat (not listed by the extractor) fell"
+  table: *shops
+  fact:
+    operation: is_increasing
+    group_scope: all
+    context_quote: "Penjualan meningkat di seluruh cabang."
+    periods:
+      - {metric_label: "Penjualan > Utara", year: 2026, month: Sep}
+      - {metric_label: "Penjualan > Selatan", year: 2026, month: Sep}
+  expected: {verdict: Refuted}
+- id: group_majority_entailed
+  description: "sebagian besar cabang naik — 3 of 4"
+  table: *shops
+  fact:
+    operation: is_increasing
+    group_scope: majority
+    context_quote: "Penjualan naik pada sebagian besar kelompok cabang."
+    periods:
+      - {metric_label: "Penjualan > Utara", year: 2026, month: Sep}
+      - {metric_label: "Penjualan > Barat", year: 2026, month: Sep}
+  expected: {verdict: Entailed}
+- id: group_majority_wrong_direction_refuted
+  description: "sebagian besar cabang turun — only 1 of 4 fell"
+  table: *shops
+  fact:
+    operation: is_decreasing
+    group_scope: majority
+    context_quote: "Penjualan turun pada sebagian besar kelompok cabang."
+    periods:
+      - {metric_label: "Penjualan > Utara", year: 2026, month: Sep}
+      - {metric_label: "Penjualan > Barat", year: 2026, month: Sep}
+  expected: {verdict: Refuted}
+- id: group_rest_entailed
+  description: "naik di Utara, Selatan dan Timur, sedangkan cabang lainnya turun"
+  table: *shops
+  fact:
+    operation: is_decreasing
+    group_scope: rest
+    context_quote: "Penjualan naik di cabang Utara, Selatan dan Timur, sedangkan kelompok cabang lainnya turun."
+    group_exclude: ["Penjualan > Utara", "Penjualan > Selatan", "Penjualan > Timur"]
+    periods:
+      - {metric_label: "Penjualan > Barat", year: 2026, month: Sep}
+  expected: {verdict: Entailed}

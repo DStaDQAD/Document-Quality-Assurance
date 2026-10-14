@@ -24,7 +24,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, List, Literal, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
@@ -169,6 +169,15 @@ class _ExtractedFact(BaseModel):
             "number: the key directional phrase). Examples: 'tercatat sebesar Rp10.355,1 triliun', "
             "'tumbuh 9,7% (yoy)'. NEVER copy the whole sentence — the surrounding sentence is "
             "recovered from the source text by code."
+        ),
+    )
+    group_scope: Optional[Literal["all", "majority", "rest"]] = Field(
+        None,
+        description=(
+            "Only for a trend/threshold claim about a QUANTIFIED set of groups (see rule 9): "
+            "'all' = seluruh/semua kelompok, 'majority' = sebagian besar/mayoritas kelompok, "
+            "'rest' = kelompok lainnya / selebihnya. null for every other claim, including one "
+            "about groups the sentence names one by one."
         ),
     )
 
@@ -359,12 +368,32 @@ IMPORTANT RULES:
    >Rp5 juta" → metric_label "Indeks Keyakinan Konsumen (IKK) > Pengeluaran >Rp5 juta", and
    "peningkatan IKE di Mataram" → "Indeks Kondisi Ekonomi Saat Ini (IKE) > Mataram". When a
    sentence names several groups, emit ONE fact per group.
-9. SKIP a claim whose subject is an UNNAMED or MULTI-ROW subset — "peningkatan IKK terjadi di
-   beberapa kota", "sebagian besar kota mencatat penurunan IEK", "pada kelompok pengeluaran
-   lainnya ... menurun", "responden dengan tingkat pendidikan lainnya", "kelompok usia >41
-   tahun" where the table lists 41-50 / 51-60 / >60 separately. No single row corresponds to
-   it, and checking it against the overall series would compare the wrong thing. If the same
-   sentence also NAMES members ("...antara lain, di Mataram, Padang, dan Palembang"), extract
+9. A CLAIM ABOUT A QUANTIFIED SET OF GROUPS keeps its quantifier in group_scope — the code reads
+   the complete list of groups from the table, so you never have to know them all:
+     'seluruh' / 'semua' kelompok (cabang, kota, ...)        → group_scope='all'
+     'sebagian besar' / 'mayoritas' kelompok                 → group_scope='majority'
+     'kelompok lainnya' / 'selebihnya' after named groups    → group_scope='rest'
+   Use it only with is_increasing / is_decreasing / is_stable / above_threshold /
+   below_threshold. periods: one point per row of THAT breakdown you find in the reference list
+   (at least two; the code completes the list), all at the claim's period.
+   'kecuali X' is two facts: the 'all' fact for the main direction AND a fact for X alone (no
+   group_scope) with the direction the sentence gives X — the opposite one when it gives none —
+   plus a 'value' fact when X's number is stated. Named groups followed by 'lainnya' are one
+   fact per named group (rule 8, no group_scope) and ONE 'rest' fact for the others.
+   EVERY fact from such a sentence — the quantified one, the named ones and each 'value' fact
+   ('menjadi 127,5', 'tertinggi ... sebesar 136,8') — carries the year and month of the period
+   the sentence is about; a 'value' fact without them is thrown away.
+   Neutral examples (a shop report — the pattern, not the words, is what matters):
+     'Penjualan meningkat di seluruh cabang, kecuali Cabang Barat yang turun menjadi 97,0'
+       → is_increasing group_scope='all' (periods: the cabang rows), is_decreasing for Cabang
+         Barat, value '97,0' for Cabang Barat
+     'Penjualan naik pada sebagian besar cabang'       → is_increasing group_scope='majority'
+     'Indeks optimis di Cabang Utara, sedangkan cabang lainnya pesimis'
+       → above_threshold '100' for Cabang Utara, below_threshold '100' group_scope='rest'
+   A RANGE names its groups: 'kelompok usia 20-40 tahun' is one fact per group row inside it
+   (rule 8). So does a LIST: 'seluruh komponen, yaitu A, B dan C' names its members — one fact
+   per member, no group_scope. SKIP only a subset no quantifier pins down — 'beberapa kota', 'sejumlah kelompok'
+   — and if the sentence also NAMES members ("...antara lain di Mataram dan Padang"), extract
    the named ones per rule 8 and skip only the unnamed remainder.
 """
 
@@ -432,7 +461,8 @@ class ExtractedFact:
     LLM's short anchor_quote (or the anchor verbatim when it could not be located) —
     the LLM never emits whole sentences, to keep extraction output-token cost down.
     """
-    __slots__ = ("operation", "periods", "claimed_value", "unit", "context_quote", "page_number")
+    __slots__ = ("operation", "periods", "claimed_value", "unit", "context_quote", "page_number",
+                 "group_scope", "group_exclude")
 
     def __init__(
         self,
@@ -442,6 +472,7 @@ class ExtractedFact:
         unit: Optional[str],
         context_quote: str,
         page_number: Optional[int] = None,
+        group_scope: Optional[str] = None,
     ):
         self.operation = operation
         self.periods = periods
@@ -449,6 +480,13 @@ class ExtractedFact:
         self.unit = unit
         self.context_quote = context_quote
         self.page_number = page_number
+        # A trend/threshold stated for a QUANTIFIED set of groups: "all" (seluruh/semua),
+        # "majority" (sebagian besar), "rest" (kelompok lainnya). None = the groups in `periods`
+        # are the ones the sentence names. The group set itself is read off the table by
+        # paired_verifier._judge_group_scope; group_exclude holds the rows the same sentence
+        # names separately (the exception of "kecuali X", the named groups before "lainnya").
+        self.group_scope = group_scope
+        self.group_exclude: List[str] = []
 
     @property
     def display_label(self) -> str:
@@ -697,13 +735,31 @@ def _all_occurrences(needle: str, haystack: str) -> List[Tuple[int, int]]:
     return spans
 
 
+_SENT_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
 def _anchor_candidates(anchor_norm: str, normalized: str) -> List[Tuple[int, int]]:
     """Every span where the anchor occurs, in document order.
 
     Exact match first (the common case for short anchors), then a 6-word window slid across
     the anchor so longer quotes whose first words differ from the source (mid-sentence starts,
     LLM prefix drift) still match. The first form that matches anything wins outright.
+
+    Only when nothing matches is the search repeated ignoring case: the model lower-cases the
+    first word of a sentence it quotes from the middle ('peningkatan indeks terjadi ...' for
+    'Peningkatan indeks ...'). Lower-casing keeps every offset when it keeps the length, which
+    is checked, so the spans still point into the original text.
     """
+    spans = _anchor_candidates_cased(anchor_norm, normalized)
+    if spans:
+        return spans
+    lowered = normalized.lower()
+    if len(lowered) != len(normalized):
+        return []
+    return _anchor_candidates_cased(anchor_norm.lower(), lowered)
+
+
+def _anchor_candidates_cased(anchor_norm: str, normalized: str) -> List[Tuple[int, int]]:
     if len(anchor_norm) >= 10:
         spans = _all_occurrences(anchor_norm, normalized)
         if spans:
@@ -726,7 +782,7 @@ def _anchor_candidates(anchor_norm: str, normalized: str) -> List[Tuple[int, int
 
 def _anchor_fit(
     normalized: str, span: Tuple[int, int], metric_words: set, value_text: Optional[str]
-) -> Tuple[int, bool]:
+) -> Tuple[int, bool, int]:
     """How well the sentence around one candidate span matches the fact that quoted it.
 
     Ranked on metric-name overlap FIRST and the claimed number only as a tie-break. A report
@@ -735,12 +791,20 @@ def _anchor_fit(
     is not, because a threshold claim's bound ("100") is often printed in sentences about other
     metrics too. Weighing the number first would have pulled the IPDG claim onto page 1's IKK
     sentence, which is exactly the mislocation this function exists to prevent.
+
+    The last tie-break is the lead-in — the two sentences before. A report often names the
+    indicator once and goes on with "Peningkatan indeks terjadi pada seluruh ..." for each
+    breakdown in turn (SK Sept 2026 has that phrase for expenditure groups and then for
+    education levels); the sentence itself then matches every candidate equally, and only the
+    sentence introducing it says which indicator it is about.
     """
     sentence = _expand_anchor_to_sentence(normalized, span[0], span[1]) or normalized[
         max(0, span[0] - 200) : span[1] + 200
     ]
     overlap = len(metric_words & _sig_words(sentence))
-    return overlap, bool(value_text and value_text in sentence)
+    before = _SENT_SPLIT_RE.split(normalized[max(0, span[0] - 500) : span[0]])
+    lead_in = len(metric_words & _sig_words(" ".join(before[-3:])))
+    return overlap, bool(value_text and value_text in sentence), lead_in
 
 
 def _locate_anchor(
@@ -1063,6 +1127,42 @@ def _split_into_page_chunks(filtered_text: str, max_chars: int) -> List[str]:
 # Raw-facts → ExtractedFact finalization (shared by sync and async entry points)
 # ---------------------------------------------------------------------------
 
+_GROUP_SCOPE_OPS = {"is_increasing", "is_decreasing", "is_stable", "above_threshold", "below_threshold"}
+
+
+# Any word that places a number in time. A sentence carrying one of these may be about another
+# period than the report's, so an undated number in it is not given the report period.
+_TIME_WORD_RE = re.compile(
+    r"\b(?:januari|februari|maret|april|mei|juni|juli|agustus|september|oktober|november|"
+    r"desember|jan|feb|mar|apr|jun|jul|agu|aug|sep|okt|oct|nov|des|dec|(?:19|20)\d{2}|"
+    r"triwulan|kuartal|semester|tahun|bulan|minggu|sebelumnya|lalu|yoy|mtm|qtq|ytd|ctc)\b",
+    re.IGNORECASE,
+)
+
+
+def _sentence_names_no_time(f, normalized: str) -> bool:
+    """True when the sentence a fact's anchor sits in names no period at all."""
+    anchor = (getattr(f, "anchor_quote", "") or "").strip()
+    span = _locate_anchor(anchor, normalized) if anchor else None
+    if span is None:
+        return False
+    sentence = _expand_anchor_to_sentence(normalized, span[0], span[1])
+    return bool(sentence) and _TIME_WORD_RE.search(_PAGE_MARKER_PATTERN.sub("", sentence)) is None
+
+
+def _dominant_period(raw_facts) -> Optional[Tuple[int, str]]:
+    """The (year, month) the extracted facts name most often — the period the report is about."""
+    counts: Dict[Tuple[int, str], int] = {}
+    for f in raw_facts:
+        for p in f.periods:
+            raw_month = getattr(p, "month", None)
+            month = _PERIOD_NORM.get(raw_month.lower().strip()) if raw_month else None
+            year = getattr(p, "year", None)
+            if year is not None and month is not None:
+                counts[(year, month)] = counts.get((year, month), 0) + 1
+    return max(counts, key=counts.get) if counts else None
+
+
 def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List[ExtractedFact]:
     """Normalize months, parse claimed values, and resolve pages + quotes for raw LLM output.
 
@@ -1076,6 +1176,7 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
     claimed_value_raw is expected (pure direction claims with no explicit number).
     """
     normalized = _normalize_ws(filtered_text)
+    report_period = _dominant_period(raw_facts)
     facts: List[ExtractedFact] = []
     for f in raw_facts:
         periods: List[PeriodPoint] = []
@@ -1092,10 +1193,21 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
                 periods.append(PeriodPoint(metric_label=p.metric_label, year=year, month=month))
             elif col_label is not None:
                 periods.append(PeriodPoint(metric_label=p.metric_label, col_label=col_label))
+            elif report_period and year is None and month is None and (
+                f.operation in _GROUP_SCOPE_OPS or _sentence_names_no_time(f, normalized)
+            ):
+                # A trend or threshold the model left undated is about the report's own period
+                # (the one its other facts name); it states no number that a wrong month could
+                # contradict. A number is dated this way only when its sentence names no time
+                # at all — prompt rule 2d: the number belongs to the report's own period unless
+                # the text ties it to another.
+                periods.append(PeriodPoint(metric_label=p.metric_label, year=report_period[0],
+                                           month=report_period[1]))
             else:
                 logger.warning(
                     "Period without a usable (year, month) or col_label "
-                    "(month=%r, year=%r), skipping fact", raw_month, year,
+                    "(month=%r, year=%r), skipping %s fact %r (%r)", raw_month, year,
+                    f.operation, p.metric_label, getattr(f, "anchor_quote", ""),
                 )
                 valid = False
                 break
@@ -1149,6 +1261,10 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
                 continue
             page_num = None
             quote = f.anchor_quote
+        # A quantifier only means something for a claim checked group by group.
+        scope = getattr(f, "group_scope", None)
+        if f.operation not in _GROUP_SCOPE_OPS:
+            scope = None
         facts.append(ExtractedFact(
             operation=f.operation,
             periods=periods,
@@ -1156,6 +1272,7 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
             unit=f.unit,
             context_quote=quote,
             page_number=page_num,
+            group_scope=scope,
         ))
 
     logger.info("Finalized %d structured facts from %d raw LLM facts", len(facts), len(raw_facts))

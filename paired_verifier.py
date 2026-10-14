@@ -1584,6 +1584,362 @@ def _judge_per_group(
 VERDICT_TEXT = {"Entailed": "sesuai", "Refuted": "tidak sesuai", "Inconclusive": "tidak cukup data"}
 
 
+# ---------------------------------------------------------------------------
+# Quantified group claims: "seluruh", "kecuali", "sebagian besar", "lainnya"
+# ---------------------------------------------------------------------------
+
+_SCOPE_TEXT = {"all": "seluruh kelompok", "majority": "sebagian besar kelompok",
+               "rest": "kelompok lainnya"}
+# A level of a row name that totals its siblings rather than being one of them.
+_AGGREGATE_GROUP_RE = re.compile(
+    r"^(?:total|jumlah|keseluruhan|nasional|rata-?rata|semua|seluruh)\b", re.IGNORECASE
+)
+
+
+def _levels(label: str) -> List[str]:
+    return [level.strip() for level in label.split(QUAL_SEP)]
+
+
+def _group_family(labels: List[str], src: _ExcelSource) -> Optional[Tuple[List[str], str]]:
+    """Every row of `src` in the same breakdown as `labels`, and the shared series name.
+
+    The breakdown is the one level in which the given rows differ ('Penjualan > Cabang Utara'
+    vs '... > Cabang Selatan' differ in the last; 'Cabang Utara > Penjualan' vs 'Cabang Selatan
+    > Penjualan' in the first). Its members are the table's rows that agree with them on every
+    other level — the siblings — minus rows that total the others ('Total', 'Jumlah'). Needs at
+    least two different rows to tell which level is the group; None when it cannot.
+    """
+    split = [_levels(label) for label in dict.fromkeys(labels)]
+    # A breakdown is a level BELOW a series ('Penjualan > Cabang Utara'); whole series side by
+    # side ('Omzet', 'Biaya') are different indicators, not groups of one.
+    if len(split) < 2 or len({len(s) for s in split}) != 1 or len(split[0]) < 2:
+        return None
+    differing = [i for i in range(len(split[0])) if len({s[i] for s in split}) > 1]
+    if len(differing) != 1:
+        return None
+    pos = differing[0]
+    fixed = split[0][:pos] + split[0][pos + 1:]
+    # One series can carry two breakdowns side by side ('Penjualan > Wilayah Utara' and
+    # 'Penjualan > Usia 20-30 th'). A word every listed group shares ('wilayah') names the
+    # dimension, and the family keeps to it.
+    shared = frozenset.intersection(*(_label_tokens(s[pos])[0] for s in split))
+    family = []
+    for row in src.table.row_labels:
+        levels = _levels(row)
+        if (len(levels) == len(split[0]) and levels[:pos] + levels[pos + 1:] == fixed
+                and not _AGGREGATE_GROUP_RE.match(levels[pos])
+                and shared <= _label_tokens(levels[pos])[0]):
+            family.append(row)
+    return list(dict.fromkeys(family)), QUAL_SEP.join(fixed)
+
+
+# Words of a quantified sentence that say nothing about WHICH breakdown it is about.
+_SCOPE_FILLER_WORDS = frozenset(
+    "kelompok seluruh semua sebagian besar mayoritas lainnya lain indeks pada di dan yang "
+    "level optimis pesimis meningkat menurun naik turun peningkatan penurunan terjadi tetap "
+    "berada tercatat sebesar dengan untuk dari secara".split()
+)
+
+
+def _family_from_sentence(fact: ExtractedFact, sources: List[_ExcelSource]):
+    """(family, series, source) for a quantified fact that lists only its indicator.
+
+    "Keyakinan konsumen tetap optimis pada seluruh kelompok pengeluaran" can come back as one
+    fact on 'Indeks Keyakinan Konsumen (IKK)' with no group at all. The breakdown is then the
+    one whose group names share a word with the sentence ('pengeluaran'), among the rows that
+    put a group level next to that indicator.
+    """
+    series_labels = list(dict.fromkeys(p.metric_label for p in fact.periods if QUAL_SEP not in p.metric_label))
+    if len(series_labels) != 1:
+        return None
+    quote_words = _label_tokens(fact.context_quote or "")[0] - _SCOPE_FILLER_WORDS
+    best = None
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        series_words = _sig_words(src.table._normalise_query(series_labels[0]))
+        if not series_words:
+            continue
+        by_position: Dict[int, List[str]] = {}
+        for row in src.table.row_labels:
+            levels = _levels(row)
+            if len(levels) != 2:
+                continue
+            for i, level in enumerate(levels):
+                other = levels[1 - i]
+                if (series_words <= _sig_words(level) and not _AGGREGATE_GROUP_RE.match(other)
+                        and (_label_tokens(other)[0] - series_words) & quote_words):
+                    by_position.setdefault(1 - i, []).append(row)
+        for rows in by_position.values():
+            found = _group_family(rows, src)
+            if found and (best is None or len(found[0]) > len(best[0])):
+                best = (found[0], found[1], src)
+    return best
+
+
+def _attach_group_exclusions(facts: List[ExtractedFact]) -> None:
+    """Give each quantified fact the groups its own sentence names separately.
+
+    "Naik di seluruh cabang, kecuali Cabang Barat yang turun" arrives as an "all" fact and a
+    named fact for Cabang Barat with the opposite direction; "naik di Cabang Utara, sedangkan
+    cabang lainnya turun" as a named fact and a "rest" fact. The named groups are not part of
+    the quantified set. For "all"/"majority" only a named fact claiming something DIFFERENT is
+    an exception — "naik di sebagian besar cabang, terutama di Cabang Utara" names a member of
+    the majority, not an exception to it. "rest" is, by definition, every group not named.
+    """
+    for fact in facts:
+        fact.group_exclude = []
+    for fact in facts:
+        if not fact.group_scope:
+            continue
+        quote = _normalize_quote(fact.context_quote)
+        excluded: List[str] = []
+        for other in facts:
+            if (other is fact or other.group_scope or _normalize_quote(other.context_quote) != quote
+                    or other.operation not in _TREND_OPS | _THRESHOLD_OPS):
+                continue
+            if fact.group_scope != "rest" and (other.operation, other.claimed_value) == (
+                fact.operation, fact.claimed_value
+            ):
+                continue
+            excluded.extend(p.metric_label for p in other.periods)
+        fact.group_exclude = list(dict.fromkeys(excluded))
+
+
+def _normalize_quote(quote: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", quote or "").strip().lower()
+
+
+def _member_line(row: str, result: Optional[FactVerificationResult]) -> str:
+    """'row: sesuai — Aug 2026=100.0, Sep 2026=101.0' — the numbers from the member's own
+    trend/threshold reasoning ('… | Excel [src]: numbers | verdict'), without the source."""
+    if result is None:
+        return f"{row}: tidak ada data"
+    parts = result.reasoning.split(" | ")
+    numbers = re.sub(r"^Excel \[[^\]]*\]:\s*", "", parts[1]) if len(parts) >= 3 else result.reasoning
+    return f"{row}: {VERDICT_TEXT.get(result.verdict, result.verdict)} — {numbers}"
+
+
+_KECUALI_RE = re.compile(r"\bkecuali\b(?P<clause>[^.;]*)", re.IGNORECASE)
+
+
+def _level_named_in(level: str, text: str) -> bool:
+    """True when `text` names this group: every word and figure of it ('Cabang Barat',
+    'Akademi/Diploma'), its own range ('kelompok Rp3,1-4 juta' for 'Pengeluaran Rp3,1 - 4
+    juta'), or a range drawn around it ('kelompok usia 20-40 tahun' for 'Usia 31-40 th')."""
+    words, figures = _label_tokens(level)
+    text_words, text_figures = _label_tokens(text)
+    if (words or figures) and words <= text_words and set(figures) <= set(text_figures):
+        return True
+    own = _GROUP_SPAN_RE.search(level)
+    if own is None:
+        return False
+    kind, low, high = _span(own)
+    if any(_span(m) == (kind, low, high) for m in _GROUP_SPAN_RE.finditer(text)):
+        return True
+    return any(k == kind and lo <= low and high <= hi
+               for k, lo, hi in (_span(m) for m in _QUOTE_SPAN_RE.finditer(text)))
+
+
+def _named_in_the_sentence(fact: ExtractedFact, family: List[str], pos: int) -> List[str]:
+    """Rows the sentence itself sets apart from the quantified set: the groups after 'kecuali'
+    for "all", every group it names before 'lainnya' for "rest". A backstop for the separate
+    facts _attach_group_exclusions links — those can be missing, or carry a different quote."""
+    quote = fact.context_quote or ""
+    if fact.group_scope == "all":
+        text = " ".join(m.group("clause") for m in _KECUALI_RE.finditer(quote))
+    elif fact.group_scope == "rest":
+        text = re.split(r"\blain(?:nya)?\b", quote, flags=re.IGNORECASE)[0]
+    else:
+        return []
+    if not text.strip():
+        return []
+    return [row for row in family if _level_named_in(_levels(row)[pos], text)]
+
+
+def _acronyms(text: str) -> set:
+    return set(re.findall(r"\(([A-Z]{2,})\)", text))
+
+
+def _single_rows_named(fact: ExtractedFact) -> Optional[List[str]]:
+    """The listed rows, when they are whole series (no breakdown level) that the sentence names
+    — "seluruh komponen, yaitu IPSI, IPDG dan IKLK" lists its members rather than quantifying
+    over a breakdown. A row counts as named by all its words or by its abbreviation."""
+    rows = list(dict.fromkeys(p.metric_label for p in fact.periods))
+    if not rows or any(QUAL_SEP in row for row in rows):
+        return None
+    quote = fact.context_quote or ""
+    quote_words = _sig_words(quote)
+    for row in rows:
+        if not (_sig_words(row) <= quote_words or _acronyms(row) & _acronyms(quote)):
+            return None
+    return rows
+
+
+def _judge_rows(fact: ExtractedFact, rows: List[str], src: _ExcelSource):
+    """Each row's own trend/threshold, computed on that row of `src`: [(row, result or None)]."""
+    times = list(dict.fromkeys((p.year, p.month, p.col_label) for p in fact.periods))
+    out = []
+    for row in rows:
+        sub = ExtractedFact(
+            operation=fact.operation,
+            periods=[PeriodPoint(row, y, m, c) for (y, m, c) in times],
+            claimed_value=fact.claimed_value, unit=fact.unit,
+            context_quote=fact.context_quote, page_number=fact.page_number,
+        )
+        resolved, missing, _ = _try_resolve(sub.periods, src)
+        out.append((row, None if missing else _compute_operation(sub, resolved, 1.0, src)))
+    return out
+
+
+def _named_rows_result(fact: ExtractedFact, rows: List[str], src: _ExcelSource) -> FactVerificationResult:
+    """Named groups/series, each judged on its own row: holds only if it holds for every one."""
+    verdicts = _judge_rows(fact, rows, src)
+    if any(r is not None and r.verdict == "Refuted" for _, r in verdicts):
+        overall = "Refuted"
+    elif all(r is not None and r.verdict == "Entailed" for _, r in verdicts):
+        overall = "Entailed"
+    else:
+        overall = "Inconclusive"
+    lines = " | ".join(_member_line(row, r) for row, r in verdicts)
+    reasoning = f"Klaim untuk kelompok yang disebut kalimat, diperiksa per baris [{src.label}]. | {lines}"
+    head = next((r for _, r in verdicts if r is not None and r.verdict == overall), None)
+    if head is None:
+        return _make_result(fact, [], src.label, None, None, None, None, None, overall, reasoning=reasoning)
+    return head.model_copy(update={"verdict": overall, "metric_label": fact.display_label,
+                                   "reasoning": reasoning})
+
+
+def _bundled_siblings(fact: ExtractedFact, sources: List[_ExcelSource]):
+    """(rows, source) when a trend lists several rows of ONE breakdown — named groups the
+    extractor put in one fact ('naik di usia 20-30 dan 31-40 tahun') — else None."""
+    first = fact.periods[0]
+    labels = list(dict.fromkeys(p.metric_label for p in fact.periods))
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        resolved, missing, _ = _try_resolve(
+            [PeriodPoint(label, first.year, first.month, first.col_label) for label in labels], src
+        )
+        if missing:
+            continue
+        rows = list(dict.fromkeys(label for label, _ in resolved))
+        found = _group_family(rows, src) if len(rows) == len(labels) else None
+        if found and all(row in found[0] for row in rows):
+            return rows, src
+    return None
+
+
+def _group_level_index(family: List[str]) -> int:
+    """Which level of a family's row names is the group (the one that varies)."""
+    split = [_levels(row) for row in family]
+    for i in range(len(split[0])):
+        if len({level[i] for level in split}) > 1:
+            return i
+    return len(split[0]) - 1
+
+
+def _judge_group_scope(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
+    return _judge_group_scope_members(fact, sources).model_copy(update={"group_scope": fact.group_scope})
+
+
+def _judge_group_scope_members(
+    fact: ExtractedFact, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """Check a quantified group claim on every group of its breakdown, read off the table.
+
+    The extractor's list of groups is only a pointer to the breakdown; the members are the
+    table's sibling rows (see _group_family), so a group the model forgot still counts. Each
+    member is computed directly on its own row in the same table — the subset guard in
+    _evaluate_fact exists for claims nobody resolved into groups, which this one now is.
+      all / rest : holds when it holds for every member; one counter-example refutes it.
+      majority   : holds for more than half of the members; refuted when it cannot.
+    """
+    first = fact.periods[0]
+    best = None
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        named = [_try_resolve([PeriodPoint(p.metric_label, first.year, first.month, first.col_label)], src)[0]
+                 for p in fact.periods]
+        named_rows = list(dict.fromkeys(r[0][0] for r in named if r))
+        excluded = _try_resolve(
+            [PeriodPoint(label, first.year, first.month, first.col_label) for label in fact.group_exclude],
+            src,
+        )[0]
+        excluded_rows = list(dict.fromkeys(label for label, _ in excluded))
+        found = _group_family(named_rows + excluded_rows, src)
+        if found is None:
+            continue
+        if best is None or len(named_rows) > best[0]:
+            best = (len(named_rows), src, found, excluded_rows)
+    if best is None:
+        from_sentence = _family_from_sentence(fact, sources)
+        if from_sentence:
+            family, series, src = from_sentence
+            excluded = _try_resolve(
+                [PeriodPoint(label, first.year, first.month, first.col_label) for label in fact.group_exclude],
+                src,
+            )[0]
+            best = (0, src, (family, series), list(dict.fromkeys(label for label, _ in excluded)))
+    if best is None:
+        named = _single_rows_named(fact)
+        for src in sources if named else []:
+            if src.origin != "chart" and not _try_resolve(
+                [PeriodPoint(row, first.year, first.month, first.col_label) for row in named], src
+            )[1]:
+                return _named_rows_result(fact, named, src)
+    if best is None:
+        return _make_result(
+            fact, [], None, None, None, None, None, None, "Inconclusive",
+            reasoning=(
+                f"Klaim berlaku untuk {_SCOPE_TEXT[fact.group_scope]}, tetapi kelompoknya tidak "
+                "bisa dipastikan dari tabel (perlu minimal dua baris kelompok yang sama)."
+            ),
+        )
+    _, src, (family, series), excluded_rows = best
+    excluded_rows = list(dict.fromkeys(
+        excluded_rows + _named_in_the_sentence(fact, family, _group_level_index(family))
+    ))
+    members = [row for row in family if row not in excluded_rows]
+    if not members:
+        return _make_result(
+            fact, [], src.label, None, None, None, None, None, "Inconclusive",
+            reasoning=f"Tidak ada kelompok '{series}' tersisa setelah kelompok yang disebut terpisah.",
+        )
+
+    verdicts = _judge_rows(fact, members, src)
+
+    n = len(verdicts)
+    ok = sum(1 for _, r in verdicts if r is not None and r.verdict == "Entailed")
+    bad = sum(1 for _, r in verdicts if r is not None and r.verdict == "Refuted")
+    if fact.group_scope == "majority":
+        overall = ("Entailed" if 2 * ok > n else "Refuted" if 2 * (n - bad) <= n else "Inconclusive")
+    else:
+        overall = "Refuted" if bad else "Entailed" if ok == n else "Inconclusive"
+
+    scope = _SCOPE_TEXT[fact.group_scope]
+    if fact.group_scope == "all" and excluded_rows:
+        scope += " kecuali " + ", ".join(_levels(r)[-1] if _levels(r)[-1] not in series else r
+                                         for r in excluded_rows)
+    lines = " | ".join(_member_line(row, r) for row, r in verdicts)
+    tally = f"{ok} dari {n} kelompok sesuai"
+    head = next((r for _, r in verdicts if r is not None and r.verdict == overall), None) or next(
+        (r for _, r in verdicts if r is not None), None
+    )
+    reasoning = (f"Klaim untuk {scope} '{series}' — kelompok diambil dari tabel [{src.label}]; "
+                 f"{tally}. | {lines}")
+    if head is None:
+        return _make_result(fact, [], src.label, None, None, None, None, None, overall, reasoning=reasoning)
+    return head.model_copy(update={
+        "verdict": overall,
+        "metric_label": f"{series} ({scope})",
+        "reasoning": reasoning,
+        "computed_value": None,
+        "delta": None,
+    })
+
+
 def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     # A time-only operation over categorical data points can never be computed — fail fast
     # with an explanation instead of scanning sources for data that cannot qualify.
@@ -1595,6 +1951,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 f"tetapi klaim ini merujuk atribut non-waktu ('{fact.display_label}')."
             ),
         )
+
+    # A quantified group claim ("seluruh", "sebagian besar", "lainnya") the extractor marked as
+    # such is judged on every group of its breakdown — see _judge_group_scope.
+    if fact.group_scope and fact.operation in _TREND_OPS | _THRESHOLD_OPS:
+        return _judge_group_scope(fact, sources)
 
     # A claim attributed to an unnamed subset cannot be settled by reading any single row.
     # Thresholds need this as much as trends do: "IPDG berada pada level optimis pada sebagian
@@ -1632,6 +1993,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # baseline is auto-completed from the table in _compute_trend.
     if fact.operation in _TREND_OPS:
         distinct_metrics = {p.metric_label.strip().lower() for p in fact.periods}
+        # Several rows of ONE breakdown are named groups bundled into one fact: each group's
+        # own trend is the claim. Unrelated series stay refused below.
+        bundled = _bundled_siblings(fact, sources) if len(distinct_metrics) > 1 else None
+        if bundled:
+            return _named_rows_result(fact, *bundled)
         if len(distinct_metrics) > 1:
             return _make_result(
                 fact, [], None, None, None, None, None, None, "Inconclusive",
@@ -2345,6 +2711,8 @@ async def _pointer_pass(
         i for i, r in enumerate(results)
         if r.verdict == "Inconclusive" and r.matched_excel_source is None
         and not _is_a_net_figure(facts[i])
+        # A pointer reads the cells it is pointed at; a quantified claim needs every group's.
+        and not facts[i].group_scope
     ]
     grid_sources = [s for s in sources if s.grid]
     if not candidate_idx or not grid_sources:
@@ -2473,7 +2841,8 @@ def _deduplicate_facts(facts: List[ExtractedFact]) -> List[ExtractedFact]:
     seen = set()
     unique = []
     for f in facts:
-        key = (f.operation, tuple((p.metric_label, p.year, p.month, p.col_label) for p in f.periods))
+        key = (f.operation, f.group_scope,
+               tuple((p.metric_label, p.year, p.month, p.col_label) for p in f.periods))
         if key not in seen:
             seen.add(key)
             unique.append(f)
@@ -3223,6 +3592,7 @@ async def verify_paired(
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))
+    _attach_group_exclusions(facts)
     emit("extract", "done", detail=f"{len(facts)} klaim ditemukan")
 
     excel_filenames = [src.filename for src in parsed_sources]

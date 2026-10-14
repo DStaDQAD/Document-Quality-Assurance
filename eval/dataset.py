@@ -47,6 +47,10 @@ class FactSpec:
     claimed_value: Optional[float] = None
     unit: Optional[str] = None
     context_quote: str = "(eval)"
+    # Quantified group claims: "all" | "majority" | "rest", and the rows the same sentence
+    # names separately (see paired_verifier._judge_group_scope).
+    group_scope: Optional[str] = None
+    group_exclude: List[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -137,6 +141,8 @@ def _parse_case(raw: dict) -> ComparisonCase:
         claimed_value=fact_raw.get("claimed_value"),
         unit=fact_raw.get("unit"),
         context_quote=fact_raw.get("context_quote", "(eval)"),
+        group_scope=fact_raw.get("group_scope"),
+        group_exclude=list(fact_raw.get("group_exclude", [])),
     )
 
     exp_raw = raw["expected"]
@@ -210,11 +216,14 @@ def build_fact(case: ComparisonCase) -> ExtractedFact:
         PeriodPoint(metric_label=p.metric_label, year=p.year, month=p.month, col_label=p.col_label)
         for p in case.fact.periods
     ]
-    return ExtractedFact(
+    fact = ExtractedFact(
         operation=case.fact.operation,
         periods=periods,
         claimed_value=case.fact.claimed_value,
         unit=case.fact.unit,
         context_quote=case.fact.context_quote,
         page_number=None,
+        group_scope=case.fact.group_scope,
     )
+    fact.group_exclude = list(case.fact.group_exclude)
+    return fact

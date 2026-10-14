@@ -1106,3 +1106,89 @@ def test_prompt_turns_a_stated_change_in_a_level_into_a_diff():
 
     assert "turun sebesar" in prompt
     assert "operation='diff'" in prompt
+
+
+def test_finalize_facts_carries_the_quantifier_of_a_group_claim():
+    raw = _fake_fact(operation="is_increasing", claimed_value_raw=None, group_scope="majority",
+                     anchor_quote="tercatat sebesar Rp10.355,1 triliun")
+    [fact] = _finalize_facts([raw], NARRATIVE)
+    assert fact.group_scope == "majority"
+
+
+def test_finalize_facts_leaves_an_ordinary_fact_unquantified():
+    [fact] = _finalize_facts([_fake_fact()], NARRATIVE)
+    assert fact.group_scope is None
+
+
+def test_the_quantifier_is_only_kept_on_trend_and_threshold_claims():
+    """'sebagian besar' only means something for a claim checked group by group; on a value
+    claim it would send one number to a check of every group."""
+    [fact] = _finalize_facts([_fake_fact(group_scope="all")], NARRATIVE)
+    assert fact.group_scope is None
+
+
+def test_finalize_facts_locates_an_anchor_quoted_with_different_capitals():
+    """The model lower-cased the start of a sentence ('peningkatan indeks terjadi ...'). Missing
+    it left the claim with only its anchor as quote, which also cut it off from the other facts
+    of its sentence (the exception of a 'kecuali')."""
+    text = "[== Halaman 1 ==]\nPenjualan Mei 2026 tercatat sebesar Rp10.355,1 triliun.\n"
+    [fact] = _finalize_facts([_fake_fact(anchor_quote="penjualan Mei 2026 tercatat sebesar")], text)
+    assert fact.context_quote.startswith("Penjualan Mei 2026") and fact.page_number == 1
+
+
+def test_an_anchor_in_two_sentences_goes_to_the_one_whose_lead_in_names_the_metric():
+    """Neither sentence names its indicator ('Peningkatan indeks terjadi pada seluruh ...'); the
+    sentence before each does. The tie is broken there, not by document order."""
+    text = (
+        "[== Halaman 1 ==]\n"
+        "Persepsi terhadap omzet toko berada pada level optimis. "
+        "Peningkatan indeks terjadi pada seluruh cabang besar. "
+        "Selanjutnya, persepsi terhadap stok gudang tetap kuat. "
+        "Peningkatan indeks terjadi pada seluruh cabang kecil.\n"
+    )
+    raw = _fake_fact(operation="is_increasing", claimed_value_raw=None,
+                     periods=[_fake_period(metric_label="Indeks Stok Gudang")],
+                     anchor_quote="Peningkatan indeks terjadi pada seluruh")
+    [fact] = _finalize_facts([raw], text)
+    assert fact.context_quote.endswith("cabang kecil.")
+
+
+def _undated(**overrides):
+    return _fake_fact(periods=[_fake_period(year=None, month=None)], **overrides)
+
+
+def test_an_undated_trend_or_threshold_takes_the_reports_own_period():
+    """The model sometimes leaves year/month empty on group claims ('berada pada level optimis
+    pada seluruh kelompok') — 23 facts of one report in one run. A trend or threshold with no
+    period of its own is about the period the report is about: the one its other facts name."""
+    dated = [_fake_fact(), _fake_fact(claimed_value_raw="10.355,1")]
+    threshold = _undated(operation="above_threshold", claimed_value_raw="100", anchor_quote="xx")
+    trend = _undated(operation="is_increasing", claimed_value_raw=None)
+    facts = _finalize_facts(dated + [threshold, trend], NARRATIVE + "100\n")
+    filled = [f for f in facts if f.operation in ("above_threshold", "is_increasing")]
+    assert len(filled) == 2
+    assert all((p.year, p.month) == (2026, "Apr") for f in filled for p in f.periods)
+
+
+def test_an_undated_value_claim_is_still_skipped():
+    """A stated number compared with the wrong month is a confident wrong verdict."""
+    facts = _finalize_facts([_fake_fact(), _undated()], NARRATIVE)
+    assert len(facts) == 1
+
+
+def test_an_undated_value_in_a_sentence_without_any_time_word_takes_the_report_period():
+    """'... kecuali Cabang Barat yang turun menjadi 97,0' — the model left the value undated in
+    run after run although the prompt asks for it. A sentence that names no time at all is
+    about the report's own period (prompt rule 2d)."""
+    text = ("[== Halaman 1 ==]\nPenjualan Apr 2026 tercatat sebesar Rp10.355,1 triliun.\n"
+            "Penjualan naik di seluruh cabang, kecuali Cabang Barat yang turun menjadi 97,0.\n")
+    undated = _undated(claimed_value_raw="97,0", unit=None, anchor_quote="turun menjadi 97,0")
+    facts = _finalize_facts([_fake_fact(), undated], text)
+    assert len(facts) == 2 and (facts[1].periods[0].year, facts[1].periods[0].month) == (2026, "Apr")
+
+
+def test_an_undated_value_in_a_sentence_that_names_another_time_is_still_skipped():
+    text = ("[== Halaman 1 ==]\nPenjualan Apr 2026 tercatat sebesar Rp10.355,1 triliun.\n"
+            "Angka ini lebih tinggi dibandingkan bulan sebelumnya sebesar 97,0.\n")
+    undated = _undated(claimed_value_raw="97,0", unit=None, anchor_quote="bulan sebelumnya sebesar 97,0")
+    assert len(_finalize_facts([_fake_fact(), undated], text)) == 1

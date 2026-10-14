@@ -86,6 +86,15 @@ Penyebab dari sisi desain:
 ### B. Mesin pembanding (kode)
 - **B1 (tinggi).** Kode menilai kuantor: `seluruh` = semua kelompok, `kecuali X` = X berkebalikan, `sebagian besar` = lebih dari separuh, `lainnya` = sisa kelompok. "Sebagian besar" **jangan** dipecah menjadi klaim per kelompok, karena akan menghasilkan Tidak Sesuai palsu.
 - **B2 (tinggi).** Daftar kelompok untuk `seluruh` dan `lainnya` dilengkapi kode dari tabel (baris saudara), bukan dari ingatan AI.
+
+**A2 + B1 + B2: SELESAI di kode 2026-10-14 (e2e baru di laporan SK; publikasi lain belum diulang).**
+- Ekstraktor: field `group_scope` (`all` / `majority` / `rest`); aturan 9 prompt tidak lagi menyuruh *skip*. "kecuali X" = fakta `all` + fakta X sendiri; contoh di prompt netral (toko/cabang).
+- Kode (`paired_verifier._judge_group_scope`): himpunan kelompok = baris saudara di tabel (satu level nama baris yang berbeda, tanpa baris Total/Jumlah, dibatasi kata dimensi yang sama). Pengecualian diambil dari fakta bernama di kalimat yang sama **dan** dari teks kalimat (klausa "kecuali", kelompok yang disebut sebelum "lainnya", termasuk rentang "usia 20-40 tahun"). Kalau fakta hanya menyebut indikator, dimensi diambil dari kata di kalimat ("kelompok pengeluaran").
+- `all`/`rest`: semua anggota harus sesuai; `majority`: lebih dari separuh. Tinjauan AI dan penunjuk sel melewati klaim berkuantor (keduanya hanya melihat baris yang dikutip).
+- Ikut diperbaiki (umum): anchor dicari tanpa beda huruf besar/kecil; anchor yang muncul di dua kalimat dipilih lewat dua kalimat pengantarnya; tren yang membundel beberapa kelompok satu rincian dinilai per kelompok; tren/ambang tanpa periode, dan angka di kalimat tanpa kata waktu, diberi periode laporan.
+- Hasil (laporan SK asli, beberapa run): 0 Tidak Sesuai; 8 dari 9 klaim tabel audit kini Sesuai ([32] masih punya satu fakta salah label "IKLK > SMA" → TCD, isu A4). Dokumen sisipan: **10 dari 11** kesalahan tertangkap (baseline 7); semua Tidak Sesuai baru adalah kesalahan sisipan. Yang masih lolos: "penurunan ULN publik" (padanan istilah ULN publik ↔ Pemerintah dan Bank Sentral).
+- Sisa yang ditandai `diff` di laporan SK, semuanya variasi ekstraktor: label "Indeks Kondisi Ekonomi (IKE)" tanpa "Saat Ini" tidak ketemu oleh `lookup_fuzzy` (perlu perbaikan pencarian lewat singkatan, belum disentuh karena berdampak ke semua publikasi); label bebas "pembayaran cicilan".
+- **Belum:** regresi e2e 12 publikasi dengan kode baru, dan baseline 7 publikasi (sk, spe, skdu, sbank, shpr, pmi, sulni) yang terhenti karena memori. Hemat kredit: pasang cache LLM di runner dulu (lihat bawah).
 - **B3 (sedang).** Operasi baru: pangsa gabungan, yaitu jumlah beberapa baris ÷ total (SULNI #16).
 - **B4 (sedang).** Klaim peringkat ("tertinggi/terbesar di A, B, C") dicek sebagai urutan teratas, bukan hanya naik atau turun.
 - **B5 (rendah).** Alasan Tidak Cukup Data yang lebih tepat, misalnya "tabel hanya punya data triwulanan".
@@ -103,7 +112,12 @@ Penyebab dari sisi desain:
 
 ### E. Pengujian
 - **E1 (tinggi).** Masukkan klaim di tabel atas ke bank soal atau eval sebagai kasus tetap.
+  - **SELESAI 2026-10-14.** `eval/run_regression.py` (`run` / `diff` / `score`) memeriksa korpus dokumen lewat `/api/verify-paired` dan membandingkan dua run **per klaim** (klaim dikenali dari operasi, angka, dan kalimat; bukan label metrik). `diff` menandai `!!` setiap Sesuai yang hilang/berubah dan setiap Tidak Sesuai baru; klaim yang hanya "dibentuk ulang" (mis. lima fakta per kelompok menjadi satu fakta `seluruh kelompok` dengan vonis sama) tidak ditandai.
+  - Manifest 12 publikasi: `eval/cases/regression/publications.yaml` (di-commit). Label audit: `eval/cases/audit_sep2026/manifest_audit.yaml` (lokal): 104 Sesuai yang sudah diaudit + klaim tabel di atas.
+  - Kalibrasi: dua run kode lama pada laporan SK yang sama → 0 klaim yang perlu dijelaskan.
 - **E2 (tinggi).** Dokumen dengan kesalahan sengaja untuk menguji deteksi Tidak Sesuai.
+  - **SELESAI 2026-10-14.** `eval/cases/audit_sep2026/seed_errors.py` menulis salinan SULNI, laporan SK, dan narasi SK dengan 10 kesalahan sisipan ke `sample_data/sharepoint/seeded/`, ditambah "test case salah" M2 April (1 kesalahan). Label di `manifest_seeded.yaml` (lokal).
+  - Baseline kode lama (run 1): 7 dari 11 tertangkap. Yang lolos: arah ULN publik dibalik, "seluruh" tanpa pengecualian, kelompok bernama + lainnya ditukar, "sebagian besar" arah salah.
 
 ## Urutan yang disarankan
 

@@ -346,10 +346,16 @@ PROMPT = ChatPromptTemplate.from_messages([
 
 
 def review_candidates(results: List[FactVerificationResult]) -> List[int]:
-    """Narrative claims the code did not confirm. Chart labels are left to the chart checks."""
+    """Narrative claims the code did not confirm. Chart labels are left to the chart checks.
+
+    A quantified group claim ("seluruh", "sebagian besar", "lainnya") is not reviewed: the
+    review re-runs a claim on the rows the model cites, and for a claim about every group that
+    is a subset the model chose — it could leave out exactly the group that refutes it.
+    """
     return [
         i for i, r in enumerate(results)
         if r.verdict in ("Refuted", "Inconclusive") and r.checked_item == "narrative"
+        and not r.group_scope
     ]
 
 

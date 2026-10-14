@@ -113,6 +113,9 @@ class FactVerificationResult(BaseModel):
     # What was checked: a sentence of the report ("narrative") or a data label printed on one of
     # its charts ("chart" — context_quote then names the chart, e.g. "Grafik 2 · …").
     checked_item: Literal["narrative", "chart"] = "narrative"
+    # Set when the claim was about a quantified set of groups ("seluruh" = all, "sebagian besar"
+    # = majority, "kelompok lainnya" = rest) and was judged on every group of the breakdown.
+    group_scope: Optional[Literal["all", "majority", "rest"]] = None
 
 
 class ChartCheck(BaseModel):
