@@ -532,6 +532,37 @@ def _is_label_marker(v) -> bool:
     return isinstance(v, str) and bool(_LABEL_MARKER_RE.match(v.strip()))
 
 
+def _small_int(v) -> bool:
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and float(v).is_integer() and 1 <= v <= 99)
+
+
+def _enumeration_cols(grid: List[List], label_cols: List[int], lo: int, hi: int) -> set:
+    """Label columns whose numeric cells restart (1, 2, 3, 1, 2, 3): enumeration markers.
+
+    SKDU Tabel 3 numbers 'Baik' / 'Normal' / 'Buruk' 1, 2, 3 in a column of their own under
+    every section; read as labels, the '3' became the parent of 'Saldo Bersih' and Likuiditas
+    and Rentabilitas collided on '3 > Saldo Bersih (% Baik - % Buruk)'. Numbers that never
+    repeat are row numbers that tell rows apart (SEKI's 1.0 .. 12.0 over two 'Rupiah' rows)
+    and stay part of the label.
+    """
+    out = set()
+    for idx, c in enumerate(label_cols):
+        nums = [grid[r][c] for r in range(lo, min(hi, len(grid)))
+                if c < len(grid[r]) and _small_int(grid[r][c])]
+        if len(nums) != len(set(nums)):
+            out.add(idx)
+    return out
+
+
+_AGGREGATE_LABEL = re.compile(r"(?:total|jumlah)", re.IGNORECASE)
+
+
+def _is_aggregate_label(v) -> bool:
+    """'TOTAL', 'T O T A L', 'Jumlah' — a row summing the rows above it."""
+    return isinstance(v, str) and bool(_AGGREGATE_LABEL.fullmatch(re.sub(r"\s+", "", v)))
+
+
 def _composite_label(parts: List[Optional[str]]) -> str:
     """Join label parts with QUAL_SEP: whitespace-normalized, blanks dropped,
     consecutive case-insensitive duplicates collapsed ('Total > Total' -> 'Total')."""
@@ -631,26 +662,57 @@ def _parse_two_row_table(grid: List[List]) -> Optional[TableData]:
         # Per level: did the carried value come from a row that stored no data (a pure
         # section header) rather than from a data row's own cells?
         carry_from_header: List[bool] = [False] * len(label_cols)
+        # Per level: a section header that sat in the SAME column as the data rows under it
+        # (SKDU Tabel 3: '- Likuiditas', then 'Baik' / 'Normal' / 'Buruk' / 'Saldo Bersih' in
+        # that column). The data row's own text replaces the carry, so without this the
+        # section was lost and Likuiditas and Rentabilitas rows read the same.
+        section: List[Optional[str]] = [None] * len(label_cols)
+        enum_cols = _enumeration_cols(grid, label_cols, period_row + 1, region_end)
+        # The column headings ('Periode', 'Kelompok Bank') repeat on extra header rows of a
+        # block; such a row is not a section.
+        headings = [
+            {str(grid[hr][c]).strip() for hr in (year_row, period_row)
+             if c < len(grid[hr]) and not _is_empty(grid[hr][c])}
+            for c in label_cols
+        ]
         for r in range(period_row + 1, region_end):
             row = grid[r]
+            has_data = any(c < len(row) and _is_number(row[c]) for c in col_keys)
+            cells = [row[c] if c < len(row) else None for c in label_cols]
+            # A TOTAL row sums the rows above it, so it is nobody's child: in SKDU it sits one
+            # column right of the sector names and read as 'JASA LAINNYA > TOTAL'. Only a
+            # parent that is itself a data row is dropped — a section header ('Kredit' over
+            # its rows and their 'Total') still names the total.
+            aggregate = any(_is_aggregate_label(v) for v in cells)
             parts: List[Optional[str]] = []
             own: List[bool] = []   # part belongs to this row's identity (not a header carry)
             explicit_left = False
             set_here: List[int] = []
-            for idx, c in enumerate(label_cols):
-                v = row[c] if c < len(row) else None
+            for idx, v in enumerate(cells):
                 # A bullet/enumeration marker counts as blank so the section name carried
                 # down this column survives (see _is_label_marker).
-                if not _is_empty(v) and not _is_label_marker(v):
+                marker = _is_label_marker(v) or (idx in enum_cols and _small_int(v))
+                if not _is_empty(v) and not marker:
+                    if (has_data and carry[idx] is not None and carry_from_header[idx]
+                            and carry[idx].strip() not in headings[idx]):
+                        section[idx] = carry[idx]
+                    elif not has_data:
+                        section[idx] = None
+                    if has_data and section[idx] is not None:
+                        parts.append(section[idx])
+                        own.append(False)
                     carry[idx] = str(v)
                     for j in range(idx + 1, len(label_cols)):
                         carry[j] = None
+                        section[j] = None
                     parts.append(str(v))
                     own.append(True)
                     set_here.append(idx)
                     explicit_left = True
                 else:
                     inherited = None if explicit_left else carry[idx]
+                    if aggregate and inherited is not None and not carry_from_header[idx]:
+                        inherited = None
                     parts.append(inherited)
                     own.append(inherited is None or not carry_from_header[idx])
             label = _composite_label(parts)

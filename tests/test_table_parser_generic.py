@@ -599,3 +599,59 @@ def test_only_the_colliding_periods_are_dropped():
     })
 
     assert kept == {1: (2026, "Jan")}
+
+
+# ---------------------------------------------------------------------------
+# SKDU Tw II-2026 survey layouts (2026-10-15)
+# ---------------------------------------------------------------------------
+
+def _skdu_grid(rows):
+    """Title, unit, a year row over 'I'..'II' quarters of 2025-2026, then `rows`."""
+    head = [None, "LAPANGAN USAHA", None, None, 2025, 2025, 2026, 2026]
+    periods = [None, None, None, None, "I", "II", "I", "II"]
+    return [[None, "Tabel 1. Kegiatan Usaha"], [None, "(% Saldo Bersih Tertimbang - SBT)"],
+            head, periods] + rows
+
+
+def test_total_row_is_not_the_child_of_the_last_sector():
+    table = parse_generic_grid(_skdu_grid([
+        [None, None, "PERTANIAN", None, 1.0, 1.1, 1.2, 1.3],
+        [None, None, None, "Tanaman Pangan", 0.5, 0.6, 0.7, 0.8],
+        [None, None, "JASA LAINNYA", None, 0.2, 0.3, 0.4, 0.5],
+        [None, None, None, "TOTAL", 10.1, 11.0, 12.97, 11.75],
+    ]))
+    assert "TOTAL" in table.row_labels
+    assert table.lookup("TOTAL", 2026, "Q1") == 12.97
+    assert "PERTANIAN > Tanaman Pangan" in table.row_labels
+
+
+def test_restarting_row_numbers_and_same_column_sections_keep_rows_apart():
+    # SKDU Tabel 3: '- Likuiditas' heads 1 Baik / 2 Normal / 3 Buruk / Saldo Bersih in the
+    # same column, and '- Rentabilitas' repeats them.
+    table = parse_generic_grid(_skdu_grid([
+        [None, None, "Kondisi keuangan :", None],
+        [None, None, None, "- Likuiditas"],
+        [None, None, 1, "Baik", 24.0, 23.0, 23.98, 22.78],
+        [None, None, 2, "Buruk", 7.0, 7.1, 6.94, 7.75],
+        [None, None, None, "Saldo Bersih", 17.0, 15.9, 17.05, 15.03],
+        [None, None, None, "- Rentabilitas"],
+        [None, None, 1, "Baik", 24.5, 22.3, 24.04, 22.34],
+        [None, None, 2, "Buruk", 9.8, 9.4, 9.17, 10.47],
+        [None, None, None, "Saldo Bersih", 14.7, 12.9, 14.87, 11.87],
+    ]))
+    liq = "Kondisi keuangan : > - Likuiditas > Saldo Bersih"
+    ear = "Kondisi keuangan : > - Rentabilitas > Saldo Bersih"
+    assert table.lookup(liq, 2026, "Q2") == 15.03
+    assert table.lookup(ear, 2026, "Q2") == 11.87
+    assert not any(label.startswith(("1 >", "2 >")) for label in table.row_labels)
+
+
+def test_unique_row_numbers_stay_part_of_the_label():
+    # SEKI numbers its rows 1.0 .. N once each; there they are what tells two 'Rupiah' rows apart.
+    table = parse_generic_grid(_skdu_grid([
+        [None, None, "Simpanan", None],
+        [None, None, 1, "Rupiah", 1.0, 1.0, 1.0, 1.0],
+        [None, None, 2, "Rupiah", 2.0, 2.0, 2.0, 2.0],
+    ]))
+    assert table.lookup("Simpanan > 1 > Rupiah", 2026, "Q1") == 1.0
+    assert table.lookup("Simpanan > 2 > Rupiah", 2026, "Q1") == 2.0

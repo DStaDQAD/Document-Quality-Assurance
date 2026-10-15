@@ -15,7 +15,7 @@ from table_model import TableData
 
 FIXTURES = Path(__file__).parent / "fixtures" / "publications"
 _ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-          "Q1", "Q2", "Q3", "Q4"]
+          "Q1", "Q2", "Q3", "Q4", "S1", "S2"]
 
 
 def _goldens():

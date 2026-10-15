@@ -534,4 +534,25 @@ def parse_with_generic_reader(data: bytes, sheet_name: str, unit: str = "") -> T
     if table.axis_type != "temporal" or not table._data:
         raise PublicationParseError("tabel tidak terbaca sebagai deret waktu")
     table.unit = _BILINGUAL_SPLIT.split(table.unit)[0].strip(" ()") or unit
+    if _is_semester_series(table):
+        table._data = {
+            (label, year, SEMESTER_OF_HEADER[period]): value
+            for (label, year, period), value in table._data.items()
+        }
     return table
+
+
+# A semester sheet heads its columns 'I' / 'II' under each year, exactly as a quarterly sheet
+# heads 'I' .. 'IV', so the reader files them as Q1 / Q2. SKDU 'T7b Investasi Semesteran' then
+# answered "realisasi investasi meningkat pada triwulan II 2026" with semester I -> semester II
+# (a forecast) and refuted a true claim. S1 / S2 keep semester figures off quarter claims.
+SEMESTER_OF_HEADER = {"Q1": "S1", "Q2": "S2"}
+
+
+def _is_semester_series(table: TableData) -> bool:
+    """Every year has only periods I and II, and at least two years have both."""
+    by_year: Dict[int, set] = {}
+    for _, year, period in table._data:
+        by_year.setdefault(year, set()).add(period)
+    full_years = sum(1 for periods in by_year.values() if periods == {"Q1", "Q2"})
+    return full_years >= 2 and all(periods <= {"Q1", "Q2"} for periods in by_year.values())

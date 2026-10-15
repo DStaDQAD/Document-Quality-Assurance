@@ -11,21 +11,21 @@
       "T5 Harga Jual": {"year": 2026, "period": "Q3"},
       "T6 Perkiraan Inflasi": {"year": 2026, "period": "Q2"},
       "T7 Investasi Triwulanan": {"year": 2026, "period": "Q3"},
-      "T7b Investasi Semesteran": {"year": 2026, "period": "Q2"},
-      "T8 Perkembangan Upah": {"year": 2026, "period": "Q1"},
-      "T9 Upah Rata-rata": {"year": 2026, "period": "Q1"},
-      "T10 Margin Usaha": {"year": 2026, "period": "Q1"}
+      "T7b Investasi Semesteran": {"year": 2026, "period": "S2"},
+      "T8 Perkembangan Upah": {"year": 2026, "period": "S1"},
+      "T9 Upah Rata-rata": {"year": 2026, "period": "S1"},
+      "T10 Margin Usaha": {"year": 2026, "period": "S1"}
     }
   },
   "values": [
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
-     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
+     "label": "TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
      "expected": 12.97, "quote": "Saldo Bersih Tertimbang (SBT) sebesar 12,97%"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
-     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q1", "kind": "value", "decimals": 2,
+     "label": "TOTAL", "year": 2026, "period": "Q1", "kind": "value", "decimals": 2,
      "expected": 10.11, "quote": "lebih tinggi dari 10,11%"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
-     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q3", "kind": "value", "decimals": 2,
+     "label": "TOTAL", "year": 2026, "period": "Q3", "kind": "value", "decimals": 2,
      "expected": 11.75, "quote": "Pada triwulan III 2026, responden memprakirakan kegiatan usaha tetap terjaga dengan SBT 11,75%"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T1 Kegiatan Usaha",
      "label": "PERTANIAN, KEHUTANAN DAN PERIKANAN", "year": 2026, "period": "Q2", "kind": "value",
@@ -34,15 +34,15 @@
      "label": "KONSTRUKSI", "year": 2026, "period": "Q2", "kind": "value",
      "decimals": 2, "expected": 0.81, "quote": "LU Konstruksi (SBT 0,81%)"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T2 Kapasitas Produksi",
-     "label": "PENGADAAN AIR, PENGELOLAAN SAMPAH, LIMBAH DAN DAUR ULANG > TOTAL", "year": 2026,
+     "label": "TOTAL", "year": 2026,
      "period": "Q2", "kind": "value", "decimals": 2, "expected": 73.80,
      "quote": "kapasitas produksi terpakai pada triwulan II 2026 tercatat sebesar 73,80%"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T2 Kapasitas Produksi",
-     "label": "PENGADAAN AIR, PENGELOLAAN SAMPAH, LIMBAH DAN DAUR ULANG > TOTAL", "year": 2026,
+     "label": "TOTAL", "year": 2026,
      "period": "Q1", "kind": "value", "decimals": 2, "expected": 73.33,
      "quote": "dibandingkan 73,33% pada triwulan I 2026"},
     {"workbook": "Tabel SKDU 17 Lapangan Usaha Tw II-2026.xlsx", "sheet": "T4 Penggunaan Tenaga Kerja",
-     "label": "JASA LAINNYA > TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
+     "label": "TOTAL", "year": 2026, "period": "Q2", "kind": "value", "decimals": 2,
      "expected": 0.14, "quote": "SBT tenaga kerja tercatat tetap tumbuh sebesar 0,14%"}
   ]
 }

@@ -423,3 +423,29 @@ def test_starred_columns_are_kept_unless_the_sheet_is_said_to_end_at_its_forecas
     table = parse_series_sheet(_pmi_t2_grid(), SheetSpec(label_cols=(1,)))
 
     assert table.lookup("Industri Makanan dan Minuman", 2026, "Q4") == 51.8
+
+
+def test_semester_sheet_reads_s1_s2_not_quarters():
+    # SKDU 'T7b Investasi Semesteran' heads its columns I / II like a quarterly sheet; read as
+    # Q1 / Q2 it answered "realisasi investasi meningkat pada triwulan II" with semester figures.
+    from openpyxl import Workbook
+    import io
+    from publication_parsers._common import parse_with_generic_reader
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "T7b"
+    rows = [
+        [None, "Tabel 7b. Realisasi Investasi (Semesteran)"],
+        [None, "(% Saldo Bersih - SB)"],
+        [None, "INVESTASI", None, 2024, 2024, 2025, 2025, 2026, 2026],
+        [None, None, None, "I", "II", "I", "II", "I", "II*"],
+        [None, None, "Realisasi Investasi (% responden)", 20.1, 21.2, 22.25, 24.83, 18.86, 18.79],
+    ]
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    table = parse_with_generic_reader(buf.getvalue(), "T7b")
+    assert table.lookup("Realisasi Investasi (% responden)", 2026, "S1") == 18.86
+    assert table.lookup("Realisasi Investasi (% responden)", 2026, "Q2") is None
