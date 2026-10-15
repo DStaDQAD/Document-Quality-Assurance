@@ -680,3 +680,16 @@ def test_the_income_split_in_words_reaches_its_table_row(described, row, value):
     for label, v in zip(rows, (75.2, 9.2, 15.6)):
         table._data[(label, 2026, "Jun")] = v
     assert table.lookup_fuzzy(described, 2026, "Jun") == (row, value)
+
+
+def test_a_claim_naming_the_whole_parent_gets_the_parent_not_its_namesake_child():
+    # "LU Pertanian, Kehutanan, dan Perikanan" (a comma more than the sheet) was answered with
+    # sub-LU Perikanan, whose name is part of the parent's.
+    table = TableData(title="Tabel 1. Kegiatan Usaha", unit="SBT", row_labels=[
+        "PERTANIAN, KEHUTANAN DAN PERIKANAN", "PERTANIAN, KEHUTANAN DAN PERIKANAN > Tanaman Pangan",
+        "PERTANIAN, KEHUTANAN DAN PERIKANAN > Perikanan"])
+    for label, value in zip(table.row_labels, (1.74, 0.59, 0.19)):
+        table._data[(label, 2026, "Q2")] = value
+    assert table.lookup_fuzzy("LU Pertanian, Kehutanan, dan Perikanan", 2026, "Q2") == (
+        "PERTANIAN, KEHUTANAN DAN PERIKANAN", 1.74)
+    assert table.lookup_fuzzy("sub-LU Perikanan", 2026, "Q2")[1] == 0.19

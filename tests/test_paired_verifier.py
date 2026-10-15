@@ -12,6 +12,7 @@ from paired_verifier import (
     _build_table_suggestions,
     _deduplicate_facts,
     _evaluate_fact,
+    _evaluate_fact_safely,
     _growth_tolerance,
     _numeric_verdict,
     _parse_scale_unit,
@@ -2980,3 +2981,117 @@ def test_a_failing_review_stage_keeps_the_code_verdicts(mock_parse, mock_extract
         ))
     assert response.results[0].verdict == "Refuted"
     assert response.results[0].resolved_via is None
+
+
+# --- SKDU Tw II-2026: SBT wording is about the level (2026-10-15) ---------------------------------
+
+_SBT = "% Saldo Bersih Tertimbang - SBT"
+
+
+def _sbt_trend(operation, row, q1, q2, quote, unit=_SBT):
+    table = _make_table(title="Tabel 1. Kegiatan Usaha", unit=unit,
+                        data={(row, 2026, "Q1"): q1, (row, 2026, "Q2"): q2})
+    fact = _make_fact(operation=operation, claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label=row, month="Q1"),
+                               _make_period(metric_label=row, month="Q2")])
+    return _evaluate_fact(fact, [_make_source(table, filename="SKDU.xlsx", sheet="T1")])
+
+
+def test_sbt_tetap_tumbuh_means_positive_not_rising():
+    r = _sbt_trend("is_increasing", "PERDAGANGAN", 1.24, 1.04,
+                   "Kegiatan usaha LU Perdagangan pada triwulan II 2026 terindikasi tetap tumbuh.")
+    assert r.verdict == "Entailed"
+    assert "SBT positif" in r.reasoning
+
+
+def test_sbt_terjaga_means_positive_not_flat():
+    r = _sbt_trend("is_stable", "INDUSTRI PENGOLAHAN", 1.46, 1.34,
+                   "Kinerja usaha LU Industri Pengolahan pada triwulan II 2026 diindikasikan terjaga.")
+    assert r.verdict == "Entailed"
+
+
+def test_sbt_contributor_with_cited_balance_is_judged_on_its_level():
+    r = _sbt_trend("is_increasing", "PERTANIAN, KEHUTANAN DAN PERIKANAN", 4.07, 3.50,
+                   "Peningkatan harga jual antara lain bersumber dari LU Industri Pengolahan "
+                   "(SBT 5,16%), serta LU Pertanian, Kehutanan, dan Perikanan (SBT 3,50%).")
+    assert r.verdict == "Entailed"
+
+
+def test_sbt_negative_level_still_refutes_tetap_tumbuh():
+    r = _sbt_trend("is_increasing", "PERDAGANGAN", 0.4, -0.2,
+                   "Kegiatan usaha LU Perdagangan pada triwulan II 2026 terindikasi tetap tumbuh.")
+    assert r.verdict == "Refuted"
+
+
+def test_a_real_rise_claim_on_sbt_is_still_checked_as_a_rise():
+    r = _sbt_trend("is_increasing", "KONSTRUKSI", 0.81, 0.12,
+                   "Kegiatan usaha LU Konstruksi meningkat pada triwulan II 2026.")
+    assert r.verdict == "Refuted"
+
+
+def test_tetap_tumbuh_on_a_level_table_is_still_a_rise():
+    r = _sbt_trend("is_increasing", "Kredit", 100.0, 90.0,
+                   "Kredit pada triwulan II 2026 tetap tumbuh.", unit="triliun Rp")
+    assert r.verdict == "Refuted"
+
+
+def test_named_sectors_of_one_total_are_checked_one_by_one():
+    # SKDU: "kenaikan kinerja ... LU Pertanian dan LU Konstruksi" names two top-level rows of
+    # Tabel 1 (above its TOTAL); it was refused as two unrelated metrics.
+    t1 = _make_table(title="Tabel 1. Kegiatan Usaha", unit=_SBT, data={
+        ("PERTANIAN", 2026, "Q1"): 1.54, ("PERTANIAN", 2026, "Q2"): 1.74,
+        ("KONSTRUKSI", 2026, "Q1"): 0.12, ("KONSTRUKSI", 2026, "Q2"): 0.81,
+        ("TOTAL", 2026, "Q1"): 10.11, ("TOTAL", 2026, "Q2"): 12.97})
+    t4 = _make_table(title="Tabel 4. Penggunaan Tenaga Kerja", unit=_SBT, data={
+        ("PERTANIAN", 2026, "Q1"): -0.27, ("PERTANIAN", 2026, "Q2"): -0.23,
+        ("KONSTRUKSI", 2026, "Q1"): 0.5, ("KONSTRUKSI", 2026, "Q2"): 0.1,
+        ("TOTAL", 2026, "Q1"): 0.28, ("TOTAL", 2026, "Q2"): 0.14})
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Meningkatnya kegiatan usaha didorong oleh kenaikan kinerja "
+                                    "LU Pertanian dan LU Konstruksi.",
+                      periods=[_make_period(metric_label="LU Pertanian", month="Q2"),
+                               _make_period(metric_label="LU Konstruksi", month="Q2")])
+    r = _evaluate_fact(fact, [_make_source(t4, sheet="T4"), _make_source(t1, sheet="T1")])
+    assert r.verdict == "Entailed"
+    assert "T1" in r.reasoning
+
+
+def test_total_growth_broken_down_by_its_sources_is_a_positive_balance():
+    r = _sbt_trend("is_increasing", "TOTAL", 12.97, 11.75,
+                   "Kegiatan usaha diprakirakan meningkat bersumber dari LU Industri Pengolahan "
+                   "(SBT 1,47%) dan LU Konstruksi (SBT 0,95%).")
+    assert r.verdict == "Entailed"
+
+
+def test_tetap_tumbuh_clause_is_a_level_even_when_the_next_clause_rises():
+    quote = ("Penggunaan tenaga kerja pada triwulan II 2026 tetap tumbuh dan diprakirakan "
+             "meningkat pada triwulan III 2026.")
+    assert _sbt_trend("is_increasing", "TOTAL", 0.28, 0.14, quote).verdict == "Entailed"
+
+
+def test_anaphoric_sentence_is_not_refuted_by_the_total_standing_in_for_it():
+    table = _make_table(title="Tabel 4. Penggunaan Tenaga Kerja", unit=_SBT,
+                        data={("PERTANIAN", 2026, "Q3"): 0.06, ("TOTAL", 2026, "Q3"): 0.95})
+    fact = _make_fact(claimed_value=0.06, unit="persen",
+                      context_quote="Hal ini tecermin dari SBT jumlah tenaga kerja sebesar 0,06% (Grafik 13).",
+                      periods=[_make_period(metric_label="jumlah tenaga kerja", month="Q3")])
+    src = [_make_source(table, filename="SKDU.xlsx", sheet="T4")]
+    assert _evaluate_fact_safely(fact, src).verdict == "Inconclusive"
+    fact.claimed_value = 0.95
+    assert _evaluate_fact_safely(fact, src).verdict == "Entailed"
+
+
+def test_a_sector_whose_name_contains_a_sub_sector_is_not_read_as_naming_it():
+    t1 = _make_table(title="Tabel 1. Kegiatan Usaha", unit=_SBT, data={
+        ("PERTANIAN, KEHUTANAN DAN PERIKANAN", 2026, "Q1"): 1.54,
+        ("PERTANIAN, KEHUTANAN DAN PERIKANAN", 2026, "Q2"): 1.74,
+        ("PERTANIAN, KEHUTANAN DAN PERIKANAN > Perikanan", 2026, "Q1"): 0.19,
+        ("PERTANIAN, KEHUTANAN DAN PERIKANAN > Perikanan", 2026, "Q2"): 0.15})
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Kegiatan usaha LU Pertanian, Kehutanan, dan Perikanan pada "
+                                    "triwulan II 2026 diindikasikan meningkat.",
+                      periods=[_make_period(metric_label="PERTANIAN, KEHUTANAN DAN PERIKANAN", month="Q1"),
+                               _make_period(metric_label="PERTANIAN, KEHUTANAN DAN PERIKANAN", month="Q2")])
+    r = _evaluate_fact(fact, [_make_source(t1, filename="SKDU.xlsx", sheet="T1")])
+    assert r.verdict == "Entailed"
+    assert r.periods[-1].excel_value == 1.74

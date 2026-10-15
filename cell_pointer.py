@@ -319,9 +319,20 @@ def _select_rows(grid: List[List], queries: List[PointQuery]) -> Optional[List[i
     keep = set(range(min(_HEADER_ROWS, len(grid))))
     for r, row in enumerate(grid):
         row_words = _row_words(row)
-        if any(words & row_words for words in per_query_words):
+        if any(words & row_words for words in per_query_words) or _is_total_row(row):
             keep.add(r)
     return sorted(keep)
+
+
+def _is_total_row(grid_row: List) -> bool:
+    """A 'TOTAL' / 'T O T A L' / 'Jumlah' row. Always shown: when a claim names the whole
+    table ("SBT tenaga kerja" on SKDU Tabel 4) only the title shares its words, so the total
+    was pruned and the model, left without it, pointed at the first sector (Pertanian, -0,27
+    for a stated 0,28)."""
+    return any(
+        isinstance(v, str) and re.sub(r"\s+", "", v).lower() in ("total", "jumlah")
+        for v in grid_row
+    )
 
 
 def _requested_period_tokens(queries: List[PointQuery]) -> Tuple[set, set]:

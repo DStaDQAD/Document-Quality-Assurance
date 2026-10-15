@@ -616,6 +616,17 @@ class TableData:
                 # three that never asked.
                 if leaf and leaf in q_canon and self._query_is_about_the_label(query, label):
                     overlap = len(_sig_words(label) & q_words)
+                    parent_words = _sig_words(parent)
+                    if (parent in labels and _sig_words(child) <= parent_words
+                            and parent_words <= q_words):
+                        # The child's name is part of its parent's ('PERTANIAN, KEHUTANAN DAN
+                        # PERIKANAN > Perikanan', '… AKOMODASI DAN MAKAN MINUM > Penyediaan
+                        # Akomodasi'), so a claim naming the whole parent contains the child's
+                        # name too — and "LU Pertanian, Kehutanan, dan Perikanan" (one comma
+                        # more than the sheet) was answered with sub-LU Perikanan's figure.
+                        # The query names the parent row; that row is the answer.
+                        tier_leaf.append((parent, (-overlap - 1, 0, 0)))
+                        continue
                     # Among parents the query does not distinguish between, the aggregate one is
                     # what a bare claim means: "DPK korporasi" is the whole DPK's korporasi
                     # figure, not giro's. Ranked BELOW word overlap, so a query that does name a

@@ -434,7 +434,8 @@ def _point_desc(p: PeriodPoint) -> str:
     return p.col_label if p.col_label is not None else f"{p.month} {p.year}"
 
 
-_QUARTER_ORDINAL = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4}
+# S1 / S2: semester columns (publication_parsers._common.SEMESTER_OF_HEADER).
+_QUARTER_ORDINAL = {"Q1": 1, "Q2": 2, "Q3": 3, "Q4": 4, "S1": 1, "S2": 2}
 
 
 def _period_ordinal(token: str) -> int:
@@ -1065,6 +1066,86 @@ _SIZE_DOWN = re.compile(
 )
 
 
+# A net-balance survey table (SKDU, Survei Perbankan): a positive SBT/SB means the activity
+# grew, so the report's words describe the LEVEL, not a move against the previous quarter.
+_NET_BALANCE_UNIT = re.compile(r"saldo\s+bersih|\bSBT\b|\bSB\b|net\s+balance", re.IGNORECASE)
+# "tetap tumbuh", "seluruh sub-LU tercatat tumbuh": the balance is positive.
+_GROWTH_LEVEL_WORDS = re.compile(r"\b(tetap\s+tumbuh|tercatat\s+tumbuh|tumbuh\s+positif)\b",
+                                 re.IGNORECASE)
+# "kinerja ... terjaga", "tetap kuatnya investasi": still positive, judged as is_stable.
+_HELD_LEVEL_WORDS = re.compile(r"\b(terjaga\w*|tetap\s+kuat\w*|tetap\s+baik)\b", re.IGNORECASE)
+_MOVE_WORDS = re.compile(
+    r"\b(meningkat|naik|peningkatan|kenaikan|menurun|turun|penurunan|lebih\s+(tinggi|rendah))\b",
+    re.IGNORECASE,
+)
+# "bersumber dari LU Pertanian (SBT 3,50%)": the LU is a SOURCE of the total's rise.
+_CONTRIBUTION_WORDS = re.compile(r"\b(bersumber\s+dari|ditopang\s+oleh|didorong\s+oleh)\b",
+                                 re.IGNORECASE)
+_CITED_BALANCE = re.compile(r"\((?:SBT|SB)\s*-?\d[\d.,]*\s*%?\)", re.IGNORECASE)
+
+
+def _words(text: str) -> set:
+    return {w for w in re.findall(r"[a-z]+", text.lower()) if len(w) > 2 and w != "dan"}
+
+
+def _cited_as_contributor(quote: str, row: str) -> bool:
+    """True when `row` is one of the "X (SBT a%)" items after a contribution verb."""
+    verb = _CONTRIBUTION_WORDS.search(quote)
+    if not verb:
+        return False
+    leaf = _words(row.rsplit(QUAL_SEP, 1)[-1])
+    if not leaf:
+        return False
+    start = verb.end()
+    for cite in _CITED_BALANCE.finditer(quote, verb.end()):
+        item = _words(quote[start:cite.start()])
+        start = cite.end()
+        if len(leaf & item) / len(leaf) >= 0.6:
+            return True
+    return False
+
+
+def _net_balance_level_claim(fact: ExtractedFact, row: str, unit: str) -> Optional[str]:
+    """Why a trend claim on a net-balance row is really about its level being positive, or None.
+
+    SKDU Tw II-2026: "kegiatan usaha LU Perdagangan ... tetap tumbuh" (SBT 1,24 -> 1,04),
+    "kinerja usaha LU Industri Pengolahan ... terjaga" (1,46 -> 1,34) and "peningkatan harga jual
+    ... bersumber dari LU Pertanian (SBT 3,50%)" (4,07 -> 3,50) were all checked as a rise or a
+    flat line and refuted, though each says the balance is positive — which it is.
+    """
+    if fact.operation not in ("is_increasing", "is_stable") or not _NET_BALANCE_UNIT.search(unit or ""):
+        return None
+    quote = fact.context_quote or ""
+    if _cited_as_contributor(quote, row):
+        return "disebut sebagai sumber/penopang dengan nilai SBT-nya"
+    # "Kegiatan usaha diprakirakan meningkat bersumber dari LU A (SBT a%), LU B (SBT b%)": the
+    # sentence breaks the growth into its sources, so the total's 'meningkat' is growth — a
+    # positive balance (11,75) — not a rise over the quarter before (12,97).
+    verb = _CONTRIBUTION_WORDS.search(quote)
+    if (fact.operation == "is_increasing" and BITableData._is_aggregate(row) and verb
+            and _CITED_BALANCE.search(quote, verb.end())):
+        return "pertumbuhan yang dirinci menurut sumbernya"
+    if fact.operation == "is_stable" and _HELD_LEVEL_WORDS.search(quote):
+        return f"'{_HELD_LEVEL_WORDS.search(quote).group(0)}' pada saldo bersih"
+    if fact.operation == "is_increasing":
+        # Per clause: "tetap tumbuh dan diprakirakan meningkat pada triwulan III" holds a level
+        # word for the report's quarter and a real rise for the next one.
+        latest = fact.periods[-1].month if fact.periods else None
+        for clause in _CLAUSE_SPLIT.split(quote):
+            growth = _GROWTH_LEVEL_WORDS.search(clause)
+            if not growth or _MOVE_WORDS.search(clause):
+                continue
+            said = {_QUARTER_WORD[q.lower()] for q in _CLAUSE_QUARTER.findall(clause)}
+            if not said or latest in said:
+                return f"'{growth.group(0)}' pada saldo bersih"
+    return None
+
+
+_CLAUSE_SPLIT = re.compile(r"[,;]|\b(?:dan|serta|namun|sementara|meski(?:pun)?)\b", re.IGNORECASE)
+_CLAUSE_QUARTER = re.compile(r"\btriwulan\s+(IV|III|II|I)\b", re.IGNORECASE)
+_QUARTER_WORD = {"i": "Q1", "ii": "Q2", "iii": "Q3", "iv": "Q4"}
+
+
 def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
     matched_source = src.label
     used_periods = list(fact.periods)
@@ -1122,7 +1203,14 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             operation = "is_increasing" if grew else "is_decreasing"
 
     band_note = ""
-    if operation == "is_increasing":
+    level_reason = None if size_note else _net_balance_level_claim(
+        fact, labelled[-1][0], src.table.unit
+    )
+    if level_reason:
+        # The level at the claim's own (latest) period must be positive (= tumbuh / ekspansi).
+        ok = values[-1] > 0
+        band_note = f" (dinilai sebagai SBT positif: {level_reason})"
+    elif operation == "is_increasing":
         ok = all(values[i + 1] >= values[i] for i in range(len(values) - 1))
     elif operation == "is_decreasing":
         ok = all(values[i + 1] <= values[i] for i in range(len(values) - 1))
@@ -1498,6 +1586,15 @@ def _quote_bounds_group(group: str, quote: str) -> bool:
     return outside_all and re.search(r"\blain(?:nya)?\b", quote, re.IGNORECASE) is not None
 
 
+# A survey's answer categories, not groups: SKDU Tabel 8 splits each LU into 'Naik' / 'Tetap' /
+# 'Turun' / 'Saldo Bersih', and "kegiatan usaha LU Perdagangan tetap terjaga" read as a claim
+# about the row 'Perdagangan ... > Tetap'.
+_SURVEY_ANSWER_WORDS = frozenset({
+    "naik", "tetap", "turun", "baik", "buruk", "normal", "cukup", "sama", "mudah", "sulit",
+    "lebih", "meningkat", "menurun", "stabil",
+})
+
+
 def _groups_the_sentence_names(
     fact: ExtractedFact, sources: List[_ExcelSource]
 ) -> List[str]:
@@ -1525,10 +1622,18 @@ def _groups_the_sentence_names(
     def named_in_quote(level: str) -> bool:
         # Words AND figures: 'Usia 20-30 th' and 'Usia 31-40 th' differ only in their figures.
         words, figures = _label_tokens(level)
+        if words and not figures and words <= _SURVEY_ANSWER_WORDS:
+            return False
         return bool(words | set(figures)) and words <= quote_words and set(figures) <= quote_figures
 
+    wanted = {(p.year, p.month) for p in fact.periods if p.year is not None}
     for src in sources:
         if src.origin == "chart" or not src.table.row_labels:
+            continue
+        # A table with no column for the claim's period cannot hold its groups: SKDU's
+        # semester margin table ('… > Margin Minimum yang Tidak Mengganggu Kegiatan Usaha')
+        # was taken as the LU breakdown of a quarterly "kegiatan usaha meningkat" claim.
+        if wanted and not any((k[1], k[2]) in wanted for k in src.table._data if len(k) == 3):
             continue
         series_words = _sig_words(src.table._normalise_query(next(iter(names))))
         if not series_words:
@@ -1540,6 +1645,12 @@ def _groups_the_sentence_names(
                 continue
             is_series = [series_words <= _sig_words(level) for level in levels]
             others = [level for level, own in zip(levels, is_series) if not own]
+            # A group whose name is part of the series' own name ('PERTANIAN, KEHUTANAN DAN
+            # PERIKANAN > Perikanan') is "named" by every sentence about the whole series.
+            series_tokens = set().union(*(_label_tokens(level)[0]
+                                          for level, own in zip(levels, is_series) if own))
+            if any(_label_tokens(level)[0] <= series_tokens for level in others):
+                continue
             if any(is_series) and others and all(named_in_quote(level) for level in others):
                 rows.append(label)
         if rows:
@@ -1875,7 +1986,36 @@ def _bundled_siblings(fact: ExtractedFact, sources: List[_ExcelSource]):
         found = _group_family(rows, src) if len(rows) == len(labels) else None
         if found and all(row in found[0] for row in rows):
             return rows, src
-    return None
+    return _components_of_one_total(fact, labels, sources)
+
+
+def _components_of_one_total(fact: ExtractedFact, labels: List[str], sources: List[_ExcelSource]):
+    """(rows, source) when the named metrics are top-level components of ONE table's TOTAL.
+
+    SKDU writes its sectors as the table's own rows, not as 'Series > Sector':
+    "Meningkatnya kegiatan usaha tersebut didorong oleh kenaikan kinerja ... LU Pertanian, LU
+    Konstruksi, ..." names four rows of Tabel 1 above a 'TOTAL' row, yet was refused as four
+    unrelated metrics. The table has to be unambiguous — Tabel 1, 2, 4, 5, 6 and 7 all list
+    the same sectors — so only a table whose title the sentence names counts, and only when
+    exactly one does.
+    """
+    first = fact.periods[0]
+    quote_words = _sig_words(fact.context_quote or "")
+    picked = []
+    for src in sources:
+        if src.origin == "chart" or not src.table.row_labels:
+            continue
+        if not any(BITableData._is_aggregate(row) for row in src.table.row_labels):
+            continue
+        resolved, missing, _ = _try_resolve(
+            [PeriodPoint(label, first.year, first.month, first.col_label) for label in labels], src
+        )
+        rows = list(dict.fromkeys(label for label, _ in resolved))
+        if missing or len(rows) != len(labels) or any(QUAL_SEP in row for row in rows):
+            continue
+        if _sig_words(src.table.title or "") & quote_words:
+            picked.append((rows, src))
+    return picked[0] if len(picked) == 1 else None
 
 
 def _group_level_index(family: List[str]) -> int:
@@ -3106,6 +3246,37 @@ async def _pointer_pass(
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+# A sentence that points back at the one before it ("Hal ini tecermin dari ...", "Hal tersebut
+# ...") does not say whose figure it gives.
+_ANAPHORIC_OPENING = re.compile(r"^\s*(?:hal\s+(?:ini|tersebut)|kondisi\s+(?:ini|tersebut))\b",
+                                re.IGNORECASE)
+
+
+def _unnamed_total_guard(fact: ExtractedFact, result: FactVerificationResult) -> FactVerificationResult:
+    """A refutation that rests on the table's TOTAL standing in for a sentence with no subject.
+
+    SKDU: "... tenaga kerja di LU Pertanian ... diprakirakan meningkat. Hal ini tecermin dari
+    SBT jumlah tenaga kerja sebesar 0,06% (Grafik 13)." The second sentence names no sector,
+    so 'jumlah tenaga kerja' fell back to Tabel 4's TOTAL (0,95) and was refuted — the 0,06 is
+    Pertanian's. A match still confirms; a mismatch only says the total is not what was meant.
+    """
+    if (result.verdict != "Refuted" or fact.operation not in _LEVEL_OPS
+            or not _ANAPHORIC_OPENING.match(fact.context_quote or "")
+            or any(re.sub(r"\W", "", (p.metric_label or "").lower()) in ("total", "jumlah")
+                   for p in fact.periods)
+            or not result.periods
+            or not all(BITableData._is_aggregate(p.metric_label) for p in result.periods)):
+        return result
+    return result.model_copy(update={
+        "verdict": "Inconclusive",
+        "reasoning": (
+            "Kalimat ini merujuk ke kalimat sebelumnya tanpa menyebut rinciannya, dan angkanya "
+            f"tidak sama dengan baris TOTAL — kemungkinan angka ini milik rincian yang dibahas "
+            f"kalimat sebelumnya. | {result.reasoning}"
+        ),
+    })
+
+
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     """_evaluate_fact, with any failure contained to the one claim that caused it.
 
@@ -3116,7 +3287,7 @@ def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> F
     claim without a verdict — Inconclusive, with the reason logged — not a failed report.
     """
     try:
-        return _evaluate_fact(fact, sources)
+        return _unnamed_total_guard(fact, _evaluate_fact(fact, sources))
     except Exception as exc:
         logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
         return _make_result(

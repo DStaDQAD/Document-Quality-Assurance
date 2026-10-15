@@ -637,3 +637,17 @@ def test_pointer_rejects_a_breakdown_the_sheet_never_mentions(metric, row):
 ])
 def test_pointer_keeps_rows_that_name_the_claim(metric, row):
     assert pointer_is_plausible(_NPI_GRID, row, metric) is True
+
+
+def test_select_rows_keeps_the_total_row_a_whole_table_claim_needs():
+    # SKDU Tabel 4: "SBT tenaga kerja ... 0,28%" shares its words only with the title, so the
+    # TOTAL row was pruned and the model pointed at the first sector (Pertanian, -0,27).
+    from cell_pointer import _select_rows
+
+    grid = [["", "Tabel 4. Penggunaan Tenaga Kerja"], ["", "LAPANGAN USAHA", "2026"],
+            ["", "", "I"], [], [], [],
+            ["", "PERTANIAN", -0.27], ["", "SBT penggunaan tenaga kerja industri", 0.1],
+            ["", "", None, "T O T A L", 0.28]]
+    queries = [PointQuery(fact_index=0, data_key=("SBT tenaga kerja", 2026, "Q1"), desc="d")]
+    rows = _select_rows(grid, queries)
+    assert 8 in rows
