@@ -449,3 +449,82 @@ def test_semester_sheet_reads_s1_s2_not_quarters():
     table = parse_with_generic_reader(buf.getvalue(), "T7b")
     assert table.lookup("Realisasi Investasi (% responden)", 2026, "S1") == 18.86
     assert table.lookup("Realisasi Investasi (% responden)", 2026, "Q2") is None
+
+
+def test_outline_markers_nest_by_style_and_a_letter_i_after_h_stays_a_letter():
+    grid = [
+        [None, "ITEMS", None, "2026", None],
+        [None, None, None, "Tw.I", "Tw.II**"],
+        [None, "I. Transaksi Berjalan", None, -3576, -12487],
+        [None, None, "A. Barang 1)", 8210, 1320],
+        [None, None, "- Ekspor", 66424, 73427],
+        [None, None, "1. Barang Dagangan Umum", 10186, 1956],
+        [None, None, "- Ekspor, fob.", 66420, 73415],
+        [None, None, "H. Jasa keuangan", 1, 2],
+        [None, None, "- Ekspor", 3, 4],
+        [None, None, "I. Jasa telekomunikasi", 5, 6],
+        [None, None, "a. Pinjaman", 7, 8],
+        [None, None, "1) Bank sentral 1)", 9, 10],
+        [None, None, "a) Penarikan ", 11, 12],
+        [None, None, "(1) Program", 13, 14],
+        [None, "II. Transaksi Modal", None, 4, 29],
+    ]
+
+    table = parse_series_sheet(grid, SheetSpec(label_cols=(1, 2), hierarchy="outline"))
+
+    assert table.lookup("Transaksi Berjalan", 2026, "Q2") == -12487
+    assert table.lookup("Barang > Ekspor", 2026, "Q2") == 73427
+    assert table.lookup("Barang Dagangan Umum", 2026, "Q1") == 10186  # under A., not under '- Ekspor'
+    assert table.lookup("Jasa keuangan > Ekspor", 2026, "Q1") == 3
+    # 'I.' after 'H.' is the next letter, so its children are not under a new roman section
+    assert "Jasa telekomunikasi" in table.row_labels
+    assert table.lookup("Program", 2026, "Q2") == 14
+    assert table.lookup("Transaksi Modal", 2026, "Q2") == 29
+
+
+def test_tables_stacked_below_a_footer_are_read_under_their_own_title():
+    grid = [
+        [None, "TABEL 1", None, None, None],
+        [None, "RINGKASAN", None, None, None],
+        [None, "ITEMS", None, "2026", None],
+        [None, None, None, "Q1", "Q2"],
+        [None, None, "Pendapatan Primer", -9145, -9668],
+        [None, "Catatan:", None, None, None],
+        [None, "*    Angka - angka sementara ", None, None, None],
+        [None, "TABEL 4", None, None, None],
+        [None, "PENDAPATAN PRIMER", None, None, None],
+        [None, "(Juta USD)", None, None, None],
+        [None, "ITEMS", None, "2026", None],
+        [None, None, None, "Q1", "Q2"],
+        [None, None, "Pendapatan Primer", -9145, -9668],
+        [None, None, "A. Kompensasi tenaga kerja", -431, -270],
+        [None, "Catatan:", None, None, None],
+    ]
+
+    table = parse_series_sheet(grid, SheetSpec(label_cols=(1, 2), hierarchy="outline"))
+
+    assert table.row_labels == [
+        "Pendapatan Primer", "PENDAPATAN PRIMER > Pendapatan Primer", "Kompensasi tenaga kerja",
+    ]
+    assert table.lookup("Kompensasi tenaga kerja", 2026, "Q2") == -270
+
+
+def test_a_parents_missing_credit_and_debit_rows_are_summed_from_its_children():
+    grid = [
+        [None, "ITEMS", None, "2026", None],
+        [None, None, None, "Tw.I", "Tw.II"],
+        [None, None, "a. Pendapatan investasi langsung", -5681, -5737],
+        [None, None, "1) Pendapatan modal ekuitas", -5624, -5608],
+        [None, None, "- Penerimaan", 578, 743],
+        [None, None, "- Pembayaran", -6201, -6351],
+        [None, None, "2) Pendapatan utang (bunga)", -57, -129],
+        [None, None, "- Penerimaan", 48, 28],
+        [None, None, "- Pembayaran", -105, -157],
+    ]
+    spec = SheetSpec(label_cols=(1, 2), hierarchy="outline",
+                     sum_missing_leaves=("Penerimaan", "Pembayaran"))
+
+    table = parse_series_sheet(grid, spec)
+
+    assert table.lookup("Pendapatan investasi langsung > Pembayaran", 2026, "Q2") == -6508
+    assert table.lookup("Pendapatan investasi langsung > Penerimaan", 2026, "Q1") == 626

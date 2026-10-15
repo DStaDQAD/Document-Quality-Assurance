@@ -693,3 +693,26 @@ def test_a_claim_naming_the_whole_parent_gets_the_parent_not_its_namesake_child(
     assert table.lookup_fuzzy("LU Pertanian, Kehutanan, dan Perikanan", 2026, "Q2") == (
         "PERTANIAN, KEHUTANAN DAN PERIKANAN", 1.74)
     assert table.lookup_fuzzy("sub-LU Perikanan", 2026, "Q2")[1] == 0.19
+
+
+def test_a_price_claim_does_not_bind_to_the_value_row_and_back():
+    from table_model import TableData
+    table = TableData(title="NERACA PEMBAYARAN INDONESIA", unit="Juta USD", row_labels=[])
+    for label, value in [("Minyak > Ekspor", 1365.65),
+                         ("Harga rata-rata ekspor minyak mentah (USD/barel)", 102.76)]:
+        table.row_labels.append(label)
+        table._data[(label, 2026, "Q2")] = value
+
+    assert table.lookup_fuzzy("harga ekspor minyak mentah", 2026, "Q2")[0] != "Minyak > Ekspor"
+    assert table.lookup_fuzzy("ekspor minyak", 2026, "Q2")[0] == "Minyak > Ekspor"
+
+
+def test_a_label_that_adds_dan_and_another_component_is_not_a_fuller_name():
+    from table_model import TableData
+    table = TableData(title="NERACA PEMBAYARAN INDONESIA", unit="Juta USD", row_labels=[])
+    label = "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah"
+    table.row_labels.append(label)
+    table._data[(label, 2026, "Q2")] = 5.41
+
+    assert table.lookup_fuzzy("Dalam Bulan Impor", 2026, "Q2") == (None, None)
+    assert table.lookup_fuzzy(label, 2026, "Q2")[1] == 5.41

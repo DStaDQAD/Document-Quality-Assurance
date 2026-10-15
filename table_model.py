@@ -335,6 +335,10 @@ class TableData:
     # dan Bank Sentral"}. Set by the publication parser (it is the publication's fixed
     # definition, not a guess) and applied wherever a claim is read in this table's words.
     term_aliases: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Rows whose unit differs from the table's, by row name: NPI's 'Ke dalam negeri' sits under
+    # 'Jumlah pelawat (ribuan orang)' in a 'Juta USD' table. Set by the series parser from the
+    # row's full path, which the (shortened) row name may no longer show.
+    row_units: Dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
@@ -585,7 +589,17 @@ class TableData:
             l_tight = _tight(label)
             if l_canon == q_canon:
                 tier_exact.append((label, 0))
-            if q_canon and q_canon in l_canon:
+            # The other direction of _QUANTITY_KIND_WORDS: "ekspor minyak" sits inside 'Harga
+            # rata-rata ekspor minyak mentah (USD/barel)', whose extra word makes it a price.
+            other_quantity = bool(
+                (_label_words(label) - q_words) & self._QUANTITY_KIND_WORDS
+            )
+            # A label that is the query plus "dan …" is a combination, not a fuller name:
+            # "5,6 bulan impor" ('Dalam Bulan Impor') is not 'Dalam Bulan Impor dan Pembayaran
+            # Utang Luar Negeri Pemerintah' (5,41).
+            combined = bool(q_canon) and q_canon in l_canon and re.match(
+                r"\s*dan\b", l_canon.split(q_canon, 1)[1]) is not None
+            if q_canon and q_canon in l_canon and not other_quantity and not combined:
                 tier_q_in_l.append((label, len(label)))
             if l_canon and l_canon in q_canon and self._query_is_about_the_label(query, label):
                 # Ranked by how much of what the TITLE does not already say the row accounts
@@ -640,7 +654,7 @@ class TableData:
             # label the PDF broke mid-word can still be recognised. They run LAST: a label that
             # matches on its real words always wins over one that only matches once the stray
             # spaces are taken out.
-            if q_tight and q_tight in l_tight:
+            if q_tight and q_tight in l_tight and not other_quantity and not combined:
                 tier_tight_q_in_l.append((label, len(label)))
             elif QUAL_SEP not in label and self._query_is_about_the_label(query, label):
                 # Word coverage rather than containment, because the two spellings rarely nest:
@@ -695,6 +709,13 @@ class TableData:
     # simpanan berjangka tenor 1 bulan" no longer binds to 'Simpanan Berjangka'.
     _LABEL_IN_QUERY_MIN_COVERAGE: ClassVar[float] = 0.5
 
+    # Words that say WHICH quantity of a thing is meant. Left over by a row, they mean the row
+    # holds another quantity: "harga ekspor minyak mentah" (USD per barrel) is not the
+    # 'Minyak > Ekspor' row (USD million), although that row covers half the claim's words.
+    _QUANTITY_KIND_WORDS: ClassVar[frozenset] = frozenset(
+        {"harga", "volume", "rasio", "pangsa", "produksi"}
+    )
+
     # A claim often carries the period it is about into the metric name ("pertumbuhan giro
     # valas pada Januari"). Such words say WHEN, never WHAT, so they neither corroborate nor
     # contradict a row label. Bare years are dropped alongside them (see _query_is_about_the_label).
@@ -736,6 +757,8 @@ class TableData:
         leftover = q_words - covered
         if not leftover:
             return True
+        if leftover & self._QUANTITY_KIND_WORDS:
+            return False
         return len(covered) >= self._LABEL_IN_QUERY_MIN_COVERAGE * len(q_words)
 
     def _qualifier_kept(self, query: str, label: str) -> bool:

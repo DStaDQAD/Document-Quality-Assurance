@@ -194,13 +194,20 @@ class SheetSpec:
       "indent"     the label cell's indent level (SEKI .xls tables);
       "numbering"  the label's own numbering ('2.1.1.' sits under '2.1');
       "first_col"  the label column the text starts in (a later column is a child);
-      "sections"   a label row without figures heads the rows below it.
+      "sections"   a label row without figures heads the rows below it;
+      "outline"    the label's outline marker, whatever column it is in: each marker style
+                   ('I.', 'A.', '1.', 'a.', '1)', 'a)', '(1)') opens a level the first time it
+                   appears under the rows above and is a sibling when it appears again; '-'
+                   items sit under the last marked row; an unmarked row starts over at the top.
     bands: the row above the year row splits the columns into bands ('TRIWULANAN (QTQ)' vs
       'TAHUNAN (YOY)'); the band becomes the outermost label level.
     unit: replaces the unit read from the title block.
     end_at_forecast: the sheet's last real period is its first starred one ('I*' = angka
       perkiraan); later columns are template leftovers and are dropped. Not for SEKI, whose
       stars mark several provisional quarters in a row.
+    sum_missing_leaves: leaf names ('Penerimaan', 'Pembayaran') a parent row should have but
+      does not print, while every child that has figures does: the parent's row is added as
+      their sum (NPI 'Pendapatan investasi langsung' = modal ekuitas + bunga).
     """
     label_cols: Tuple[int, ...]
     header: str = "two_rows"
@@ -208,6 +215,7 @@ class SheetSpec:
     bands: bool = False
     unit: Optional[str] = None
     end_at_forecast: bool = False
+    sum_missing_leaves: Tuple[str, ...] = ()
 
 
 _FOOTER = re.compile(r"\s*(\*|(keterangan|catatan|sumber|note|source)\s*:)", re.IGNORECASE)
@@ -408,6 +416,107 @@ def _shortest_unique_names(paths: Sequence[Sequence[str]]) -> List[str]:
     return names
 
 
+# Outline markers, most specific first. A roman numeral and a capital letter look alike ('I.'
+# after 'H.' is a letter); _outline_step decides with the levels already open.
+_OUTLINE_MARKER = re.compile(
+    r"\s*(?:(?P<paren>\(\d+\))|(?P<numclose>\d+\))|(?P<letclose>[A-Za-z]\))"
+    r"|(?P<num>\d+\.)(?!\d)|(?P<roman>[IVXLC]+\.)(?=\s)|(?P<upper>[A-Z]\.)(?=\s)"
+    r"|(?P<lower>[a-z]\.)(?=\s)|(?P<dash>-+))\s*"
+)
+
+def _outline_marker(raw) -> Tuple[Optional[str], str]:
+    """(marker style, marker text) of a label cell; (None, '') for an unmarked one."""
+    if not isinstance(raw, str):
+        return None, ""
+    match = _OUTLINE_MARKER.match(raw)
+    if not match:
+        return None, ""
+    style = match.lastgroup
+    text = match.group(style)
+    if style == "letclose":
+        style = "upperclose" if text[0].isupper() else "lowerclose"
+    return style, text
+
+
+def _outline_label(raw) -> str:
+    """The label without its outline marker ('1) Pendapatan' -> 'Pendapatan')."""
+    style, _ = _outline_marker(raw)
+    if style is not None and isinstance(raw, str):
+        raw = raw[_OUTLINE_MARKER.match(raw).end():]
+    return clean_label(raw)
+
+
+def _outline_step(levels: List[Tuple[str, str]], raw) -> int:
+    """The row's depth under the open `levels` [(style, marker)], which it updates in place."""
+    style, text = _outline_marker(raw)
+    if levels and levels[-1][0] == "dash" and style != "dash":
+        levels.pop()  # '-' items are leaves: the next marked row is not their child
+    if style is None:
+        levels[:] = [("none", "")]
+        return 0
+    if style == "roman" and len(text) == 2:
+        # 'I.' after 'H.' continues the letters; so does a lone 'C.' / 'I.' while letters are
+        # open and no roman level is.
+        open_styles = {s: m for s, m in levels}
+        after = open_styles.get("upper")
+        if after is not None and (ord(text[0]) == ord(after[0]) + 1 or "roman" not in open_styles):
+            style = "upper"
+    for depth, (open_style, _) in enumerate(levels):
+        if open_style == style:
+            del levels[depth:]
+            levels.append((style, text))
+            return depth
+    levels.append((style, text))
+    return len(levels) - 1
+
+
+def _block_title(rows: List[List], label_cols: Sequence[int]) -> str:
+    """A stacked table's own name: the last title line above its header ('BARANG')."""
+    title = ""
+    for row in rows:
+        for c in label_cols:
+            value = _cell(row, c)
+            if not isinstance(value, str) or not value.strip():
+                continue
+            text = " ".join(value.split())
+            if _UNIT_CELL.fullmatch(text) or _TABLE_NUMBER.fullmatch(text) or _FOOTER.match(text):
+                continue
+            title = clean_label(text)
+    return title
+
+
+# A unit a row states for itself: '(ribuan orang)', '(% PDB)', '(USD/barel)'.
+_ROW_UNIT_IN_LABEL = re.compile(
+    r"\(([^()]*(?:%|persen|orang|barel|ton\b|USD|Rp)[^()]*)\)", re.IGNORECASE
+)
+
+
+def _summed_missing_leaves(
+    entries: List[Tuple[List[str], Dict[Tuple[int, str], float]]], leaves: Sequence[str]
+) -> List[Tuple[List[str], Dict[Tuple[int, str], float]]]:
+    """Rows for the leaves a parent leaves out, summed from its children (see SheetSpec)."""
+    if not leaves:
+        return []
+    by_path = {tuple(path): values for path, values in entries}
+    added = []
+    for parent in list(by_path):
+        children = [p for p in by_path if len(p) == len(parent) + 1 and p[:-1] == parent
+                    and p[-1] not in leaves]
+        if len(children) < 2:
+            continue
+        for leaf in leaves:
+            if parent + (leaf,) in by_path:
+                continue
+            parts = [by_path.get(child + (leaf,)) for child in children]
+            if any(part is None for part in parts):
+                continue
+            periods = set.intersection(*(set(part) for part in parts))
+            if periods:
+                added.append((list(parent) + [leaf],
+                              {k: round(sum(part[k] for part in parts), 6) for k in periods}))
+    return added
+
+
 def parse_series_sheet(
     grid: List[List], spec: SheetSpec, indents: Optional[Dict[int, int]] = None
 ) -> TableData:
@@ -431,10 +540,20 @@ def parse_series_sheet(
     stack: List[Tuple[int, str]] = []
     group: Optional[Tuple[str, ...]] = None
     last_numbered: Optional[Tuple[int, int]] = None  # (depth, first label column)
+    levels: List[Tuple[str, str]] = []  # open outline levels
+    # A footer ('Catatan:', '*) Angka sementara') closes a block. A sheet may stack another
+    # table below it (NPI's internal workbook: TABEL 1..8 on one sheet); its rows are read
+    # under that table's own name, since its first rows repeat names from the tables above.
+    footer_at: Optional[int] = None
+    prefix: List[str] = []
     for r in range(header_rows[0], len(grid)):
         if r in blocks:
-            columns, stack, group, last_numbered = blocks[r], [], None, None
-        if r in header_like:
+            columns, stack, group, last_numbered, levels = blocks[r], [], None, None, []
+            if footer_at is not None:
+                block_title = _block_title(grid[footer_at:r], spec.label_cols)
+                prefix = [block_title] if block_title else []
+                footer_at = None
+        if r in header_like or footer_at is not None:
             continue
         row = grid[r]
         raw: List = []
@@ -442,11 +561,15 @@ def parse_series_sheet(
             value = _cell(row, c)
             if not _blank(value) and not (raw and value == raw[-1]):
                 raw.append(value)
-        texts = [clean_label(v) for v in raw]
+        label = _outline_label if spec.hierarchy == "outline" else clean_label
+        texts = [label(v) for v in raw]
         if not any(texts):
             continue
         if isinstance(raw[0], str) and _FOOTER.match(raw[0]):
-            break
+            if not any(h > r for h in header_rows):
+                break
+            footer_at = r
+            continue
         if tuple(clean_label(_cell(row, c)) for c in spec.label_cols) in headings:
             continue
         own = max(i for i, t in enumerate(texts) if t)
@@ -458,19 +581,29 @@ def parse_series_sheet(
                 by_band.setdefault(band, {})[(year, period)] = value
         if ancestors != group:
             stack, group, last_numbered = [], ancestors, None
-        depth = _depth(spec, r, row, raw, own, bool(by_band), indents, last_numbered)
+        if spec.hierarchy == "outline":
+            depth = _outline_step(levels, raw[own])
+        else:
+            depth = _depth(spec, r, row, raw, own, bool(by_band), indents, last_numbered)
         if spec.hierarchy == "numbering" and _own_numbering(raw, own):
             last_numbered = (depth, _first_label_col(spec, row))
         while stack and stack[-1][0] >= depth:
             stack.pop()
-        path = list(ancestors) + [label for _, label in stack] + [texts[own]]
+        path = prefix + list(ancestors) + [name for _, name in stack] + [texts[own]]
         stack.append((depth, texts[own]))
         for band, values in by_band.items():
             entries.append(([band] + path if band else path, values))
     if not entries:
         raise PublicationParseError("tidak ada baris berisi angka di bawah baris tahun")
+    entries += _summed_missing_leaves(entries, spec.sum_missing_leaves)
 
     table = TableData(title=title, unit=spec.unit or unit, row_labels=[])
+    for name, (path, _) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
+        for level in reversed(path):
+            match = _ROW_UNIT_IN_LABEL.search(level)
+            if match:
+                table.row_units[name] = match.group(1).strip()
+                break
     for name, (_, values) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
         if name in table.row_labels:
             # Two rows the hierarchy could not tell apart. Keeping the first would answer the
