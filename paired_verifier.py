@@ -19,6 +19,7 @@ whose structure defeats every parser stay verifiable ("pointer-only" sources) �
 never supplies a number, only a location that is reported in the result's provenance.
 """
 
+import copy
 import logging
 import re
 from dataclasses import dataclass
@@ -220,7 +221,7 @@ _UNIT_FACTORS: Dict[Tuple[str, str], float] = {
 # English plurals and 'US$' are how SDDS-template sheets write units ("Millions of US$", Tabel
 # Cadev ORA); '$' is not a word character, so 'US$' reaches the parser as 'us'.
 _SCALE_WORDS: Dict[str, float] = {
-    "ribu": 1e3, "thousand": 1e3, "thousands": 1e3,
+    "ribu": 1e3, "ribuan": 1e3, "thousand": 1e3, "thousands": 1e3,
     "juta": 1e6, "million": 1e6, "millions": 1e6,
     "miliar": 1e9, "milyar": 1e9, "billion": 1e9, "billions": 1e9,
     "triliun": 1e12, "trillion": 1e12, "trillions": 1e12,
@@ -294,12 +295,42 @@ def _unit_factor(pdf_unit: Optional[str], excel_unit: Optional[str]) -> Optional
     pdf_parsed, excel_parsed = _parse_scale_unit(key[0]), _parse_scale_unit(key[1])
     if pdf_parsed and excel_parsed and pdf_parsed[1] and pdf_parsed[1] == excel_parsed[1]:
         return pdf_parsed[0] / excel_parsed[0]
+    # The same counted thing in two scales: '4,0 juta orang' against 'ribuan orang'.
+    if pdf_parsed and excel_parsed and not pdf_parsed[1] and not excel_parsed[1]:
+        nouns = [set(re.findall(r"[a-z]+", k)) - set(_SCALE_WORDS) for k in key]
+        if nouns[0] and nouns[0] == nouns[1]:
+            return pdf_parsed[0] / excel_parsed[0]
     return None
 
 
 # Trailing parenthetical of a categorical column name, where such tables usually declare
 # the column's unit: 'Harga (Rp)' -> 'Rp', 'Omzet (juta Rp)' -> 'juta Rp'.
 _COL_UNIT_RE = re.compile(r"\(([^)]+)\)\s*$")
+
+
+# A row that states its own unit, unlike the rest of its table: NPI's 'Transaksi Berjalan
+# (% PDB)', 'Jumlah pelawat (ribuan orang)', 'Harga … (USD/barel)' under a 'Juta USD' title.
+_ROW_UNIT_WORDS = re.compile(r"%|persen|orang|barel|ton\b|bulan|USD|Rp", re.IGNORECASE)
+
+
+def _row_unit(labels: List[str], table: Optional[BITableData] = None) -> Optional[str]:
+    """The unit every matched row declares in its own name, if they agree on one."""
+    units = set()
+    for label in labels:
+        known = getattr(table, "row_units", {}).get(label) if table is not None else None
+        if known:
+            units.add(known)
+            continue
+        for level in reversed(label.split(QUAL_SEP.strip())):
+            # 'Dalam Bulan Impor dan Pembayaran ULN Pemerintah' is counted in months.
+            lead = re.match(r"\s*dalam\s+(bulan|persen)\b", level, re.IGNORECASE)
+            unit = lead.group(1).lower() if lead else _col_unit(level.strip())
+            if unit and _ROW_UNIT_WORDS.search(unit):
+                units.add(unit)
+                break
+        else:
+            return None
+    return units.pop() if len(units) == 1 else None
 
 
 def _col_unit(col_label: str) -> Optional[str]:
@@ -476,6 +507,16 @@ def _stable_band(a: float, b: float) -> float:
     identical to the precision they were printed at, instead of getting a band of nearly zero.
     """
     return max(MATCH_TOLERANCE, _STABLE_RELATIVE_BAND * (abs(a) + abs(b)) / 2)
+
+
+def _printed_in(value: Optional[float], quote: Optional[str]) -> bool:
+    """Whether the sentence prints this number ('8,2' / '8.2'), sign aside."""
+    if value is None or not quote:
+        return True
+    text = f"{abs(value):.4f}".rstrip("0").rstrip(".")
+    whole, _, frac = text.partition(".")
+    pattern = re.escape(whole) + (r"[,.]" + re.escape(frac) if frac else "") + r"(?![\d])"
+    return re.search(r"(?<![\d,.])" + pattern, quote) is not None
 
 
 def _numeric_verdict(
@@ -789,7 +830,7 @@ def _source_is_about_the_sentence(fact: ExtractedFact, src: "_ExcelSource") -> b
 
 
 def _answers_one_group_of_it(
-    fact: ExtractedFact, resolved: List[Tuple[str, float]]
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], table: Optional[BITableData] = None
 ) -> bool:
     """True when a claim about a whole series resolved to ONE group of its breakdown.
 
@@ -808,6 +849,14 @@ def _answers_one_group_of_it(
         # In the tables' vocabulary: "average propensity to consume ratio" names the 'Konsumsi'
         # level of 'Total > Konsumsi' though no word of it appears there (see _REPORT_TERMS).
         claim_words = _sig_words(_expand_report_terms(point.metric_label or ""))
+        if table is not None and table.term_aliases:
+            # A publication's fixed alias names the row it means ("investasi langsung asing" ->
+            # 'Investasi Langsung > Kewajiban'); its levels are named by the claim, not groups.
+            targets = [row for pattern, row in table._alias_patterns()
+                       if pattern.search(point.metric_label or "")]
+            if any(label == t or label.endswith(QUAL_SEP + t) for t in targets):
+                continue
+            claim_words |= _sig_words(table._normalise_query(point.metric_label or ""))
         if not claim_words:
             continue
         # Any level the claim does not name is a group of it — at the end ('IEKLK > SMA') or at
@@ -871,12 +920,12 @@ def _can_answer(
     if fact.operation != "yoy_growth" or not resolved:
         return True
     # Same two ways of getting a growth figure that _compute_yoy_growth uses, in the same order.
-    if _is_growth_series(src.table.unit):
-        return True
     point = fact.periods[0]
     matched_label = resolved[0][0]
+    if _is_growth_series(src.table.unit) or "yoy" in matched_label.lower():
+        return True
     _prior_label, prior = src.table.lookup_fuzzy(matched_label, point.year - 1, point.month)
-    return prior is not None
+    return prior is not None or _published_yoy(fact, src) is not None
 
 
 def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource) -> FactVerificationResult:
@@ -897,10 +946,11 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             ),
         )
 
-    if _is_growth_series(src.table.unit):
+    if _is_growth_series(src.table.unit) or "yoy" in matched_label.lower():
         # The cell already holds the answer, so read it instead of computing one (the same
         # division of labour every other lookup follows). No prior-year column is needed,
-        # which also stops such a table from being ruled out for lacking one.
+        # which also stops such a table from being ruled out for lacking one. A level table
+        # may carry its own yoy rows too (NPI: 'Pertumbuhan (%, yoy) > Total Ekspor (fob)').
         computed = round(curr_raw, 4)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed)
         return _make_result(
@@ -918,6 +968,9 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     prior_label, prior_raw = src.table.lookup_fuzzy(matched_label, prior_year, p.month)
 
     if prior_raw is None:
+        published = _published_yoy_result(fact, src, f"'{matched_label}' tidak punya angka {prior_year}")
+        if published is not None:
+            return published
         return _make_result(
             fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None, "persen_yoy", None,
             "Inconclusive",
@@ -960,6 +1013,10 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     tolerance = _growth_tolerance(curr_raw, prior_raw)
     delta, verdict = _numeric_verdict(fact.claimed_value, computed, tolerance)
     periods = [current_period, PeriodResult(metric_label=prior_label, year=prior_year, month=p.month, excel_value=round(prior_raw, 4))]
+    if verdict == "Refuted":
+        published = _published_yoy_result(fact, src, f"dihitung dari '{matched_label}': {computed}%")
+        if published is not None and published.verdict == "Entailed":
+            return published
     return _make_result(
         fact, periods, matched_source, fact.claimed_value, "persen_yoy", computed, "persen_yoy", delta, verdict,
         reasoning=(
@@ -967,6 +1024,57 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             f"Excel [{matched_source}] ({matched_label}): {computed}% yoy "
             f"({curr_raw:.2f} vs {prior_raw:.2f} {src.table.unit}{size_note}) | "
             f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {tolerance}%"
+        ),
+    )
+
+
+def _published_yoy(fact: ExtractedFact, src: _ExcelSource) -> Optional[Tuple[str, float]]:
+    """The table's own '%, yoy' row for the claim's metric at its period, if it prints one.
+
+    NPI's memorandum prints 'Pertumbuhan (%, yoy) > Total Ekspor (fob) > Nonmigas' (8,49) next
+    to the BPM6 rows; "ekspor nonmigas tumbuh 8,5% (yoy)" is that row, while growth computed
+    from the general-merchandise row gives 9,81. Every word of the claim's metric must be in the
+    row's name (the yoy part aside), and the closest such row wins.
+    """
+    point = fact.periods[0]
+    wanted = _sig_words(point.metric_label) - {"yoy", "pertumbuhan"}
+    if not wanted or point.year is None or point.month is None:
+        return None
+    best: Optional[Tuple[int, str, float]] = None
+    for row in src.table.row_labels:
+        parts = [part for part in row.split(QUAL_SEP.strip()) if "yoy" not in part.lower()]
+        if len(parts) == len(row.split(QUAL_SEP.strip())):
+            continue  # not a yoy row
+        words = _sig_words(" ".join(parts))
+        if not wanted <= words:
+            continue
+        value = src.table.lookup(row, point.year, point.month)
+        if value is None:
+            continue
+        extra = len(words - wanted)
+        if best is None or extra < best[0]:
+            best = (extra, row, value)
+    return (best[1], best[2]) if best else None
+
+
+def _published_yoy_result(
+    fact: ExtractedFact, src: _ExcelSource, note: str
+) -> Optional[FactVerificationResult]:
+    """The yoy claim judged on the table's published growth row (see _published_yoy)."""
+    published = _published_yoy(fact, src)
+    if published is None:
+        return None
+    row, value = published
+    p = fact.periods[0]
+    value = round(value, 4)
+    delta, verdict = _numeric_verdict(fact.claimed_value, value)
+    return _make_result(
+        fact, [PeriodResult(metric_label=row, year=p.year, month=p.month, excel_value=value)],
+        src.label, fact.claimed_value, "persen_yoy", value, "persen_yoy", delta, verdict,
+        reasoning=(
+            f"PDF: {fact.claimed_value}% yoy | Excel [{src.label}] ({row}): {value}% yoy, dibaca "
+            f"langsung dari baris pertumbuhan yang diterbitkan tabel ({note}) | Δ = {delta}% → "
+            f"{'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}%"
         ),
     )
 
@@ -1048,6 +1156,15 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
 _DEFICIT_NOUNS = r"(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow)"
 _DEFICIT_TREND = re.compile(
     r"\b" + _DEFICIT_NOUNS + r"\b[^,.;]{0,80}?"
+    r"\b(?P<verb>meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
+    r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
+    re.IGNORECASE,
+)
+# The same verbs further on in the sentence, past the figures the report prints in between:
+# "defisit transaksi berjalan … sebesar 12,5 miliar dolar AS (3,3% dari PDB), melebar
+# dibandingkan …". Only the diff check uses it, and only on a balance negative throughout.
+_DEFICIT_TREND_LATER_IN_SENTENCE = re.compile(
+    r"\b" + _DEFICIT_NOUNS + r"\b(?:[^.;]|(?<=\d)\.(?=\d)){0,160}?"
     r"\b(?P<verb>meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang"
     r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
     re.IGNORECASE,
@@ -1186,12 +1303,26 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             ),
         )
 
+    # "Dari sisi volume, impor minyak mentah menurun dari 36 juta barel …" says nothing about the
+    # dollar row the label found; its direction there is a coincidence either way.
+    if _VOLUME_TREND.search(fact.context_quote or "") and _MONEY_UNIT.search(src.table.unit or "") \
+            and not _VOLUME_TREND.search(labelled[-1][0]):
+        return _make_result(
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            reasoning=(
+                f"Kalimat menyebut tren volume, sedangkan '{labelled[-1][0]}' di "
+                f"[{matched_source}] bernilai uang ('{src.table.unit}') — tidak menjawab klaim ini."
+            ),
+        )
+
     # "defisit … meningkat" on a balance stored negative (−5,1 → −8,2) means the deficit grew, which
     # the signed numbers read as a fall. Judge such a claim on the size of the balance.
     size_note = ""
     operation = fact.operation
-    deficit = _DEFICIT_TREND.search(fact.context_quote or "") or _DEFICIT_TREND_NOUN_FIRST.search(
-        fact.context_quote or ""
+    quote = fact.context_quote or ""
+    deficit = (
+        _DEFICIT_TREND.search(quote) or _DEFICIT_TREND_NOUN_FIRST.search(quote)
+        or _DEFICIT_TREND_LATER_IN_SENTENCE.search(quote)
     )
     if all(v < 0 for v in values) and deficit:
         values = [-v for v in values]
@@ -1201,6 +1332,10 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         if operation in ("is_increasing", "is_decreasing"):
             grew = _SIZE_DOWN.search(deficit.group("verb")) is None
             operation = "is_increasing" if grew else "is_decreasing"
+    elif all(v < 0 for v in values) and _is_debit_row(labelled[-1][0]):
+        # "impor gas … meningkat" on -682 -> -1.529: imports grew.
+        values = [-v for v in values]
+        size_note = " (dinilai pada besarnya; baris debit dicatat negatif)"
 
     band_note = ""
     level_reason = None if size_note else _net_balance_level_claim(
@@ -1221,6 +1356,15 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         )
         band_note = f" (ambang stabil ±{round(max(bands), 4)})"
 
+    if not ok and operation == "is_stable" and not level_reason and _says_held_not_unchanged(quote):
+        return _make_result(
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            reasoning=(
+                f"Kalimat menyebut '{fact.display_label}' terjaga, yaitu masih pada tingkat yang "
+                "aman, bukan tidak berubah; tabel tidak memuat batas aman itu untuk dinilai."
+            ),
+        )
+
     verdict = "Entailed" if ok else "Refuted"
     breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, (_, v) in zip(used_periods, labelled))
     return _make_result(
@@ -1231,6 +1375,27 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
+
+
+# A trend stated in physical units, and table units that are money.
+_VOLUME_TREND = re.compile(r"\b(volume|barel|barrel|MMBTU|ton)\b", re.IGNORECASE)
+_MONEY_UNIT = re.compile(r"\b(USD|dolar|dollar|Rp|rupiah)\b", re.IGNORECASE)
+
+# Words that DO say a figure stayed where it was.
+_UNCHANGED_WORDS = re.compile(
+    r"\b(stabil\w*|relatif\s+sama|tidak\s+(banyak\s+)?berubah|datar|tidak\s+jauh\s+berbeda)\b",
+    re.IGNORECASE,
+)
+
+
+def _says_held_not_unchanged(quote: str) -> bool:
+    """"Rasio defisit … tetap terjaga, meski lebih tinggi …": a level kept safe, not a flat one.
+
+    NPI Tw II-2026 had this sentence extracted as is_stable and refuted on -0,97 -> -3,34,
+    although the sentence itself says the ratio rose. Only consulted for a stability claim the
+    numbers do not support, so a "terjaga" claim that is also flat keeps its Sesuai.
+    """
+    return bool(_HELD_LEVEL_WORDS.search(quote)) and not _UNCHANGED_WORDS.search(quote)
 
 
 def _compute_threshold(
@@ -1341,9 +1506,20 @@ def _reinterpret_diff_as_value(
 # 12,5 miliar dolar AS", "kewajiban neto 197,4", "arus keluar neto 2,2", "kontraksi 0,1".
 _NEGATIVE_BALANCE_WORDS = re.compile(
     r"\b(defisit|kewajiban\s+neto|net\s+liabilit\w*|arus\s+keluar\s+neto|net\s+outflow"
+    # BPM6 records residents' net purchases abroad (an asset increase) negative.
+    r"|pembelian\s+neto|penjualan\s+neto"
     r"|(ter)?kontraksi)\b",
     re.IGNORECASE,
 )
+
+
+# BPM6 tables (NPI) store the debit side negative: 'Impor', 'Pembayaran'. A report prints
+# "impor minyak … sebesar 11,6 miliar dolar AS" and "impor gas … meningkat" about their size.
+_DEBIT_ROW = re.compile(r"^(impor|pembayaran|debit)\b", re.IGNORECASE)
+
+
+def _is_debit_row(label: str) -> bool:
+    return bool(_DEBIT_ROW.match(label.split(QUAL_SEP.strip())[-1].strip()))
 
 
 def _reinterpret_signed_level(
@@ -1367,6 +1543,8 @@ def _reinterpret_signed_level(
     if fact.claimed_value is None or computed >= 0 or fact.claimed_value <= 0:
         return None
     word = _NEGATIVE_BALANCE_WORDS.search(fact.context_quote or "")
+    if word is None and all(_is_debit_row(label) for label, _ in resolved):
+        word = re.search(r".+", resolved[0][0].split(QUAL_SEP.strip())[-1].strip())
     if word is None:
         return None
     delta, verdict = _numeric_verdict(fact.claimed_value, -computed)
@@ -1382,6 +1560,66 @@ def _reinterpret_signed_level(
             f"mencatat saldonya negatif. Δ besaran = {delta} → within tolerance {MATCH_TOLERANCE}"
         ),
     )
+
+
+# "transaksi modal dan finansial" — two rows named at once, the second sharing the first's head
+# words ('Transaksi Modal' + 'Transaksi Finansial').
+_JOINED_LABEL = re.compile(r"(?P<left>[^,]+?)\s+dan\s+(?P<right>[^,]+)", re.IGNORECASE)
+
+
+def _row_leaf(label: str) -> str:
+    return " ".join(label.split(QUAL_SEP.strip())[-1].split()).casefold()
+
+
+def _joined_rows_as_sum(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
+    """A level claimed for 'X dan Y' where the table has rows X and Y but none for both: their sum.
+
+    NPI: "transaksi modal dan finansial mencatat defisit 4,8 miliar dolar AS" has no row of its
+    own; lookup_fuzzy matched 'Transaksi Modal' alone (4 juta) and refuted a true claim, while
+    the same sentence's Tw II figure came out of the extractor as a sum and was confirmed.
+    Only for amounts: a percentage named for two rows is not their sum. Both halves must be
+    rows of the same table under exactly those names, so nothing near-miss gets added up.
+    """
+    if fact.operation != "value" or fact.periods[0].col_label:
+        return None
+    if "%" in (fact.unit or "") or "persen" in (fact.unit or "").lower():
+        return None
+    points = fact.periods
+    if len(points) > 1:
+        # "transaksi modal dan finansial … 12,0 miliar" extracted as one value over the two
+        # rows: one number for several rows at one period can only be their total. (It used to
+        # crash the value check, which reads one row.)
+        same_period = len({(q.year, q.month) for q in points}) == 1
+        distinct = len({q.metric_label.strip().lower() for q in points}) == len(points)
+        if same_period and distinct and all(q.col_label is None for q in points):
+            joined = copy.copy(fact)
+            joined.operation = "sum"
+            return joined
+        return None
+    point = fact.periods[0]
+    match = _JOINED_LABEL.fullmatch(" ".join(point.metric_label.split()))
+    if not match:
+        return None
+    left, right = match.group("left").split(), match.group("right").split()
+    if len(right) < len(left):
+        right = left[: len(left) - len(right)] + right
+    halves = [" ".join(left), " ".join(right)]
+    whole = " ".join(point.metric_label.split()).casefold()
+    for src in sources:
+        table = src.table
+        if table.axis_type != "temporal" or "%" in (table.unit or ""):
+            continue
+        if any(_row_leaf(row) == whole for row in table.row_labels):
+            return None  # the table has a row for both together
+        rows = [table.lookup_fuzzy(half, point.year, point.month)[0] for half in halves]
+        if all(rows) and rows[0] != rows[1] and all(
+            _row_leaf(row) == half.casefold() for row, half in zip(rows, halves)
+        ):
+            joined = copy.copy(fact)
+            joined.operation = "sum"
+            joined.periods = [PeriodPoint(half, point.year, point.month) for half in halves]
+            return joined
+    return None
 
 
 def _compute_operation(
@@ -1439,7 +1677,11 @@ def _compute_operation(
         converted = [raw / factor for (_, raw) in resolved]
         computed = round(converted[-1] - converted[0], 4)
         periods = _build_periods(fact.periods, resolved, converted)
-        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        # "defisit 0,9 … dibandingkan … 9,1" read as a change of 8,2 that the sentence never
+        # prints: both ends are rounded, so the change carries both roundings (8,26 here).
+        diff_tolerance = (MATCH_TOLERANCE if _printed_in(fact.claimed_value, fact.context_quote)
+                          else 2 * MATCH_TOLERANCE)
+        delta, verdict = _numeric_verdict(fact.claimed_value, computed, diff_tolerance)
         if verdict == "Refuted":
             recovered = _reinterpret_diff_as_value(fact, resolved, converted, computed, src)
             if recovered is not None:
@@ -1447,11 +1689,13 @@ def _compute_operation(
             quote = fact.context_quote or ""
             if all(v < 0 for v in converted) and (
                 _DEFICIT_TREND.search(quote) or _DEFICIT_TREND_NOUN_FIRST.search(quote)
+                or _DEFICIT_TREND_LATER_IN_SENTENCE.search(quote)
             ):
                 # "Kewajiban neto PII ... menurun sebesar 25,6" on -223,0 -> -197,4: the change
                 # the report states is in the size of the net liabilities, not in the balance.
                 size_change = round(converted[0] - converted[-1], 4)
-                size_delta, size_verdict = _numeric_verdict(fact.claimed_value, size_change)
+                size_delta, size_verdict = _numeric_verdict(
+                    fact.claimed_value, size_change, diff_tolerance)
                 if size_verdict == "Entailed":
                     return _make_result(
                         fact, periods, matched_source, fact.claimed_value, fact.unit, size_change,
@@ -2331,6 +2575,37 @@ def _bundled_family_of(row: str, src: _ExcelSource) -> Optional[List[str]]:
     return family if len(family) > 2 else None
 
 
+_QUARTER_OF_END_MONTH = {"Mar": "Q1", "Jun": "Q2", "Sep": "Q3", "Dec": "Q4"}
+_MONTH_NAME_ID = {"Mar": "Maret", "Jun": "Juni", "Sep": "September", "Dec": "Desember"}
+
+
+def _quarter_end_position(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
+    """A position "pada akhir Juni" read from a table that holds it only per quarter: Q2.
+
+    NPI: "Posisi cadangan devisa pada akhir Juni 2026 … 5,4 bulan impor dan pembayaran ULN
+    pemerintah" against a quarterly row (Q2 2026 = 5,41) was left Tidak Cukup Data. Only for a
+    sentence that says "akhir <bulan>" for a quarter-end month, and only when the matched row
+    has no monthly figures at all — a monthly table still answers with its own June.
+    """
+    quote = fact.context_quote or ""
+    points = fact.periods
+    if not points or any(p.col_label or p.month not in _QUARTER_OF_END_MONTH for p in points):
+        return None
+    if not all(re.search(r"\bakhir\s+" + _MONTH_NAME_ID[p.month] + r"\b", quote, re.IGNORECASE)
+               for p in points):
+        return None
+    for src in sources:
+        if src.table.axis_type != "temporal":
+            continue
+        periods = [src.table.available_periods(p.metric_label) for p in points]
+        if all(ps and all(m.startswith("Q") for _, m in ps) for ps in periods):
+            moved = copy.copy(fact)
+            moved.periods = [PeriodPoint(p.metric_label, p.year, _QUARTER_OF_END_MONTH[p.month])
+                             for p in points]
+            return moved
+    return None
+
+
 def _only_quarterly_reason(missing: List[PeriodPoint], sources: List[_ExcelSource]) -> Optional[str]:
     """Why a MONTHLY point found nothing, when a source holds that series only per quarter (B5).
 
@@ -2435,6 +2710,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 ),
             )
 
+    joined = _joined_rows_as_sum(fact, sources)
+    if joined is not None:
+        fact = joined
+    fact = _quarter_end_position(fact, sources) or fact
+
     needs_unit = fact.operation in _LEVEL_OPS
     best_missing: Optional[List[PeriodPoint]] = None
     best_reason: Optional[str] = None
@@ -2484,6 +2764,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             excel_unit = src.table.unit
             if src.table.axis_type == "categorical":
                 excel_unit = next((u for u in col_units if u), None) or src.table.unit
+            else:
+                row_unit = _row_unit([label for label, _ in resolved], src.table)
+                if row_unit and "/" in row_unit and "/" not in (fact.unit or ""):
+                    # A price row ('USD/barel') cannot answer an amount ('0,1 miliar dolar AS').
+                    if best_reason is None:
+                        best_reason = (
+                            f"Baris '{resolved[0][0]}' di [{src.label}] bersatuan '{row_unit}', "
+                            f"tidak bisa menjawab klaim dalam '{fact.unit}'."
+                        )
+                    continue
+                excel_unit = row_unit or excel_unit
             # A '%, yoy' table cannot answer "berapa triliun Rp". Without this the fallback
             # below normalises the CLAIM's scale only, so Tabel 1's growth half answered a
             # level claim about uang kartal with 15,7 / 1e12 = 0,0 triliun Rp and reported it
@@ -2555,7 +2846,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     f"('{fact.display_label}' saja tidak menyebut pokoknya)."
                 )
             continue
-        if _answers_one_group_of_it(fact, resolved):
+        if _answers_one_group_of_it(fact, resolved, src.table):
             if best_reason is None:
                 best_reason = (
                     f"Sumber [{src.label}] hanya memuat rinciannya per kelompok "

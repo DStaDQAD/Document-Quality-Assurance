@@ -3095,3 +3095,175 @@ def test_a_sector_whose_name_contains_a_sub_sector_is_not_read_as_naming_it():
     r = _evaluate_fact(fact, [_make_source(t1, filename="SKDU.xlsx", sheet="T1")])
     assert r.verdict == "Entailed"
     assert r.periods[-1].excel_value == 1.74
+
+
+# ---------------------------------------------------------------------------
+# NPI Tw II-2026 (BPM6 signs, joined rows, published growth rows)
+# ---------------------------------------------------------------------------
+
+def _npi_table(data):
+    return _make_table(title="NERACA PEMBAYARAN INDONESIA", unit="Juta USD", data=data)
+
+
+def test_an_import_printed_as_a_positive_amount_matches_the_negative_debit_row():
+    table = _npi_table({("Minyak > Impor", 2026, "Q2"): -11607.23})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Impor minyak", month="Q2")],
+        claimed_value=11.6, unit="miliar dolar AS",
+        context_quote="Impor minyak pada triwulan II 2026 tercatat sebesar 11,6 miliar dolar AS.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_rising_imports_on_a_debit_row_are_judged_on_their_size():
+    table = _npi_table({("Gas > Impor", 2026, "Q1"): -682.36, ("Gas > Impor", 2026, "Q2"): -1529.31})
+    quote = "Impor gas pada triwulan II 2026 meningkat dari 0,7 miliar dolar AS pada triwulan I 2026."
+    rising = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+        periods=[_make_period(metric_label="Impor gas", month="Q1"),
+                 _make_period(metric_label="Impor gas", month="Q2")],
+    )
+    falling = _make_fact(
+        operation="is_decreasing", claimed_value=None, unit=None, context_quote=quote,
+        periods=[_make_period(metric_label="Impor gas", month="Q1"),
+                 _make_period(metric_label="Impor gas", month="Q2")],
+    )
+
+    assert _evaluate_fact(rising, [_make_source(table)]).verdict == "Entailed"
+    assert _evaluate_fact(falling, [_make_source(table)]).verdict == "Refuted"
+
+
+def test_a_deficit_that_widens_later_in_the_sentence_is_a_size_change():
+    table = _npi_table({("Transaksi Berjalan", 2026, "Q1"): -3576.01,
+                        ("Transaksi Berjalan", 2026, "Q2"): -12487.42})
+    fact = _make_fact(
+        operation="diff", claimed_value=8.9, unit="miliar USD",
+        periods=[_make_period(metric_label="Transaksi Berjalan", month="Q1"),
+                 _make_period(metric_label="Transaksi Berjalan", month="Q2")],
+        context_quote=(
+            "defisit transaksi berjalan pada triwulan II 2026 tercatat sebesar 12,5 miliar dolar "
+            "AS (3,3% dari PDB), melebar dibandingkan dengan defisit pada triwulan sebelumnya."
+        ),
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_value_named_for_two_rows_is_their_sum():
+    table = _npi_table({("Transaksi Modal", 2026, "Q1"): 4.28,
+                        ("Transaksi Finansial", 2026, "Q1"): -4765.37})
+    quote = "transaksi modal dan finansial mencatat defisit 4,8 miliar dolar AS pada triwulan I 2026"
+    joined_label = _make_fact(
+        periods=[_make_period(metric_label="Transaksi Modal dan Finansial", month="Q1")],
+        claimed_value=-4.8, unit="miliar USD", context_quote=quote,
+    )
+    two_rows = _make_fact(
+        periods=[_make_period(metric_label="Transaksi Modal", month="Q1"),
+                 _make_period(metric_label="Transaksi Finansial", month="Q1")],
+        claimed_value=4.8, unit="miliar USD", context_quote=quote,
+    )
+
+    assert _evaluate_fact(joined_label, [_make_source(table)]).verdict == "Entailed"
+    assert _evaluate_fact(two_rows, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_joined_name_with_its_own_row_is_read_from_that_row():
+    table = _npi_table({("Transaksi Modal", 2026, "Q1"): 4.28,
+                        ("Transaksi Finansial", 2026, "Q1"): -4765.37,
+                        ("Transaksi Modal dan Finansial", 2026, "Q1"): -100.0})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Transaksi Modal dan Finansial", month="Q1")],
+        claimed_value=-4.8, unit="miliar USD", context_quote="transaksi modal dan finansial",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Refuted"
+
+
+def test_a_yoy_claim_is_answered_by_the_growth_row_the_table_publishes():
+    # Computed from the BPM6 row it is 9,81; the memorandum prints 8,49.
+    table = _npi_table({
+        ("Nonmigas > Ekspor", 2026, "Q2"): 70459.06,
+        ("Nonmigas > Ekspor", 2025, "Q2"): 64165.87,
+        ("Pertumbuhan (%, yoy) > Total Ekspor (fob) > Nonmigas", 2026, "Q2"): 8.49,
+    })
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=8.5, unit="persen_yoy",
+        periods=[_make_period(metric_label="Nonmigas > Ekspor", month="Q2")],
+        context_quote="Secara tahunan, ekspor nonmigas tumbuh 8,5% (yoy).",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "Pertumbuhan" in result.reasoning
+
+
+def test_held_not_unchanged_a_rising_ratio_that_stays_safe_is_not_refuted_as_unstable():
+    table = _npi_table({("Transaksi Berjalan (% PDB)", 2026, "Q1"): -0.97,
+                        ("Transaksi Berjalan (% PDB)", 2026, "Q2"): -3.34})
+    quote = ("Rasio defisit transaksi berjalan terhadap PDB pada triwulan II 2026 tetap terjaga, "
+             "meski lebih tinggi dibandingkan triwulan sebelumnya.")
+    periods = [_make_period(metric_label="Transaksi Berjalan (% PDB)", month="Q1"),
+               _make_period(metric_label="Transaksi Berjalan (% PDB)", month="Q2")]
+    stable = _make_fact(operation="is_stable", claimed_value=None, unit=None,
+                        context_quote=quote, periods=periods)
+    rising = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                        context_quote=quote, periods=list(periods))
+
+    assert _evaluate_fact(stable, [_make_source(table)]).verdict == "Inconclusive"
+    assert _evaluate_fact(rising, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_volume_trend_is_not_judged_on_a_dollar_row():
+    table = _npi_table({("Minyak > Impor", 2026, "Q1"): -7291.32,
+                        ("Minyak > Impor", 2026, "Q2"): -11607.23})
+    fact = _make_fact(
+        operation="is_decreasing", claimed_value=None, unit=None,
+        periods=[_make_period(metric_label="Impor minyak mentah", month="Q1"),
+                 _make_period(metric_label="Impor minyak mentah", month="Q2")],
+        context_quote="Dari sisi volume, impor minyak mentah menurun dari 36 juta barel menjadi 31 juta barel.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Inconclusive"
+
+
+def test_a_row_that_states_its_own_unit_is_compared_in_it():
+    table = _npi_table({("Transaksi Berjalan (% PDB)", 2026, "Q2"): -3.34,
+                        ("Jumlah pelawat (ribuan orang) > Ke luar negeri", 2026, "Q2"): 1960.82})
+    ratio = _make_fact(
+        periods=[_make_period(metric_label="Transaksi Berjalan (% PDB)", month="Q2")],
+        claimed_value=3.3, unit="persen",
+        context_quote="defisit transaksi berjalan tercatat 12,5 miliar dolar AS (3,3% dari PDB)",
+    )
+    people = _make_fact(
+        periods=[_make_period(metric_label="Jumlah pelawat > Ke luar negeri", month="Q2")],
+        claimed_value=2.0, unit="juta orang", context_quote="kunjungan wisnas 2,0 juta orang",
+    )
+
+    assert _evaluate_fact(ratio, [_make_source(table)]).verdict == "Entailed"
+    assert _evaluate_fact(people, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_position_at_the_end_of_june_is_read_from_the_second_quarter():
+    table = _npi_table({("Dalam Bulan Impor dan Pembayaran ULN Pemerintah", 2026, "Q1"): 5.8,
+                        ("Dalam Bulan Impor dan Pembayaran ULN Pemerintah", 2026, "Q2"): 5.41})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Dalam Bulan Impor dan Pembayaran ULN Pemerintah",
+                              month="Jun")],
+        claimed_value=5.4, unit="bulan",
+        context_quote="Posisi cadangan devisa pada akhir Juni 2026 setara 5,4 bulan impor dan pembayaran ULN pemerintah.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_net_purchases_abroad_printed_positive_match_the_negative_asset_row():
+    table = _npi_table({("Investasi Portofolio > Aset", 2026, "Q2"): -1487.61})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Investasi Portofolio > Aset", month="Q2")],
+        claimed_value=1.5, unit="miliar dolar AS",
+        context_quote="penduduk Indonesia tercatat melakukan pembelian neto surat berharga di luar negeri sebesar 1,5 miliar dolar AS",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
