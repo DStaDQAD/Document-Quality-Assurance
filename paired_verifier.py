@@ -666,6 +666,14 @@ _FRONT_TOPIC_WORDS = frozenset({
 })
 
 
+# Words that say which way a flow went, not which breakdown it is: "aliran dana asing ke pasar
+# saham domestik penjualan neto" names the equity-liability row; 'penjualan neto' is its sign.
+_FLOW_DIRECTION_WORDS = frozenset({
+    "penjualan", "pembelian", "neto", "bersih", "arus", "masuk", "keluar", "net", "inflow",
+    "outflow",
+})
+
+
 def _breakdown_the_table_lacks(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], src: "_ExcelSource"
 ) -> List[str]:
@@ -681,7 +689,7 @@ def _breakdown_the_table_lacks(
     narrowing: List[str] = []
     unit_words = {t.lower() for t in re.findall(r"\w+", src.table.unit or "")}
     for point, (label, _) in zip(fact.periods, resolved):
-        absent = src.table.words_absent(point.metric_label) - unit_words
+        absent = src.table.words_absent(point.metric_label) - unit_words - _FLOW_DIRECTION_WORDS
         if not absent:
             continue
         claim_tokens = [t.lower() for t in re.findall(r"\w+", point.metric_label)]
