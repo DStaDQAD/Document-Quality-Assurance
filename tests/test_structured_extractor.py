@@ -1192,3 +1192,17 @@ def test_an_undated_value_in_a_sentence_that_names_another_time_is_still_skipped
             "Angka ini lebih tinggi dibandingkan bulan sebelumnya sebesar 97,0.\n")
     undated = _undated(claimed_value_raw="97,0", unit=None, anchor_quote="bulan sebelumnya sebesar 97,0")
     assert len(_finalize_facts([_fake_fact(), undated], text)) == 1
+
+
+def test_labels_for_chunk_keeps_a_sheet_that_fits_and_cuts_a_huge_one_by_relevance():
+    from structured_extractor import _labels_for_chunk
+
+    small = ("Tabel kecil", ["Ekspor", "Impor"])
+    rows = [f"Baris umum {i}" for i in range(10)] + ["Transfer personal > Pembayaran"]
+    chunk = "Pembayaran remitansi melalui transfer personal naik."
+
+    assert _labels_for_chunk([small], chunk, limit=5) == [small]
+    (_, chosen), = _labels_for_chunk([("Id", rows)], chunk, limit=3)
+    assert "Transfer personal > Pembayaran" in chosen and len(chosen) == 3
+    assert chosen == [r for r in rows if r in chosen]  # the sheet's order is kept
+    assert _labels_for_chunk(None, chunk) is None

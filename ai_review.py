@@ -16,9 +16,12 @@ of answer can be proved (spike 2026-10-12; spec docs/superpowers/specs/2026-10-1
 """
 
 import asyncio
+import json
 import logging
+import os
 from collections import Counter
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
@@ -332,6 +335,11 @@ Catatan tentang tabel:
   periode lain berarti SBT bernilai positif; "terkontraksi" atau "turun" tanpa pembanding berarti
   SBT negatif. Hanya bila kalimat membandingkan dengan periode lain ("lebih tinggi dari triwulan
   sebelumnya") itu perbandingan dua sel.
+- Hal yang sama berlaku untuk Saldo Bersih (SB) di tabel "% responden": "tetap tumbuh", "tetap
+  baik", "masih dalam kondisi baik", "tetap mudah", "tetap kuat" atau "terjaga" berarti saldo
+  bersihnya POSITIF, bukan bahwa angkanya tidak berubah. SB likuiditas 17,05 → 15,03 dengan
+  kalimat "likuiditas masih dalam kondisi baik" itu sesuai (15,03 positif), walaupun angkanya
+  turun. Kutip sel periode yang dibicarakan kalimat (dan periode sebelumnya bila operasinya tren).
 - Kolom ekspektasi "X bulan yang akan datang" pada bulan survei B adalah ekspektasi untuk bulan
   B+X: nilai "3 bulan yang akan datang" di kolom Juli 2026 adalah ekspektasi Oktober 2026.
 - Satuan klaim (juta/miliar/triliun) boleh berbeda dari satuan tabel; program yang mengonversi.
@@ -445,10 +453,46 @@ async def review_claims(
     stats.answered = len(answers)
     reviewed = list(results)
     counts: Counter = Counter()
+    outcomes: Dict[int, str] = {}
     for i, review in answers.items():
         reviewed[i], outcome = judge_review(
             results[i], review, codes, new_refuted=new_refuted, use_guard=use_guard
         )
         counts[outcome] += 1
+        outcomes[i] = outcome
     stats.outcomes = dict(counts)
+    raw_log = os.getenv("AI_REVIEW_RAW_LOG", "").strip()
+    if raw_log:
+        _write_raw_answers(Path(raw_log), results, reviewed, indices, answers, outcomes)
     return reviewed, stats
+
+
+def _write_raw_answers(
+    path: Path,
+    before: List[FactVerificationResult],
+    after: List[FactVerificationResult],
+    indices: List[int],
+    answers: Dict[int, ClaimReview],
+    outcomes: Dict[int, str],
+) -> None:
+    """The model's raw answer per reviewed claim, appended as JSON lines — for diagnosing a
+    review that went wrong, never shown to the user (the response and Riwayat carry only the
+    verdict). Only written when AI_REVIEW_RAW_LOG names a file; a failure is logged, not raised."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            for i in indices:
+                review = answers.get(i)
+                fh.write(json.dumps({
+                    "index": i,
+                    "metric_label": before[i].metric_label,
+                    "operation": before[i].operation,
+                    "claimed_value": before[i].claimed_value,
+                    "context_quote": before[i].context_quote,
+                    "verdict_before": before[i].verdict,
+                    "verdict_after": after[i].verdict,
+                    "outcome": outcomes.get(i, "unanswered"),
+                    "review": review.model_dump() if review else None,
+                }, ensure_ascii=False) + "\n")
+    except OSError:
+        logger.warning("Tinjauan AI: jawaban mentah tidak bisa ditulis ke %s", path, exc_info=True)

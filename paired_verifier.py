@@ -134,11 +134,6 @@ _THRESHOLD_OPS = {"above_threshold", "below_threshold"}
 # the uploaded Excel) cannot — see _evaluate_fact.
 _FALLBACK_ORIGINS = ("pdf_other", "chart")
 
-# Row labels advertised to the fact extractor per source (see _source_desc). Internal mode can
-# add a dozen sources at once, and every label is printed into every extraction chunk's prompt.
-_MAX_LABELS_PER_SOURCE = 60
-
-
 # ---------------------------------------------------------------------------
 # Reference source container
 #
@@ -1256,8 +1251,14 @@ _NET_BALANCE_UNIT = re.compile(r"saldo\s+bersih|\bSBT\b|\bSB\b|net\s+balance", r
 # "tetap tumbuh", "seluruh sub-LU tercatat tumbuh": the balance is positive.
 _GROWTH_LEVEL_WORDS = re.compile(r"\b(tetap\s+tumbuh|tercatat\s+tumbuh|tumbuh\s+positif)\b",
                                  re.IGNORECASE)
-# "kinerja ... terjaga", "tetap kuatnya investasi": still positive, judged as is_stable.
-_HELD_LEVEL_WORDS = re.compile(r"\b(terjaga\w*|tetap\s+kuat\w*|tetap\s+baik)\b", re.IGNORECASE)
+# "kinerja ... terjaga", "tetap kuatnya investasi", "likuiditas masih dalam kondisi baik", "akses
+# kredit tetap mudah": still positive, judged as is_stable. Not "lebih baik" — that is the
+# answer a share of respondents gave, a row of its own.
+_HELD_LEVEL_WORDS = re.compile(
+    r"\b(terjaga\w*|tetap\s+kuat\w*|(?:tetap|masih)(?:\s+dalam\s+kondisi)?\s+(?:baik|mudah)"
+    r"|dalam\s+kondisi\s+baik)\b",
+    re.IGNORECASE,
+)
 _MOVE_WORDS = re.compile(
     r"\b(meningkat|naik|peningkatan|kenaikan|menurun|turun|penurunan|lebih\s+(tinggi|rendah))\b",
     re.IGNORECASE,
@@ -1297,7 +1298,10 @@ def _net_balance_level_claim(fact: ExtractedFact, row: str, unit: str) -> Option
     ... bersumber dari LU Pertanian (SBT 3,50%)" (4,07 -> 3,50) were all checked as a rise or a
     flat line and refuted, though each says the balance is positive — which it is.
     """
-    if fact.operation not in ("is_increasing", "is_stable") or not _NET_BALANCE_UNIT.search(unit or ""):
+    # The balance can be one row of a '% Responden' table: SKDU Tabel 3 'Likuiditas > Saldo
+    # Bersih (% Baik - % Buruk)' (17,05 -> 15,03, "masih dalam kondisi baik").
+    if fact.operation not in ("is_increasing", "is_stable") or not (
+            _NET_BALANCE_UNIT.search(unit or "") or _NET_BALANCE_UNIT.search(row)):
         return None
     quote = fact.context_quote or ""
     if _cited_as_contributor(quote, row):
@@ -1311,9 +1315,11 @@ def _net_balance_level_claim(fact: ExtractedFact, row: str, unit: str) -> Option
         return "pertumbuhan yang dirinci menurut sumbernya"
     if fact.operation == "is_stable" and _HELD_LEVEL_WORDS.search(quote):
         return f"'{_HELD_LEVEL_WORDS.search(quote).group(0)}' pada saldo bersih"
-    if fact.operation == "is_increasing":
+    if fact.operation in ("is_increasing", "is_stable"):
         # Per clause: "tetap tumbuh dan diprakirakan meningkat pada triwulan III" holds a level
-        # word for the report's quarter and a real rise for the next one.
+        # word for the report's quarter and a real rise for the next one. The extractor files
+        # "tetap tumbuh" as a rise in one run and as a flat line in the next (SKDU 2026-10-16:
+        # 0,28 -> 0,14 and 1,74 -> 0,79 refuted as is_stable); either way it means positive.
         latest = fact.periods[-1].month if fact.periods else None
         for clause in _CLAUSE_SPLIT.split(quote):
             growth = _GROWTH_LEVEL_WORDS.search(clause)
@@ -4405,12 +4411,11 @@ async def verify_paired(
             desc += " — kolom atribut (non-waktu): " + ", ".join(src.table.col_labels)
         return desc
 
-    # Internal mode can produce a dozen sources, and _build_row_labels_block prints every
-    # advertised label into EVERY extraction chunk's prompt — cap the per-source list so the
-    # prompt does not grow with the page count. all_row_labels below is already deduplicated.
+    # Every row goes to the extractor, which shows each chunk the ones it is about
+    # (structured_extractor._labels_for_chunk, capped per source so the prompt does not grow
+    # with the page count). all_row_labels below is already deduplicated.
     source_labels_for_extractor = _merge_sources_sharing_rows([
-        (_source_desc(src), src.table.row_labels[:_MAX_LABELS_PER_SOURCE])
-        for src in parsed_sources
+        (_source_desc(src), src.table.row_labels) for src in parsed_sources
     ])
 
     # Combined flat list for de-duplication (required by extract_structured_facts_async signature)

@@ -202,3 +202,13 @@ def test_npi_memo_balance_is_skipped_when_a_sheet_lacks_the_memo_rows():
                       _data={("Barang > Ekspor", 2026, "Q2"): 1.0})
     _add_memo_balances(table)
     assert table.row_labels == ["Barang > Ekspor"]
+
+
+def test_letter_spaced_total_is_read_as_total():
+    from publication_parsers._common import _close_letter_spacing
+
+    table = TableData(title="T7", unit="SBT", row_labels=["Konstruksi", "T O T A L"],
+                      _data={("T O T A L", 2026, "Q2"): 5.46, ("Konstruksi", 2026, "Q2"): 0.26})
+    _close_letter_spacing(table)
+    assert table.row_labels == ["Konstruksi", "TOTAL"]
+    assert table.lookup("TOTAL", 2026, "Q2") == 5.46

@@ -385,3 +385,25 @@ def test_a_cell_count_the_operation_cannot_take_is_refused_without_an_engine_err
     with caplog.at_level("ERROR"):
         assert judge_review(original, review, _CODES) == (original, "unchanged")
     assert not [r for r in caplog.records if r.levelname == "ERROR"]
+
+
+def test_raw_answers_go_to_the_log_file_only_when_one_is_named(tmp_path, monkeypatch):
+    # For diagnosing a review that went wrong; the verdicts themselves are unchanged and the
+    # raw answer is never put in the result the user sees.
+    import json
+
+    results = [_result(verdict="Entailed"), _result(verdict="Refuted"), _result()]
+    llm = _llm_answering(lambda n: ReviewBatch(reviews=[_review(claim_no=1)]), [])
+
+    monkeypatch.delenv("AI_REVIEW_RAW_LOG", raising=False)
+    plain, _ = asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=1))
+
+    log = tmp_path / "raw" / "doc.jsonl"
+    monkeypatch.setenv("AI_REVIEW_RAW_LOG", str(log))
+    logged, _ = asyncio.run(review_claims(results, [_source(_KREDIT)], llm, batch_size=1))
+
+    assert [r.model_dump() for r in logged] == [r.model_dump() for r in plain]
+    lines = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+    assert [line["index"] for line in lines] == [1, 2]
+    assert lines[0]["verdict_before"] == "Refuted" and lines[0]["outcome"] == "to_entailed"
+    assert lines[0]["review"]["claim_no"] == 1

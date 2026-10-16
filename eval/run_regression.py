@@ -101,6 +101,10 @@ def cmd_run(args) -> int:
             print(f"[{doc.id}] sudah ada, dilewati")
             continue
         files, sheets = _request_files(doc, data_root)
+        # The Tinjauan AI's raw answers, next to the result and never inside it (ai_review).
+        raw_log = out / f"{doc.id}.ai_review_raw.jsonl"
+        raw_log.unlink(missing_ok=True)
+        os.environ["AI_REVIEW_RAW_LOG"] = str(raw_log)
         started = time.time()
         response = client.post(
             "/api/verify-paired",

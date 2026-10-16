@@ -3043,6 +3043,16 @@ def test_sbt_tetap_tumbuh_means_positive_not_rising():
     assert "SBT positif" in r.reasoning
 
 
+@pytest.mark.parametrize("q2,verdict", [(0.14, "Entailed"), (-0.2, "Refuted")])
+def test_sbt_tetap_tumbuh_filed_as_stable_is_still_about_the_level(q2, verdict):
+    # SKDU 2026-10-16: the extractor filed "tetap tumbuh" as is_stable, and 0,28 -> 0,14 was
+    # refuted as not flat although the balance stayed positive.
+    r = _sbt_trend("is_stable", "TOTAL", 0.28, q2,
+                   "Penggunaan tenaga kerja pada triwulan II 2026 tetap tumbuh dan diprakirakan "
+                   "meningkat pada triwulan III 2026.")
+    assert r.verdict == verdict
+
+
 def test_sbt_terjaga_means_positive_not_flat():
     r = _sbt_trend("is_stable", "INDUSTRI PENGOLAHAN", 1.46, 1.34,
                    "Kinerja usaha LU Industri Pengolahan pada triwulan II 2026 diindikasikan terjaga.")
@@ -3321,3 +3331,22 @@ def test_trend_whose_stated_ends_miss_the_row_is_not_judged_on_it():
     # One end matching is enough to keep the row; no stated ends, nothing to say.
     assert _stated_endpoints_missed(quote, [500.0, 1590.0], "Juta USD") is None
     assert _stated_endpoints_missed("Ekspor NG naik.", [1590.85, 1590.55], "Juta USD") is None
+
+
+@pytest.mark.parametrize("quote,q2,verdict", [
+    ("Responden menilai likuiditas perusahaan masih dalam kondisi baik pada triwulan II 2026.", 15.03, "Entailed"),
+    ("Responden menilai akses kredit perbankan pada triwulan II 2026 tetap mudah.", 2.45, "Entailed"),
+    ("Responden menilai akses kredit perbankan pada triwulan II 2026 tetap mudah.", -1.2, "Refuted"),
+])
+def test_saldo_bersih_row_in_a_respondent_table_reads_baik_and_mudah_as_positive(quote, q2, verdict):
+    # SKDU Tabel 3 is in '% Responden'; only its 'Saldo Bersih' rows are balances.
+    row = "Likuiditas > Saldo Bersih (% Baik - % Buruk)"
+    r = _sbt_trend("is_stable", row, 17.05, q2, quote, unit="% Responden")
+    assert r.verdict == verdict
+
+
+def test_baik_on_a_respondent_share_row_is_not_read_as_a_balance():
+    r = _sbt_trend("is_stable", "Likuiditas > Baik", 23.98, 22.78,
+                   "Likuiditas perusahaan masih dalam kondisi baik.", unit="% Responden")
+    assert r.verdict != "Entailed"
+    assert "SBT positif" not in r.reasoning

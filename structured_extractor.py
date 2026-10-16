@@ -420,6 +420,40 @@ _EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
 # Row-labels block builder
 # ---------------------------------------------------------------------------
 
+# Row labels shown per source in each chunk's prompt. It used to be the first 60: NPI's internal
+# sheet stacks 254 rows, so 'Transfer personal > Pembayaran' and 'Kewajiban > Sektor swasta >
+# Surat utang' never reached the model, which named those claims in the report's words and the
+# code matched them to the wrong rows. Choosing 60 by relevance still missed rows made only of
+# common words ('Pendapatan investasi langsung > Pembayaran'); all 254 cost ~3k tokens a chunk.
+# Only a sheet beyond this size is cut down, by relevance to the chunk.
+LABELS_PER_SOURCE = 300
+
+
+def _labels_for_chunk(
+    source_labels: Optional[List[Tuple[str, List[str]]]], chunk: str, limit: int = LABELS_PER_SOURCE,
+) -> Optional[List[Tuple[str, List[str]]]]:
+    """Each source's labels for this chunk: all of them when they fit, else the `limit` whose
+    words the chunk uses most, a word shared by few labels counting more (it names a row,
+    where 'pembayaran' names half the sheet). Kept in the sheet's order."""
+    if not source_labels:
+        return source_labels
+    words = _sig_words(chunk)
+    selected = []
+    for desc, labels in source_labels:
+        if len(labels) <= limit:
+            selected.append((desc, labels))
+            continue
+        label_words = [_sig_words(label) for label in labels]
+        df: Dict[str, int] = {}
+        for ws in label_words:
+            for w in ws:
+                df[w] = df.get(w, 0) + 1
+        score = [sum(1 / df[w] for w in ws if w in words) for ws in label_words]
+        best = sorted(range(len(labels)), key=lambda i: (-score[i], i))[:limit]
+        selected.append((desc, [labels[i] for i in sorted(best)]))
+    return selected
+
+
 def _build_row_labels_block(
     row_labels: List[str],
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
@@ -1390,7 +1424,6 @@ def extract_structured_facts(
     """
     chain = _EXTRACTION_PROMPT | llm.with_structured_output(_ExtractedFacts)
 
-    row_labels_block = _build_row_labels_block(row_labels, source_labels)
     filtered_text = _filter_narrative(narrative_text)
     logger.info("Narrative filter: %d → %d chars", len(narrative_text), len(filtered_text))
 
@@ -1401,6 +1434,7 @@ def extract_structured_facts(
     errors: List[Exception] = []
     for i, chunk in enumerate(chunks, 1):
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
+        row_labels_block = _build_row_labels_block(row_labels, _labels_for_chunk(source_labels, chunk))
         payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
         try:
             all_raw_facts.extend(_invoke_extraction(chain, payload, fallback_llm).facts)
@@ -1446,7 +1480,6 @@ async def extract_structured_facts_async(
     """
     chain = _EXTRACTION_PROMPT | llm.with_structured_output(_ExtractedFacts)
 
-    row_labels_block = _build_row_labels_block(row_labels, source_labels)
     filtered_text = _filter_narrative(narrative_text)
     logger.info("Narrative filter: %d → %d chars", len(narrative_text), len(filtered_text))
 
@@ -1464,6 +1497,7 @@ async def extract_structured_facts_async(
     async def _process_chunk(i: int, chunk: str) -> List[_ExtractedFact]:
         nonlocal completed
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
+        row_labels_block = _build_row_labels_block(row_labels, _labels_for_chunk(source_labels, chunk))
         payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
         try:
             facts = (await _ainvoke_extraction(chain, payload, fallback_llm)).facts

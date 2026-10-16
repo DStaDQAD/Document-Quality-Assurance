@@ -667,12 +667,31 @@ def parse_with_generic_reader(data: bytes, sheet_name: str, unit: str = "") -> T
     if table.axis_type != "temporal" or not table._data:
         raise PublicationParseError("tabel tidak terbaca sebagai deret waktu")
     table.unit = _BILINGUAL_SPLIT.split(table.unit)[0].strip(" ()") or unit
+    _close_letter_spacing(table)
     if _is_semester_series(table):
         table._data = {
             (label, year, SEMESTER_OF_HEADER[period]): value
             for (label, year, period), value in table._data.items()
         }
     return table
+
+
+# A word typed with a space between its letters for emphasis: SKDU 'T7 Investasi Triwulanan'
+# labels its total 'T O T A L', which nothing recognised as the total row, so "kegiatan investasi
+# … tetap kuat" found no row although the sheet holds it (5,46 -> 5,33).
+_LETTER_SPACED = re.compile(r"\b[A-Za-z](?: [A-Za-z]){2,}\b")
+
+
+def _close_letter_spacing(table: TableData) -> None:
+    def close(label: str) -> str:
+        return _LETTER_SPACED.sub(lambda m: m.group(0).replace(" ", ""), label)
+
+    renamed = {label: close(label) for label in table.row_labels}
+    if all(old == new for old, new in renamed.items()):
+        return
+    table.row_labels = [renamed[label] for label in table.row_labels]
+    table._data = {(renamed.get(key[0], key[0]),) + key[1:]: value for key, value in table._data.items()}
+    table.row_units = {renamed.get(label, label): unit for label, unit in table.row_units.items()}
 
 
 # A semester sheet heads its columns 'I' / 'II' under each year, exactly as a quarterly sheet
