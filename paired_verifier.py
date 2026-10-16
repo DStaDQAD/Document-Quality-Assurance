@@ -23,7 +23,7 @@ import copy
 import logging
 import re
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
@@ -526,6 +526,68 @@ def _numeric_verdict(
     return delta, ("Entailed" if delta <= tolerance else "Refuted")
 
 
+# A number as a report prints it: '10.415,9', '7,6', '9.388', '12' (or '10,415.9').
+_PRINTED_NUMBER = re.compile(r"(?<![\d,.])\d+(?:[.,]\d+)*")
+
+
+def _readings(token: str) -> List[Tuple[float, int]]:
+    """Every (value, decimals) a printed number can mean: Indonesian '9.388' = 9388 with no
+    decimals, English '9.388' = 9,388 with three."""
+    out = []
+    for thousands, point in ((".", ","), (",", ".")):
+        whole, _, frac = token.partition(point)
+        groups = whole.split(thousands)
+        if (frac and not frac.isdigit()) or not all(g.isdigit() for g in groups) or (
+                len(groups) > 1 and any(len(g) != 3 for g in groups[1:])):
+            continue
+        out.append((float("".join(groups) + ("." + frac if frac else "")), len(frac)))
+    return out
+
+
+def _printed_decimals(value: float, quote: Optional[str]) -> Optional[int]:
+    """How many decimals the sentence prints `value` with ('10,0' -> 1, '9.388' -> 0).
+
+    Read from the text because the float cannot tell '10,0' from '10'. None when the number is
+    not in the sentence or is printed twice with different precision.
+    """
+    found = {decimals for m in _PRINTED_NUMBER.finditer(quote or "")
+             for number, decimals in _readings(m.group(0)) if abs(number - abs(value)) < 1e-9}
+    return found.pop() if len(found) == 1 else None
+
+
+def _decimals_held(value: float) -> int:
+    """Decimals a table value carries: 4.8 -> 1, 9387.8952 -> 4, 10.0 -> 0."""
+    return max(0, -Decimal(repr(round(value, 6))).normalize().as_tuple().exponent)
+
+
+def _value_verdict(claimed: float, table_value: float, quote: Optional[str]) -> Tuple[float, str, str]:
+    """A number read straight off the table, judged by rounding it as the report printed it.
+
+    "10,8" is Sesuai when the cell rounds to 10,8 (10,84) and not when it rounds to 10,9
+    (10,86); "Rp9.388 triliun" is Sesuai against 9.387,9, which a flat 0,05 refuted; "5,12%"
+    is not against 5,16, which 0,05 let through. Half-up on the decimal digits, as Excel shows
+    them — Python's round() turns 2,675 into 2,67.
+
+    Falls back to MATCH_TOLERANCE when the sentence does not show how the number was printed,
+    or prints more decimals than the table holds (4,75 against a cell of 4,8): the table
+    cannot settle the extra digit, so rounding would refute what it cannot see. Derived
+    numbers (sums, differences, computed growth) never come here; they carry two roundings.
+    Returns (delta, verdict, the reasoning tail).
+    """
+    delta, verdict = _numeric_verdict(claimed, round(table_value, 4))
+    decimals = _printed_decimals(claimed, quote)
+    if decimals is None or decimals > _decimals_held(table_value):
+        return delta, verdict, (f"Δ = {delta} → {'within' if verdict == 'Entailed' else 'exceeds'} "
+                                f"tolerance {MATCH_TOLERANCE}")
+    step = Decimal(1).scaleb(-decimals)
+    shown = Decimal(repr(round(table_value, 10))).quantize(step, rounding=ROUND_HALF_UP)
+    same = shown == Decimal(repr(claimed)).quantize(step, rounding=ROUND_HALF_UP)
+    shown_text = f"{shown:f}".replace(".", ",")
+    return delta, ("Entailed" if same else "Refuted"), (
+        f"dibulatkan ke {decimals} desimal seperti di laporan = {shown_text} → "
+        f"{'sama dengan' if same else 'berbeda dari'} klaim")
+
+
 def _printing_step(value: float) -> float:
     """The last decimal place `value` was printed to, e.g. 0.1 for 7,6 and 1.0 for 12."""
     exponent = Decimal(str(round(value, 6))).as_tuple().exponent
@@ -960,16 +1022,14 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
         # which also stops such a table from being ruled out for lacking one. A level table
         # may carry its own yoy rows too (NPI: 'Pertumbuhan (%, yoy) > Total Ekspor (fob)').
         computed = round(curr_raw, 4)
-        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        delta, verdict, rule = _value_verdict(fact.claimed_value, curr_raw, fact.context_quote)
         return _make_result(
             fact, [current_period], matched_source,
             fact.claimed_value, "persen_yoy", computed, "persen_yoy", delta, verdict,
             reasoning=(
                 f"PDF: {fact.claimed_value}% yoy | "
                 f"Excel [{matched_source}] ({matched_label}): {computed}% yoy "
-                f"(dibaca langsung; tabel ini sudah dalam satuan '{src.table.unit}') | "
-                f"Δ = {delta}% → {'within' if verdict == 'Entailed' else 'exceeds'} "
-                f"tolerance {MATCH_TOLERANCE}%"
+                f"(dibaca langsung; tabel ini sudah dalam satuan '{src.table.unit}') | {rule}"
             ),
         )
 
@@ -1074,15 +1134,14 @@ def _published_yoy_result(
         return None
     row, value = published
     p = fact.periods[0]
+    delta, verdict, rule = _value_verdict(fact.claimed_value, value, fact.context_quote)
     value = round(value, 4)
-    delta, verdict = _numeric_verdict(fact.claimed_value, value)
     return _make_result(
         fact, [PeriodResult(metric_label=row, year=p.year, month=p.month, excel_value=value)],
         src.label, fact.claimed_value, "persen_yoy", value, "persen_yoy", delta, verdict,
         reasoning=(
             f"PDF: {fact.claimed_value}% yoy | Excel [{src.label}] ({row}): {value}% yoy, dibaca "
-            f"langsung dari baris pertumbuhan yang diterbitkan tabel ({note}) | Δ = {delta}% → "
-            f"{'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}%"
+            f"langsung dari baris pertumbuhan yang diterbitkan tabel ({note}) | {rule}"
         ),
     )
 
@@ -1323,6 +1382,17 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             ),
         )
 
+    stated = _stated_endpoints_missed(fact.context_quote or "", values, src.table.unit)
+    if stated:
+        return _make_result(
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            reasoning=(
+                f"Kalimat menyebut {stated}, sedangkan '{labelled[-1][0]}' di [{matched_source}] "
+                f"bernilai {round(abs(values[0]), 4)} → {round(abs(values[-1]), 4)} "
+                f"{src.table.unit} — baris ini bukan metrik yang dimaksud."
+            ),
+        )
+
     # "defisit … meningkat" on a balance stored negative (−5,1 → −8,2) means the deficit grew, which
     # the signed numbers read as a fall. Judge such a claim on the size of the balance.
     size_note = ""
@@ -1383,6 +1453,39 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
+
+
+# "naik dari 0,5 miliar dolar AS menjadi 0,7 miliar dolar AS": a trend that prints both ends.
+_FROM_TO = re.compile(
+    r"\bdari\s+(?P<a>\d[\d.]*(?:,\d+)?)\s*(?:(?:ribu|juta|miliar|triliun)\s+(?:dolar\s+AS|rupiah|Rp|USD)\s+)?"
+    r"menjadi\s+(?P<b>\d[\d.]*(?:,\d+)?)\s*(?P<unit>(?:ribu|juta|miliar|triliun)\s+(?:dolar\s+AS|rupiah|Rp|USD))",
+    re.IGNORECASE,
+)
+
+
+def _stated_endpoints_missed(quote: str, values: List[float], table_unit: Optional[str]) -> Optional[str]:
+    """The sentence's own "dari A menjadi B", when neither end is anywhere near the row's values.
+
+    "Ekspor NG naik dari 0,5 miliar dolar AS menjadi 0,7" was answered by 'Gas > Ekspor', 1.590,85
+    -> 1.590,55 juta: total gas, of which NG is one part. Only the direction was compared, so the
+    claim came back Tidak Sesuai although the numbers show it is another metric. Both ends must
+    miss by more than rounding can explain (10% and 0,15 in the sentence's unit); a row that
+    matches either end is kept. Magnitudes are compared, as BPM6 stores the debit side negative.
+    """
+    m = _FROM_TO.search(quote)
+    if not m or len(values) < 2:
+        return None
+    factor = _unit_factor(m.group("unit"), table_unit)
+    if not factor:
+        return None
+    try:
+        ends = (_id_number(m.group("a")), _id_number(m.group("b")))
+    except ValueError:
+        return None
+    rows = (abs(values[0]) / factor, abs(values[-1]) / factor)
+    if all(abs(c - r) > max(0.15, 0.1 * c) for c, r in zip(ends, rows)):
+        return f"{m.group('a')} → {m.group('b')} {m.group('unit')}"
+    return None
 
 
 # A trend stated in physical units, and table units that are money.
@@ -1555,17 +1658,19 @@ def _reinterpret_signed_level(
         word = re.search(r".+", resolved[0][0].split(QUAL_SEP.strip())[-1].strip())
     if word is None:
         return None
-    delta, verdict = _numeric_verdict(fact.claimed_value, -computed)
+    # A sum over several rows carries each row's rounding; only a single cell is rounded.
+    delta, verdict, rule = _value_verdict(
+        fact.claimed_value, -computed, fact.context_quote if fact.operation == "value" else None)
     if verdict != "Entailed":
         return None
     return _make_result(
-        fact, periods, src.label, fact.claimed_value, fact.unit, computed, fact.unit, delta,
+        fact, periods, src.label, fact.claimed_value, fact.unit, round(computed, 4), fact.unit, delta,
         "Entailed",
         reasoning=(
             f"PDF: {fact.claimed_value} {fact.unit} ('{word.group(0)}') | "
-            f"Excel [{src.label}] ({resolved[0][0]}): {computed} {fact.unit} | "
+            f"Excel [{src.label}] ({resolved[0][0]}): {round(computed, 4)} {fact.unit} | "
             f"Laporan menulis besarnya {word.group(0).lower()} sebagai angka positif; tabel "
-            f"mencatat saldonya negatif. Δ besaran = {delta} → within tolerance {MATCH_TOLERANCE}"
+            f"mencatat saldonya negatif. Besaran: {rule}"
         ),
     )
 
@@ -1640,19 +1745,19 @@ def _compute_operation(
         return _compute_threshold(fact, resolved, src)
 
     if op == "value":
-        computed = round(resolved[0][1] / factor, 4)
-        periods = _build_periods(fact.periods, resolved, [resolved[0][1] / factor])
-        delta, verdict = _numeric_verdict(fact.claimed_value, computed)
+        table_value = resolved[0][1] / factor
+        computed = round(table_value, 4)
+        periods = _build_periods(fact.periods, resolved, [table_value])
+        delta, verdict, rule = _value_verdict(fact.claimed_value, table_value, fact.context_quote)
         if verdict == "Refuted":
-            recovered = _reinterpret_signed_level(fact, resolved, periods, computed, src)
+            recovered = _reinterpret_signed_level(fact, resolved, periods, table_value, src)
             if recovered is not None:
                 return recovered
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
                 f"PDF: {fact.claimed_value} {fact.unit} | "
-                f"Excel [{matched_source}] ({resolved[0][0]}): {computed} {fact.unit} | "
-                f"Δ = {delta} → {'within' if verdict == 'Entailed' else 'exceeds'} tolerance {MATCH_TOLERANCE}"
+                f"Excel [{matched_source}] ({resolved[0][0]}): {computed} {fact.unit} | {rule}"
             ),
         )
 

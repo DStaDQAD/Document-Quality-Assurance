@@ -138,6 +138,45 @@ def test_evaluate_value_refuted_outside_tolerance():
     assert result.delta == pytest.approx(355.1)
 
 
+@pytest.mark.parametrize(
+    "quote,claimed,cell,verdict",
+    [
+        ("tumbuh 10,8%", 10.8, 10.84, "Entailed"),
+        ("tumbuh 10,8%", 10.8, 10.86, "Refuted"),
+        # Excel shows 10,85 as 10,9 (half up); a flat 0,05 called it equal to 10,8.
+        ("tumbuh 10,8%", 10.8, 10.85, "Refuted"),
+        # A whole number is rounded as a whole number — 0,05 refuted it over 0,1.
+        ("tercatat Rp9.388 triliun", 9388.0, 9387.9, "Entailed"),
+        ("tercatat Rp9.388 triliun", 9388.0, 9387.4, "Refuted"),
+        ("tercatat Rp10.253,7 triliun", 10253.7, 10253.66, "Entailed"),
+        ("tercatat Rp10.253,7 triliun", 10253.7, 10253.76, "Refuted"),
+        # Two decimals are held to two decimals — 0,05 let 5,16 pass as 5,12.
+        ("sebesar 5,12%", 5.12, 5.16, "Refuted"),
+        ("sebesar 5,12%", 5.12, 5.1249, "Entailed"),
+        # '10,0' prints a decimal the float 10.0 hides: 10,4 must not round to 10.
+        ("rasio 10,0%", 10.0, 10.4, "Refuted"),
+        # More decimals than the cell holds: the table cannot settle the extra digit.
+        ("BI-Rate 4,75%", 4.75, 4.8, "Entailed"),
+        # Not printed in the sentence: the old tolerance stands.
+        ("quote", 10.8, 10.84, "Entailed"),
+    ],
+)
+def test_value_claim_is_judged_by_rounding_the_cell_as_printed(quote, claimed, cell, verdict):
+    table = _make_table(unit="triliun Rp", data={("Total", 2026, "Apr"): cell})
+    fact = _make_fact(claimed_value=claimed, context_quote=quote)
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == verdict
+
+
+def test_value_claim_rounding_is_shown_in_the_reasoning():
+    table = _make_table(unit="triliun Rp", data={("Total", 2026, "Apr"): 9387.9})
+    fact = _make_fact(claimed_value=9388.0, context_quote="tercatat Rp9.388 triliun")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert "dibulatkan ke 0 desimal seperti di laporan = 9388 → sama dengan klaim" in result.reasoning
+
+
 def test_evaluate_value_converts_units_between_pdf_and_excel():
     table = _make_table(unit="miliar Rp", data={("Total", 2026, "Apr"): 10355100.0})
     fact = _make_fact(unit="triliun Rp", claimed_value=10355.1)
@@ -3267,3 +3306,18 @@ def test_net_purchases_abroad_printed_positive_match_the_negative_asset_row():
     )
 
     assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_trend_whose_stated_ends_miss_the_row_is_not_judged_on_it():
+    # NPI Tw II-2026: "Ekspor NG naik dari 0,5 … menjadi 0,7" was answered by total gas exports,
+    # 1.590,85 -> 1.590,55 juta, and refuted on direction alone.
+    from paired_verifier import _stated_endpoints_missed
+
+    quote = "Ekspor NG naik dari 0,5 miliar dolar AS menjadi 0,7 miliar dolar AS, terutama harga."
+    assert _stated_endpoints_missed(quote, [1590.85, 1590.55], "Juta USD") == "0,5 → 0,7 miliar dolar AS"
+    # The right row (rounding apart), and a debit row stored negative, are kept.
+    assert _stated_endpoints_missed(quote, [540.0, 660.0], "Juta USD") is None
+    assert _stated_endpoints_missed(quote, [-540.0, -660.0], "Juta USD") is None
+    # One end matching is enough to keep the row; no stated ends, nothing to say.
+    assert _stated_endpoints_missed(quote, [500.0, 1590.0], "Juta USD") is None
+    assert _stated_endpoints_missed("Ekspor NG naik.", [1590.85, 1590.55], "Juta USD") is None
