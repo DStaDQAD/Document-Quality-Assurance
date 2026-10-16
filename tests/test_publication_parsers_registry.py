@@ -176,3 +176,29 @@ def test_growth_tables_say_which_growth_they_hold(publication, sheet, unit):
     from publication_parsers._common import spec_for
 
     assert spec_for(sheet, PARSERS[publication].SPECS).unit == unit
+
+
+def test_npi_adds_the_memo_nonmigas_balance_the_report_computes():
+    # NPI Tw II-2026: "neraca perdagangan nonmigas surplus 11,5" = memo exports 70.471,04 plus
+    # memo imports -58.970,41 (stored negative); the general-merchandise row says 12,1.
+    from publication_parsers.npi import TERM_ALIASES, _add_memo_balances
+
+    exports, imports = "Nominal > Total Ekspor (fob) > Nonmigas", "Nominal > Total Impor (fob) > Nonmigas"
+    table = TableData(title="NPI", unit="Juta USD", row_labels=[exports, imports],
+                      _data={(exports, 2026, "Q2"): 70471.04, (imports, 2026, "Q2"): -58970.41,
+                             (exports, 2026, "Q1"): 63537.06})
+    _add_memo_balances(table)
+
+    name = TERM_ALIASES["neraca perdagangan nonmigas"]
+    assert name in table.row_labels
+    assert table.lookup(name, 2026, "Q2") == pytest.approx(11500.63)
+    assert table.lookup(name, 2026, "Q1") is None  # no import figure to pair with
+
+
+def test_npi_memo_balance_is_skipped_when_a_sheet_lacks_the_memo_rows():
+    from publication_parsers.npi import _add_memo_balances
+
+    table = TableData(title="5.1", unit="Juta USD", row_labels=["Barang > Ekspor"],
+                      _data={("Barang > Ekspor", 2026, "Q2"): 1.0})
+    _add_memo_balances(table)
+    assert table.row_labels == ["Barang > Ekspor"]

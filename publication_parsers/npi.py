@@ -25,9 +25,9 @@ SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 # market 3,1 = private-sector portfolio equity liabilities -3.135; "neraca perdagangan migas"
 # -5,1 = general merchandise oil & gas -5.087; NPI = the overall balance. Phrases only: a bare
 # "PMI" is also the Prompt Manufacturing Index in the same report. "Neraca perdagangan
-# nonmigas" is left out on purpose — the report computes it from the memo rows (exports minus
-# imports, 11,5), not from the general-merchandise row (12,1).
+# nonmigas" is the memo balance (MEMO_BALANCES), not the general-merchandise row (12,1).
 TERM_ALIASES = {
+    "neraca perdagangan nonmigas": "Neraca perdagangan nonmigas (memorandum)",
     "wisatawan mancanegara": "Ke dalam negeri",
     "kunjungan wisman": "Ke dalam negeri",
     "wisman": "Ke dalam negeri",
@@ -54,7 +54,33 @@ TERM_ALIASES = {
 }
 
 
+# Balances the report computes from the memorandum rows, which the workbook never prints:
+# "neraca perdagangan nonmigas surplus 11,5" (Tw II-2026) = total nonmigas exports 70.471 plus
+# total nonmigas imports -58.970 (imports are stored negative).
+MEMO_BALANCES = {
+    "Neraca perdagangan nonmigas (memorandum)": (
+        "Nominal > Total Ekspor (fob) > Nonmigas", "Nominal > Total Impor (fob) > Nonmigas"),
+}
+
+
+def _add_memo_balances(table: TableData) -> None:
+    for name, (exports, imports) in MEMO_BALANCES.items():
+        if exports not in table.row_labels or imports not in table.row_labels:
+            continue
+        added = False
+        for key, value in list(table._data.items()):
+            if key[0] != exports:
+                continue
+            other = table._data.get((imports,) + key[1:])
+            if other is not None:
+                table._data[(name,) + key[1:]] = round(value + other, 6)
+                added = True
+        if added:
+            table.row_labels.append(name)
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)
+    _add_memo_balances(table)
     table.term_aliases = dict(TERM_ALIASES)
     return table
