@@ -79,8 +79,30 @@ def _add_memo_balances(table: TableData) -> None:
             table.row_labels.append(name)
 
 
+# Rows the parser names by their own word alone (it keeps the shortest name that is unique), but
+# that the report only ever names with their parent: "defisit jasa transportasi penumpang" found
+# no row in Tw II-2026, while 'Transportasi > Barang' (named in full because 'Barang' repeats)
+# was found. Child rows ('Penumpang > Ekspor') get the parent too.
+WITH_PARENT = {"Penumpang": "Transportasi"}
+
+
+def _add_parents(table: TableData) -> None:
+    renamed = {}
+    for label in table.row_labels:
+        head = label.split(" > ")[0]
+        if head in WITH_PARENT:
+            renamed[label] = f"{WITH_PARENT[head]} > {label}"
+    if not renamed or any(new in table.row_labels for new in renamed.values()):
+        return
+    table.row_labels = [renamed.get(label, label) for label in table.row_labels]
+    table._data = {(renamed.get(key[0], key[0]),) + key[1:]: value
+                   for key, value in table._data.items()}
+    table.row_units = {renamed.get(label, label): unit for label, unit in table.row_units.items()}
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)
+    _add_parents(table)
     _add_memo_balances(table)
     table.term_aliases = dict(TERM_ALIASES)
     return table

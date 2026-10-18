@@ -230,3 +230,23 @@ def test_uang_beredar_tables_name_the_report_sections_they_do_not_hold(mock_bi):
     for heading, uncovered in headings.items():
         hit = any(re.search(p, heading, re.IGNORECASE) for p in table.uncovered_sections)
         assert hit == uncovered, heading
+
+
+def test_npi_names_passenger_transport_with_its_parent():
+    # NPI Tw II-2026: "defisit jasa transportasi penumpang" found no row, because the parser kept
+    # the bare 'Penumpang' (unique) while 'Transportasi > Barang' got its parent (repeated name).
+    from publication_parsers import npi
+
+    table = TableData(title="t", unit="Juta USD",
+                      row_labels=["Transportasi", "Penumpang", "Penumpang > Impor", "Transportasi > Barang"],
+                      _data={("Penumpang", 2026, "Q2"): -80.98, ("Penumpang > Impor", 2026, "Q2"): -494.94,
+                             ("Transportasi", 2026, "Q2"): -2502.89,
+                             ("Transportasi > Barang", 2026, "Q2"): -2292.5})
+
+    npi._add_parents(table)
+
+    assert table.row_labels == ["Transportasi", "Transportasi > Penumpang",
+                                "Transportasi > Penumpang > Impor", "Transportasi > Barang"]
+    assert table._data[("Transportasi > Penumpang", 2026, "Q2")] == -80.98
+    assert table.lookup_fuzzy("defisit jasa transportasi penumpang", 2026, "Q2") == (
+        "Transportasi > Penumpang", -80.98)

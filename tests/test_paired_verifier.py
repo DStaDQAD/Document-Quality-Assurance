@@ -2576,6 +2576,31 @@ def test_a_deficit_that_really_shrank_still_refutes_a_claim_that_it_grew():
     assert result.verdict == "Refuted"
 
 
+@pytest.mark.parametrize("operation, older, newer, verdict", [
+    ("is_increasing", -5086.91, -10180.34, "Entailed"),
+    ("is_increasing", -10180.34, -5086.91, "Refuted"),
+    ("is_decreasing", -10180.34, -5086.91, "Entailed"),
+])
+def test_a_trend_whose_own_name_is_the_deficit_is_judged_on_its_size(operation, older, newer, verdict):
+    # NPI Tw II-2026: the claim was named "defisit neraca perdagangan migas" by the extractor, but
+    # its sentence ("… disertai dengan defisit neraca perdagangan migas.") has no verb after the
+    # deficit, so −5.087 → −10.180 was read on the signed numbers and the widening refuted.
+    table = _npi_table({("Barang Dagangan Umum > Migas", 2026, "Q1"): older,
+                        ("Barang Dagangan Umum > Migas", 2026, "Q2"): newer,
+                        ("Barang Dagangan Umum > Nonmigas", 2026, "Q2"): 12136.12,
+                        ("Minyak > Impor", 2026, "Q2"): -11607.23})
+    table.term_aliases = {"neraca perdagangan migas": "Barang Dagangan Umum > Migas"}  # as npi.py
+    fact = _make_fact(
+        operation=operation, claimed_value=None, unit=None,
+        context_quote=("Neraca perdagangan barang mencatat surplus yang lebih rendah disertai dengan "
+                       "defisit neraca perdagangan migas."),
+        periods=[_make_period(metric_label="defisit neraca perdagangan migas", month="Q1"),
+                 _make_period(metric_label="defisit neraca perdagangan migas", month="Q2")],
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == verdict
+
+
 def test_a_trend_on_the_balance_itself_keeps_the_signed_reading():
     # "transaksi berjalan membaik" with no deficit word before the verb: −8,2 → −5,1 is an
     # improvement of the signed balance, exactly as written.
@@ -3292,6 +3317,20 @@ def test_a_row_that_states_its_own_unit_is_compared_in_it():
 
     assert _evaluate_fact(ratio, [_make_source(table)]).verdict == "Entailed"
     assert _evaluate_fact(people, [_make_source(table)]).verdict == "Entailed"
+
+
+@pytest.mark.parametrize("claim_unit, table_unit, factor", [
+    # NPI Tw II-2026: "dari 2,5 juta wisnas menjadi 2,0 juta wisnas" against 'ribuan orang'.
+    ("juta wisnas", "ribuan orang", 1000.0),
+    ("juta orang", "ribuan orang", 1000.0),
+    ("ribu kunjungan", "juta orang", 0.001),
+    # Different kinds of quantity stay apart: barrels are not people, months are not people.
+    ("juta barel", "ribuan orang", None),
+    ("juta orang", "ribu ton", None),
+    ("ribu bulan", "ribuan orang", None),
+])
+def test_counted_things_compare_in_full_numbers(claim_unit, table_unit, factor):
+    assert _unit_factor(claim_unit, table_unit) == factor
 
 
 def test_a_position_at_the_end_of_june_is_read_from_the_second_quarter():

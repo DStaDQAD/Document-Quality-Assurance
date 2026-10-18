@@ -291,12 +291,29 @@ def _unit_factor(pdf_unit: Optional[str], excel_unit: Optional[str]) -> Optional
     pdf_parsed, excel_parsed = _parse_scale_unit(key[0]), _parse_scale_unit(key[1])
     if pdf_parsed and excel_parsed and pdf_parsed[1] and pdf_parsed[1] == excel_parsed[1]:
         return pdf_parsed[0] / excel_parsed[0]
-    # The same counted thing in two scales: '4,0 juta orang' against 'ribuan orang'.
+    # The same counted thing in two scales: '4,0 juta orang' against 'ribuan orang'. Both sides
+    # become full numbers; the nouns only have to name the same KIND of quantity, so "2,0 juta
+    # wisnas" (NPI Tw II-2026) is people like 'ribuan orang', while barrels or tonnes never are.
     if pdf_parsed and excel_parsed and not pdf_parsed[1] and not excel_parsed[1]:
         nouns = [set(re.findall(r"[a-z]+", k)) - set(_SCALE_WORDS) for k in key]
-        if nouns[0] and nouns[0] == nouns[1]:
+        if nouns[0] and nouns[1] and _quantity_kind(nouns[0]) == _quantity_kind(nouns[1]):
             return pdf_parsed[0] / excel_parsed[0]
     return None
+
+
+# Nouns that name a measured quantity. Any other noun after a scale word ('juta wisnas', 'ribu
+# kunjungan', 'ribuan orang') counts things, and counts compare with each other.
+_MEASURED_NOUNS: Dict[str, str] = {
+    "barel": "volume minyak", "barrel": "volume minyak", "bph": "volume minyak",
+    "ton": "berat", "kg": "berat", "kilogram": "berat",
+    "liter": "volume", "kl": "volume", "kiloliter": "volume",
+    "bulan": "waktu", "hari": "waktu", "tahun": "waktu", "minggu": "waktu",
+}
+
+
+def _quantity_kind(nouns: set) -> str:
+    kinds = {_MEASURED_NOUNS[n] for n in nouns if n in _MEASURED_NOUNS}
+    return "/".join(sorted(kinds)) or "jumlah"
 
 
 # Trailing parenthetical of a categorical column name, where such tables usually declare
@@ -1238,6 +1255,8 @@ _DEFICIT_TREND_NOUN_FIRST = re.compile(
     + _DEFICIT_NOUNS + r"\b",
     re.IGNORECASE,
 )
+# A claim whose metric name starts with the deficit: "defisit neraca perdagangan migas".
+_DEFICIT_CLAIM_NAME = re.compile(r"\s*defisit\b", re.IGNORECASE)
 # The words among them that say the size went DOWN; every other one says it went up.
 _SIZE_DOWN = re.compile(
     r"menurun|turun|menyempit|mengecil|berkurang|lebih\s+(rendah|kecil|sempit)"
@@ -1409,12 +1428,18 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         _DEFICIT_TREND.search(quote) or _DEFICIT_TREND_NOUN_FIRST.search(quote)
         or _DEFICIT_TREND_LATER_IN_SENTENCE.search(quote)
     )
-    if all(v < 0 for v in values) and deficit:
+    # The claim itself named after the deficit — "defisit neraca perdagangan migas" — is about the
+    # deficit's size even when its sentence puts no verb after it (NPI Tw II-2026: "… disertai
+    # dengan defisit neraca perdagangan migas." came back is_increasing on −5.087 → −10.180, and
+    # the signed reading refuted a deficit that had doubled).
+    named_deficit = _DEFICIT_CLAIM_NAME.match(fact.display_label or "")
+    if all(v < 0 for v in values) and (deficit or named_deficit):
         values = [-v for v in values]
         size_note = " (dinilai pada besarnya defisit/kewajiban neto)"
         # The extractor reads "defisit … melebar" as the balance falling in one run and the
-        # deficit growing in the next; the verb itself says which way the size moved.
-        if operation in ("is_increasing", "is_decreasing"):
+        # deficit growing in the next; the verb itself says which way the size moved. With no
+        # verb, the extractor's direction stands: it named the deficit, so it meant the deficit.
+        if deficit and operation in ("is_increasing", "is_decreasing"):
             grew = _SIZE_DOWN.search(deficit.group("verb")) is None
             operation = "is_increasing" if grew else "is_decreasing"
     elif all(v < 0 for v in values) and _is_debit_row(labelled[-1][0]):
