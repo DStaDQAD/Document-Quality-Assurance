@@ -359,11 +359,14 @@ def review_candidates(results: List[FactVerificationResult]) -> List[int]:
     A quantified group claim ("seluruh", "sebagian besar", "lainnya") is not reviewed: the
     review re-runs a claim on the rows the model cites, and for a claim about every group that
     is a subset the model chose — it could leave out exactly the group that refutes it.
+
+    Nor is a claim the section guard set aside (paired_verifier._section_guard): the table holds
+    no data for its report section, so any row the model cites is the wrong one.
     """
     return [
         i for i, r in enumerate(results)
         if r.verdict in ("Refuted", "Inconclusive") and r.checked_item == "narrative"
-        and not r.group_scope
+        and not r.group_scope and r.resolved_via != "section_guard"
     ]
 
 

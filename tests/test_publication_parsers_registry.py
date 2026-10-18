@@ -1,4 +1,5 @@
 """Which sheets each publication parser claims, and how the reader wrappers report failure."""
+import re
 from unittest.mock import patch
 
 import pytest
@@ -212,3 +213,20 @@ def test_letter_spaced_total_is_read_as_total():
     _close_letter_spacing(table)
     assert table.row_labels == ["Konstruksi", "TOTAL"]
     assert table.lookup("TOTAL", 2026, "Q2") == 5.46
+
+
+@patch("publication_parsers._common.parse_bi_table")
+def test_uang_beredar_tables_name_the_report_sections_they_do_not_hold(mock_bi):
+    mock_bi.return_value = TableData(
+        title="t", unit="Miliar Rp", row_labels=["Simpanan Berjangka (Rupiah dan Valas)"],
+        _data={("Simpanan Berjangka (Rupiah dan Valas)", 2026, "Aug"): 1.0},
+    )
+
+    table = parse_for_publication("uang-beredar", b"bytes", "I.1A")
+
+    headings = {"PERKEMBANGAN DANA PIHAK KETIGA (DPK)": True, "PERKEMBANGAN KREDIT": True,
+                "PERKEMBANGAN UANG PRIMER ADJUSTED": True, "SUKU BUNGA KREDIT DAN SIMPANAN": True,
+                "KOMPONEN UANG BEREDAR": False, "FAKTOR-FAKTOR YANG MEMENGARUHI UANG BEREDAR": False}
+    for heading, uncovered in headings.items():
+        hit = any(re.search(p, heading, re.IGNORECASE) for p in table.uncovered_sections)
+        assert hit == uncovered, heading

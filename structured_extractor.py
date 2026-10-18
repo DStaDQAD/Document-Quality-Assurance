@@ -20,6 +20,7 @@ PDF tables are intentionally excluded because their raw structure is handled sep
 """
 
 import asyncio
+import bisect
 import logging
 import os
 import re
@@ -500,7 +501,7 @@ class ExtractedFact:
     the LLM never emits whole sentences, to keep extraction output-token cost down.
     """
     __slots__ = ("operation", "periods", "claimed_value", "unit", "context_quote", "page_number",
-                 "group_scope", "group_exclude", "rank_group", "rank_clause")
+                 "group_scope", "group_exclude", "rank_group", "rank_clause", "section_headings")
 
     def __init__(
         self,
@@ -529,6 +530,9 @@ class ExtractedFact:
         # filled by paired_verifier._attach_rankings; empty for a plain trend.
         self.rank_group: List[str] = []
         self.rank_clause: str = ""
+        # The report's section headings above this claim ("PERKEMBANGAN DANA PIHAK KETIGA
+        # (DPK)"), one per place its sentence occurs; filled by attach_section_headings.
+        self.section_headings: List[str] = []
 
     @property
     def display_label(self) -> str:
@@ -871,6 +875,40 @@ def _locate_anchor(
         return spans[0]
     # max() keeps the first of equally-fitting spans, so ties still resolve to the earliest.
     return max(spans, key=lambda s: _anchor_fit(normalized, s, metric_words, value_text))
+
+
+def _locate_by_value(
+    value_text: Optional[str], normalized: str, metric_words: set
+) -> Optional[Tuple[int, int]]:
+    """The printed number's span when the model's anchor is not in the text, or None.
+
+    For a list sentence the model writes an anchor that never occurs: UB Agustus 2026 prints
+    "giro dan simpanan berjangka tumbuh masing-masing sebesar 9,4% (yoy) dan 4,7% (yoy)", and
+    the anchor came back as "sebesar 4,7% (yoy)". The claim then kept that fragment as its
+    quote, lost the sentence (and the DPK section it sits in), and was matched to M2's
+    'Simpanan Berjangka' row — a false Tidak Sesuai.
+
+    The number is found instead, as a whole number (4,7 is not inside 14,7 or 4,75), in a
+    sentence that names at least one of the claim's metric words. The best sentence must win
+    outright; when two different sentences fit equally the number cannot tell them apart and
+    None keeps the anchor as it is.
+    """
+    unsigned = (value_text or "").strip().lstrip("-−").strip()
+    if not unsigned or not metric_words:
+        return None
+    pattern = re.compile(r"(?<![\d.,])" + re.escape(unsigned) + r"(?!\d|[.,]\d)")
+    scored = []
+    for m in pattern.finditer(normalized):
+        span = (m.start(), m.end())
+        sentence = _expand_anchor_to_sentence(normalized, *span)
+        overlap, _, lead_in = _anchor_fit(normalized, span, metric_words, None)
+        if sentence and overlap:
+            scored.append(((overlap, lead_in), sentence, span))
+    if not scored:
+        return None
+    best = max(score for score, _, _ in scored)
+    winners = {sentence: span for score, sentence, span in scored if score == best}
+    return next(iter(winners.values())) if len(winners) == 1 else None
 
 
 def _page_at(normalized: str, pos: int) -> Optional[int]:
@@ -1267,12 +1305,12 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
                 logger.warning("Skipping fact with unparseable claimed_value_raw=%r", f.claimed_value_raw)
                 continue
 
-        span = _locate_anchor(
-            f.anchor_quote,
-            normalized,
-            metric_words=_sig_words(" ".join(p.metric_label for p in periods)),
-            value_text=(f.claimed_value_raw or "").strip() or None,
-        )
+        metric_words = _sig_words(" ".join(p.metric_label for p in periods))
+        value_text = (f.claimed_value_raw or "").strip() or None
+        span = _locate_anchor(f.anchor_quote, normalized, metric_words=metric_words,
+                              value_text=value_text)
+        if span is None:
+            span = _locate_by_value(value_text, normalized, metric_words)
         if span is not None:
             page_num = _page_at(normalized, span[0])
             quote = _expand_anchor_to_sentence(normalized, span[0], span[1]) or f.anchor_quote
@@ -1319,6 +1357,58 @@ def _finalize_facts(raw_facts: List[_ExtractedFact], filtered_text: str) -> List
 
     logger.info("Finalized %d structured facts from %d raw LLM facts", len(facts), len(raw_facts))
     return facts
+
+
+_HEADING_MAX_WORDS = 12
+
+
+def _is_section_heading(line: str) -> bool:
+    """An all-capitals line of a few words: 'PERKEMBANGAN DANA PIHAK KETIGA (DPK)'.
+
+    Not a page marker, not a sentence (no closing full stop) and mostly letters, so an
+    upper-case table row of figures does not count.
+    """
+    if not line or line.startswith("[==") or line.endswith("."):
+        return False
+    letters = sum(c.isalpha() for c in line)
+    digits = sum(c.isdigit() for c in line)
+    return (letters >= 4 and digits * 2 <= letters and line == line.upper()
+            and len(line.split()) <= _HEADING_MAX_WORDS)
+
+
+def attach_section_headings(facts: List[ExtractedFact], narrative_text: str) -> None:
+    """Set each fact's section_headings: the heading in force where its sentence is printed.
+
+    Reads the whole narrative, headings included (the extraction text filters them out as
+    too short). A sentence printed twice — a report's summary repeats its sections' opening
+    sentences — gets the heading of every place it occurs; one before the first heading gets
+    none.
+    """
+    pieces: List[str] = []
+    starts: List[int] = []
+    headings: List[Optional[str]] = []
+    heading: Optional[str] = None
+    offset = 0
+    for line in narrative_text.splitlines():
+        norm = _normalize_ws(line).strip()
+        if not norm:
+            continue
+        if _is_section_heading(norm):
+            heading = norm
+        starts.append(offset)
+        headings.append(heading)
+        pieces.append(norm)
+        offset += len(norm) + 1
+    text = " ".join(pieces)
+    for fact in facts:
+        quote = _normalize_ws(fact.context_quote or "").strip()
+        found: List[str] = []
+        if len(quote) >= 10:
+            for start, _ in _all_occurrences(quote, text):
+                at = headings[bisect.bisect_right(starts, start) - 1]
+                if at and at not in found:
+                    found.append(at)
+        fact.section_headings = found
 
 
 # ---------------------------------------------------------------------------

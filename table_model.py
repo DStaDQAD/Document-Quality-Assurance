@@ -339,6 +339,11 @@ class TableData:
     # 'Jumlah pelawat (ribuan orang)' in a 'Juta USD' table. Set by the series parser from the
     # row's full path, which the (shortened) row name may no longer show.
     row_units: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Report sections about data this table does not hold, as {heading regex: what the section
+    # is about}: UB's 'PERKEMBANGAN DANA PIHAK KETIGA (DPK)' is not answered by SEKI I.1A, whose
+    # 'Simpanan Berjangka' is M2's. Set by the publication parser; a claim under such a heading
+    # that this table answered is made Tidak Cukup Data (paired_verifier._section_guard).
+    uncovered_sections: Dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)

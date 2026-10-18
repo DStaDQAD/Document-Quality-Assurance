@@ -181,6 +181,41 @@ def _parsed_sources(doc: Document, data_root: Path):
     return sources
 
 
+def _narrative_of(doc: Document, data_root: Path) -> Optional[str]:
+    """The Word document's narrative as the endpoint reads it; None for a PDF (needs OCR)."""
+    path = _resolve(doc.doc, data_root)
+    if path.suffix.lower() != ".docx":
+        return None
+    from word_extraction import read_word_document
+    return read_word_document(path.read_bytes()).narrative_text
+
+
+def _catch_up_on_quotes(facts, narrative: str) -> None:
+    """Give facts saved by older code what extraction now adds: the sentence of an anchor
+    that was never found (structured_extractor._locate_by_value) and the section headings.
+    Only facts whose fields are missing are touched, so newer saved facts replay as saved."""
+    import re as _re
+    from structured_extractor import (
+        _expand_anchor_to_sentence, _filter_narrative, _locate_by_value, _normalize_ws, _page_at,
+        _parse_indonesian_number, _sig_words, attach_section_headings,
+    )
+    normalized = _normalize_ws(_filter_narrative(narrative))
+    for f in facts:
+        if f.page_number is not None or f.claimed_value is None:
+            continue
+        printed = [t for t in _re.findall(r"\d[\d.,]*\d|\d", f.context_quote or "")
+                   if (_parse_indonesian_number(t) or 0) == abs(f.claimed_value)]
+        if not printed:
+            continue
+        words = _sig_words(" ".join(p.metric_label for p in f.periods))
+        span = _locate_by_value(printed[0], normalized, words)
+        if span is not None:
+            f.context_quote = _expand_anchor_to_sentence(normalized, *span) or f.context_quote
+            f.page_number = _page_at(normalized, span[0])
+    if not any(getattr(f, "section_headings", None) for f in facts):
+        attach_section_headings(facts, narrative)
+
+
 def cmd_replay(args) -> int:
     """Re-judge saved facts with the CURRENT comparison code — no LLM, no cost.
 
@@ -207,6 +242,9 @@ def cmd_replay(args) -> int:
         skipped = sum(f is None for f in facts)
         facts = [f for f in facts if f is not None]
         sources = _parsed_sources(doc, data_root)
+        narrative = _narrative_of(doc, data_root)
+        if narrative is not None:
+            _catch_up_on_quotes(facts, narrative)
         facts = _drop_group_stand_ins(facts)
         _attach_group_exclusions(facts)
         _attach_rankings(facts)

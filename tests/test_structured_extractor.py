@@ -13,8 +13,10 @@ from structured_extractor import (
     _finalize_facts,
     _find_page_number,
     _filter_narrative,
+    _is_section_heading,
     _parse_indonesian_number,
     _split_into_page_chunks,
+    attach_section_headings,
     extract_structured_facts,
     extract_structured_facts_async,
 )
@@ -487,11 +489,96 @@ def test_finalize_facts_expansion_stops_at_page_marker_without_punctuation():
 
 
 def test_finalize_facts_falls_back_to_anchor_when_not_found_in_text():
-    raw = _fake_fact(anchor_quote="frasa yang tidak pernah muncul dalam teks sumber")
+    # The number is in the text, but in no sentence naming the claim's metric.
+    raw = _fake_fact(anchor_quote="frasa yang tidak pernah muncul dalam teks sumber",
+                     periods=[_fake_period(metric_label="Kredit Investasi")])
     facts = _finalize_facts([raw], NARRATIVE)
 
     assert facts[0].context_quote == "frasa yang tidak pernah muncul dalam teks sumber"
     assert facts[0].page_number is None
+
+
+UB_DPK = (
+    "[== Halaman 3 ==]\n"
+    "PERKEMBANGAN DANA PIHAK KETIGA (DPK)\n"
+    "Penghimpunan DPK pada Agustus 2026 tercatat sebesar Rp9.732,8 triliun atau tumbuh relatif "
+    "stabil sebesar 7,7% (yoy) (Tabel 3). Sementara itu, giro dan simpanan berjangka tumbuh "
+    "masing-masing sebesar 9,4% (yoy) dan 4,7% (yoy), lebih rendah dibandingkan pertumbuhan bulan "
+    "sebelumnya masing-masing sebesar 10,5% (yoy) dan 4,8% (yoy) (Grafik 3). Tabungan valas "
+    "tumbuh 14,7% (yoy).\n"
+)
+
+
+def test_finalize_facts_recovers_the_sentence_of_a_list_claim_by_its_number():
+    # UB Agustus 2026: the model anchored "sebesar 4,7% (yoy)", which the text never prints
+    # ("sebesar 9,4% (yoy) dan 4,7% (yoy)"). The quote was that fragment, without the sentence
+    # or its page, and the claim was matched to M2's row — a false Tidak Sesuai.
+    raw = _fake_fact(operation="yoy_growth", claimed_value_raw="4,7", unit="persen_yoy",
+                     anchor_quote="sebesar 4,7% (yoy)",
+                     periods=[_fake_period(metric_label="Simpanan Berjangka", month="Aug")])
+    facts = _finalize_facts([raw], UB_DPK)
+
+    assert facts[0].context_quote.startswith("Sementara itu, giro dan simpanan berjangka")
+    assert facts[0].context_quote.endswith("(Grafik 3).")
+    assert facts[0].page_number == 3
+
+
+def test_finalize_facts_number_search_matches_whole_numbers_only():
+    # 4,7 is not inside 14,7, and "Tabungan" names only the 14,7 sentence: no sentence holds
+    # both, so the anchor stays as it was.
+    raw = _fake_fact(operation="yoy_growth", claimed_value_raw="4,7", unit="persen_yoy",
+                     anchor_quote="sebesar 4,7% (yoy)",
+                     periods=[_fake_period(metric_label="Tabungan valas", month="Aug")])
+    facts = _finalize_facts([raw], UB_DPK)
+
+    assert facts[0].context_quote == "sebesar 4,7% (yoy)"
+
+
+def test_finalize_facts_number_search_gives_up_when_two_sentences_fit_equally():
+    text = ("[== Halaman 1 ==]\nKredit tumbuh 5,0% (yoy) pada Juli 2026. "
+            "Kredit tumbuh 5,0% (yoy) pada Agustus 2026.\n")
+    raw = _fake_fact(operation="yoy_growth", claimed_value_raw="5,0", unit="persen_yoy",
+                     anchor_quote="sebesar 5,0% (yoy)",
+                     periods=[_fake_period(metric_label="Kredit", month="Aug")])
+    facts = _finalize_facts([raw], text)
+
+    assert facts[0].context_quote == "sebesar 5,0% (yoy)"
+
+
+def test_attach_section_headings_reads_the_heading_above_each_sentence():
+    text = ("[== Halaman 1 ==]\n"
+            "Uang beredar tumbuh 8,2% (yoy) pada Agustus 2026.\n"
+            "KOMPONEN UANG BEREDAR\n"
+            "M1 tumbuh 9,0% (yoy) pada Agustus 2026.\n"
+            "[== Halaman 2 ==]\n"
+            "Uang beredar tumbuh 8,2% (yoy) pada Agustus 2026.\n"
+            + UB_DPK)
+    fact_m2 = ExtractedFact("yoy_growth", [], 8.2, "persen_yoy",
+                            "Uang beredar tumbuh 8,2% (yoy) pada Agustus 2026.")
+    fact_m1 = ExtractedFact("yoy_growth", [], 9.0, "persen_yoy",
+                            "M1 tumbuh 9,0% (yoy) pada Agustus 2026.")
+    fact_dpk = ExtractedFact("yoy_growth", [], 7.7, "persen_yoy",
+                             "Penghimpunan DPK pada Agustus 2026 tercatat sebesar Rp9.732,8 triliun "
+                             "atau tumbuh relatif stabil sebesar 7,7% (yoy) (Tabel 3).")
+
+    attach_section_headings([fact_m2, fact_m1, fact_dpk], text)
+
+    # Printed twice: before any heading (none) and under KOMPONEN UANG BEREDAR.
+    assert fact_m2.section_headings == ["KOMPONEN UANG BEREDAR"]
+    assert fact_m1.section_headings == ["KOMPONEN UANG BEREDAR"]
+    assert fact_dpk.section_headings == ["PERKEMBANGAN DANA PIHAK KETIGA (DPK)"]
+
+
+@pytest.mark.parametrize("line, expected", [
+    ("PERKEMBANGAN DANA PIHAK KETIGA (DPK)", True),
+    ("FAKTOR-FAKTOR YANG MEMENGARUHI UANG BEREDAR", True),
+    ("Uang Beredar Tumbuh Positif pada Agustus 2026", False),
+    ("M2 TUMBUH 8,2%.", False),
+    ("10.448,1 9.654,3 8,2", False),
+    ("[== Halaman 2 ==]", False),
+])
+def test_is_section_heading(line, expected):
+    assert _is_section_heading(line) == expected
 
 
 def test_finalize_facts_falls_back_to_anchor_for_runaway_expansion():

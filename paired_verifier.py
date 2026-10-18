@@ -60,6 +60,7 @@ from schemas import (
 from structured_extractor import (
     ExtractedFact,
     PeriodPoint,
+    attach_section_headings,
     extract_structured_facts,
     extract_structured_facts_async,
 )
@@ -3687,6 +3688,40 @@ def _unnamed_total_guard(fact: ExtractedFact, result: FactVerificationResult) ->
     })
 
 
+def _section_guard(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """A verdict from a table that does not hold what the claim's report section is about.
+
+    The publication parser lists those sections (TableData.uncovered_sections). UB Agustus 2026:
+    under 'PERKEMBANGAN DANA PIHAK KETIGA (DPK)', "simpanan berjangka tumbuh 4,7%" is DPK's
+    (the report's Tabel 3), but it was judged on M2's 'Simpanan Berjangka' row of SEKI I.1A and
+    refuted. A match is no proof either — the right number on the wrong row is a coincidence —
+    so the verdict, either way, becomes Tidak Cukup Data. The row itself naming the section's
+    subject keeps the verdict: then the table does hold it after all.
+    """
+    if result.verdict == "Inconclusive" or not getattr(fact, "section_headings", None):
+        return result
+    src = next((s for s in sources if s.label == result.matched_excel_source), None)
+    uncovered = getattr(src.table, "uncovered_sections", None) if src is not None else None
+    if not uncovered:
+        return result
+    rows = " ".join(p.metric_label for p in result.periods)
+    for heading in fact.section_headings:
+        for pattern, subject in uncovered.items():
+            if re.search(pattern, heading, re.IGNORECASE) and not re.search(pattern, rows, re.IGNORECASE):
+                return result.model_copy(update={
+                    "verdict": "Inconclusive", "computed_value": None, "delta": None,
+                    "resolved_via": "section_guard",
+                    "reasoning": (
+                        f"Kalimat ini ada di bagian '{heading}', yang membahas {subject}; "
+                        f"tabel {src.sheet} tidak memuat data {subject}, jadi baris "
+                        f"'{rows}' bukan data yang dimaksud. | {result.reasoning}"
+                    ),
+                })
+    return result
+
+
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     """_evaluate_fact, with any failure contained to the one claim that caused it.
 
@@ -3697,7 +3732,8 @@ def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> F
     claim without a verdict — Inconclusive, with the reason logged — not a failed report.
     """
     try:
-        return _unnamed_total_guard(fact, _evaluate_fact(fact, sources))
+        result = _unnamed_total_guard(fact, _evaluate_fact(fact, sources))
+        return _section_guard(fact, result, sources)
     except Exception as exc:
         logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
         return _make_result(
@@ -4461,6 +4497,7 @@ async def verify_paired(
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))
+    attach_section_headings(facts, narrative_text)
     facts = _drop_group_stand_ins(facts)
     _attach_group_exclusions(facts)
     _attach_rankings(facts)

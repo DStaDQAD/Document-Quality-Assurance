@@ -294,15 +294,18 @@ def fact_to_dict(f) -> dict:
     return {"operation": f.operation, "claimed_value": f.claimed_value, "unit": f.unit,
             "context_quote": f.context_quote, "page_number": f.page_number,
             "group_scope": f.group_scope,
+            "section_headings": list(getattr(f, "section_headings", []) or []),
             "periods": [{"metric_label": p.metric_label, "year": p.year, "month": p.month,
                          "col_label": p.col_label} for p in f.periods]}
 
 
 def fact_from_dict(d: dict):
     from structured_extractor import ExtractedFact, PeriodPoint
-    return ExtractedFact(
+    fact = ExtractedFact(
         d["operation"], [PeriodPoint(p["metric_label"], p.get("year"), p.get("month"), p.get("col_label"))
                          for p in d["periods"]],
         d.get("claimed_value"), d.get("unit"), d.get("context_quote") or "", d.get("page_number"),
         group_scope=d.get("group_scope"),
     )
+    fact.section_headings = list(d.get("section_headings") or [])
+    return fact

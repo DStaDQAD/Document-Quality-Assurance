@@ -3350,3 +3350,67 @@ def test_baik_on_a_respondent_share_row_is_not_read_as_a_balance():
                    "Likuiditas perusahaan masih dalam kondisi baik.", unit="% Responden")
     assert r.verdict != "Entailed"
     assert "SBT positif" not in r.reasoning
+
+
+# ---------------------------------------------------------------------------
+# _section_guard — a claim under a report section the table does not hold
+# ---------------------------------------------------------------------------
+
+def _ub_m2_source():
+    # SEKI I.1A's M2 component, as the UB parser hands it over (uncovered_sections set).
+    table = _make_table(
+        title="UANG BEREDAR DAN FAKTOR-FAKTOR YANG MEMENGARUHINYA", unit="Miliar Rp",
+        data={("Simpanan Berjangka (Rupiah dan Valas)", 2026, "Aug"): 3259051.1,
+              ("Simpanan Berjangka (Rupiah dan Valas)", 2025, "Aug"): 3117186.4},
+    )
+    table.uncovered_sections = {r"\bdana pihak ketiga\b|\bdpk\b": "Dana Pihak Ketiga (DPK)"}
+    return _make_source(table, filename="TABEL1_1_1.xls", sheet="I.1A")
+
+
+def _simpanan_berjangka_fact(claimed, headings):
+    fact = _make_fact(
+        operation="yoy_growth", claimed_value=claimed, unit="persen_yoy",
+        periods=[_make_period(metric_label="Simpanan Berjangka", year=2026, month="Aug")],
+        context_quote=("Sementara itu, giro dan simpanan berjangka tumbuh masing-masing sebesar "
+                       "9,4% (yoy) dan 4,7% (yoy)."),
+    )
+    fact.section_headings = headings
+    return fact
+
+
+@pytest.mark.parametrize("claimed", [4.7, 4.6])
+def test_section_guard_sets_aside_a_dpk_claim_judged_on_an_m2_row(claimed):
+    # UB Agustus 2026: DPK's simpanan berjangka (4,7%, the report's Tabel 3) was refuted on
+    # M2's row (4,55%). A match would be a coincidence too, so either verdict becomes TCD.
+    fact = _simpanan_berjangka_fact(claimed, ["PERKEMBANGAN DANA PIHAK KETIGA (DPK)"])
+
+    result = _evaluate_fact_safely(fact, [_ub_m2_source()])
+
+    assert result.verdict == "Inconclusive"
+    assert result.resolved_via == "section_guard"
+    assert result.computed_value is None
+    assert "PERKEMBANGAN DANA PIHAK KETIGA (DPK)" in result.reasoning
+
+
+def test_section_guard_leaves_a_claim_under_another_heading_alone():
+    fact = _simpanan_berjangka_fact(4.6, ["KOMPONEN UANG BEREDAR"])
+
+    assert _evaluate_fact_safely(fact, [_ub_m2_source()]).verdict == "Entailed"
+
+
+def test_section_guard_needs_the_publication_to_list_the_section():
+    source = _ub_m2_source()
+    source.table.uncovered_sections = {}
+    fact = _simpanan_berjangka_fact(4.7, ["PERKEMBANGAN DANA PIHAK KETIGA (DPK)"])
+
+    assert _evaluate_fact_safely(fact, [source]).verdict == "Refuted"
+
+
+def test_section_guard_keeps_a_row_that_names_the_section_subject():
+    table = _make_table(unit="triliun Rp", data={("DPK > Giro", 2026, "Aug"): 3094.1})
+    table.uncovered_sections = {r"\bdpk\b": "DPK"}
+    fact = _make_fact(claimed_value=3094.1,
+                      periods=[_make_period(metric_label="DPK > Giro", year=2026, month="Aug")])
+    fact.section_headings = ["PERKEMBANGAN DANA PIHAK KETIGA (DPK)"]
+
+    assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Entailed"
