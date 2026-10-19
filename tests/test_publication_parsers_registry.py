@@ -287,3 +287,36 @@ def test_uang_beredar_lists_the_m0_items_it_does_not_hold(mock_bi):
     for name in ("uang kartal yang diedarkan", "giro bank umum di Bank Indonesia adjusted", "Uang Primer (M0) adjusted"):
         assert any(re.search(p, name, re.IGNORECASE) for p in table.absent_items), name
     assert not any(re.search(p, "Uang Kartal di Luar Bank Umum dan BPR", re.IGNORECASE) for p in table.absent_items)
+
+
+def test_pmi_reads_the_internal_t2_layout_without_the_short_name_column():
+    # The SharePoint release workbook (Tw II/III-2026) has English in column 3 and Indonesian in
+    # column 4, no column 2: the public layout's spec found no labels at all.
+    import io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "T2 PMI - Sublapangan Usaha"
+    ws.cell(2, 4, "TABEL 2. PROMPT MANUFACTURING INDEX - BANK INDONESIA (PMI-BI)")
+    ws.cell(3, 4, "(%, Indeks)  / (Index, %)")
+    ws.cell(5, 4, "Subsector")
+    ws.cell(5, 5, "Sublapangan Usaha Industri Pengolahan")
+    ws.cell(5, 6, 2026)
+    for col, quarter in ((6, "I"), (7, "II"), (8, "III*")):
+        ws.cell(6, col, quarter)
+    for row, (english, indonesian, values) in enumerate((
+            ("Manufacture of Food Products and Beverages", "Industri Makanan dan Minuman", (51.2, 52.4, 53.1)),
+            ("Manufacture of Tobacco Products", "Industri Pengolahan Tembakau", (49.8, 50.6, 51.0))), start=7):
+        ws.cell(row, 4, english)
+        ws.cell(row, 5, indonesian)
+        for col, value in zip((6, 7, 8), values):
+            ws.cell(row, col, value)
+    buffer = io.BytesIO()
+    wb.save(buffer)
+
+    table = parse_for_publication("pmi", buffer.getvalue(), "T2 PMI - Sublapangan Usaha")
+
+    assert table.row_labels == ["Industri Makanan dan Minuman", "Industri Pengolahan Tembakau"]
+    assert table._data[("Industri Makanan dan Minuman", 2026, "Q2")] == 52.4
