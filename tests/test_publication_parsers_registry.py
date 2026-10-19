@@ -328,3 +328,36 @@ def test_pmi_reads_sector_performance_as_the_overall_index():
     assert pmi.TERM_ALIASES["kinerja lu industri pengolahan"] == "PMI - BI"
     # SKDU's wording in the same release is a different survey.
     assert not any("kegiatan" in phrase for phrase in pmi.TERM_ALIASES)
+
+
+def test_sbank_marks_its_net_balance_tables_and_names_dpk(monkeypatch):
+    # "Penyaluran kredit baru diprakirakan tetap tumbuh dengan SBT 84,65%" is a positive balance;
+    # the verifier reads it so only when the unit says SBT (paired_verifier._NET_BALANCE_UNIT).
+    from publication_parsers import PARSERS, _common
+    from publication_parsers._common import spec_for
+
+    specs = PARSERS["sbank"].SPECS
+    assert spec_for("Tabel1", specs).unit == "SBT, %"
+    assert spec_for("Tabel3", specs).unit == "SBT, %"
+    assert spec_for("Tabel4", specs).unit == "%"  # interest rates
+
+    grid = [
+        [None, "Tabel 3. Prakiraan Arah Pertumbuhan DPK (SBT, %)"],
+        [None, "Periode", "Kelompok Bank", "Jenis Simpanan", "Period", 2026],
+        [None, None, None, None, None, "III"],
+        [None, "Prakiraan per Triwulan", "Gabungan", "Deposito", "Estimation", 40.97],
+        [None, None, None, "Total", None, 87.52],
+    ]
+    monkeypatch.setattr(_common, "load_grid", lambda data, sheet: grid)
+
+    table = parse_for_publication("sbank", b"bytes", "Tabel3")
+    assert table.term_aliases["dpk"] == "Gabungan > Total"
+    assert "gabungan" in table.layout_levels
+    # Not on Tabel1, whose 'TOTAL' is new loans.
+    monkeypatch.setattr(_common, "load_grid", lambda data, sheet: [
+        [None, "Tabel 1. Penyaluran Kredit Baru (SBT, %)"],
+        [None, "Jenis Kredit", "Rincian Kredit", "Type", 2026],
+        [None, None, None, None, "II"],
+        [None, "TOTAL", None, "TOTAL", 93.08],
+    ])
+    assert parse_for_publication("sbank", b"bytes", "Tabel1").term_aliases == {}

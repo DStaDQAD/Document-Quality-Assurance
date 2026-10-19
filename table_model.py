@@ -366,6 +366,11 @@ class TableData:
     # "diprakirakan tetap berada pada fase ekspansi" is index > 50, not a rise. Applied to a trend
     # claim whose sentence names no direction (paired_verifier._compute_trend).
     level_phrases: Dict[str, Tuple[str, float]] = field(default_factory=dict, repr=False)
+    # Levels of a row's path that name the table's layout, not a group of the series, lower-cased:
+    # Survei Perbankan's 'Prakiraan per Triwulan > Gabungan > Deposito' is the deposits of all
+    # banks, so "instrumen deposito" is that row, not one group of it. Set by the publication
+    # parser; skipped by paired_verifier._answers_one_group_of_it.
+    layout_levels: frozenset = field(default_factory=frozenset, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)

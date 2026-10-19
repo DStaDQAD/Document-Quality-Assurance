@@ -512,6 +512,38 @@ def _previous_period(
     return ((py, pm), val) if val is not None else None
 
 
+# The quarter a sentence compares with: "lebih tinggi dibandingkan SBT pada triwulan III 2025",
+# "dibandingkan dengan triwulan yang sama pada tahun sebelumnya".
+_COMPARED_QUARTER = re.compile(
+    r"\bdibandingkan\b[^.;]{0,60}?\btriwulan\s+(?P<q>IV|III|II|I)\s+(?P<y>\d{4})\b", re.IGNORECASE)
+_SAME_QUARTER_LAST_YEAR = re.compile(
+    r"\bdibandingkan\b[^.;]{0,60}?\b(triwulan|periode)\s+yang\s+sama\s+(pada\s+)?tahun\s+"
+    r"(sebelumnya|lalu)\b", re.IGNORECASE)
+
+
+def _stated_baseline(
+    quote: str, table: BITableData, label: str, year: int, month: str
+) -> Optional[Tuple[Tuple[int, str], float]]:
+    """The earlier quarter the sentence itself names as the baseline, with its value — used in
+    place of the previous quarter to complete a single-point trend claim. SBank Tw II-2026:
+    "giro diprakirakan tumbuh lebih tinggi …, lebih tinggi dibandingkan SBT pada triwulan III 2025"
+    (50,82 -> 76,38) arrived as Q3 2026 alone, and against Q2 2026 (80,36) it read as a fall.
+    None when the sentence names no quarter, names a later one, or the table has no value there."""
+    if not re.fullmatch(r"Q[1-4]", month or ""):
+        return None
+    match = _COMPARED_QUARTER.search(quote or "")
+    if match:
+        key = (int(match.group("y")), _QUARTER_WORD[match.group("q").lower()])
+    elif _SAME_QUARTER_LAST_YEAR.search(quote or ""):
+        key = (year - 1, month)
+    else:
+        return None
+    if (key[0], _period_ordinal(key[1])) >= (year, _period_ordinal(month)):
+        return None
+    _, val = table.lookup_fuzzy(label, *key)
+    return (key, val) if val is not None else None
+
+
 def _stable_band(a: float, b: float) -> float:
     """Largest move between two consecutive points still readable as "relatif stabil".
 
@@ -945,7 +977,10 @@ def _answers_one_group_of_it(
         # Any level the claim does not name is a group of it — at the end ('IEKLK > SMA') or at
         # the front, where the per-city table files each index under its city ('Medan > IKK').
         # An aggregate level ('Total > …') names no group and is let through.
+        layout = getattr(table, "layout_levels", None) or frozenset()
         for level in label.split(QUAL_SEP):
+            if level.strip().lower() in layout:
+                continue
             words = _sig_words(level) - _UNNAMED_PARTS
             if words and not (words & claim_words):
                 return True
@@ -1412,7 +1447,9 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     if len(labelled) == 1:
         p0 = used_periods[0]
         if p0.col_label is None and p0.year is not None and p0.month is not None:
-            prev = _previous_period(src.table, labelled[0][0], p0.year, p0.month)
+            prev = (_stated_baseline(fact.context_quote or "", src.table, labelled[0][0],
+                                     p0.year, p0.month)
+                    or _previous_period(src.table, labelled[0][0], p0.year, p0.month))
             if prev is not None:
                 (py, pm), pv = prev
                 labelled = [(labelled[0][0], pv), labelled[0]]

@@ -3674,3 +3674,78 @@ def test_a_ratio_given_as_one_point_is_judged_without_crashing():
 
     assert "gagal dinilai" not in result.reasoning
     assert result.verdict == "Entailed"  # the row holds the ratio itself
+
+
+def _sbank_deposits(**rows):
+    """Tabel3 of Survei Perbankan: 'Prakiraan per Triwulan > Gabungan > <item>' by quarter."""
+    data = {}
+    for item, values in rows.items():
+        for (year, quarter), value in values.items():
+            data[(f"Prakiraan per Triwulan > Gabungan > {item}", year, quarter)] = value
+    table = _make_table(title="Tabel3", unit="SBT, %", data=data)
+    table.layout_levels = frozenset({"prakiraan per triwulan", "gabungan"})
+    return table
+
+
+def _one_quarter_trend(label, quote, table):
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label=label, month="Q3")])
+    return _evaluate_fact_safely(fact, [_make_source(table)])
+
+
+_SBANK_QUARTERS = {(2025, "Q3"): 0.0, (2026, "Q2"): 0.0, (2026, "Q3"): 0.0}
+
+
+def test_a_trend_compares_with_the_quarter_its_sentence_names():
+    # SBank Tw II-2026: "giro … lebih tinggi dibandingkan SBT pada triwulan III 2025" (50,82 ->
+    # 76,38) arrived as Q3 2026 alone, and against Q2 2026 (80,36) it read as a fall.
+    table = _sbank_deposits(Giro={(2025, "Q3"): 50.82, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+    quote = ("pada triwulan III 2026, instrumen tabungan dan giro diprakirakan tumbuh lebih tinggi "
+             "dengan nilai SBT masing-masing sebesar 87,08% dan 76,38%, lebih tinggi dibandingkan SBT "
+             "pada triwulan III 2025.")
+
+    result = _one_quarter_trend("instrumen giro", quote, table)
+
+    assert result.verdict == "Entailed"
+    assert "Q3 2025=50.82" in result.reasoning
+
+
+def test_a_trend_against_the_same_quarter_last_year():
+    table = _sbank_deposits(Giro={(2025, "Q3"): 50.82, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+    quote = "Giro diprakirakan meningkat dibandingkan dengan triwulan yang sama pada tahun sebelumnya."
+
+    assert _one_quarter_trend("Giro", quote, table).verdict == "Entailed"
+
+
+def test_a_trend_whose_sentence_names_no_baseline_still_uses_the_previous_quarter():
+    table = _sbank_deposits(Giro={(2025, "Q3"): 50.82, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+
+    result = _one_quarter_trend("Giro", "Giro diprakirakan meningkat pada triwulan III 2026.", table)
+
+    assert result.verdict == "Refuted"
+    assert "Q2 2026=80.36" in result.reasoning
+
+
+def test_layout_levels_of_a_row_are_not_a_group_the_claim_left_out():
+    # "instrumen deposito diprakirakan tetap tumbuh" was left Tidak Cukup Data: 'Prakiraan per
+    # Triwulan' and 'Gabungan' (all banks) read as groups of deposits the claim did not name.
+    table = _sbank_deposits(Deposito={(2025, "Q3"): 58.75, (2026, "Q2"): 72.7, (2026, "Q3"): 40.97},
+                            Giro={(2025, "Q3"): 50.82, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+    quote = ("Sementara itu, instrumen deposito diprakirakan tetap tumbuh dengan nilai SBT sebesar "
+             "40,97%.")
+
+    result = _one_quarter_trend("instrumen deposito", quote, table)
+
+    assert result.verdict == "Entailed"  # a positive balance: 'tetap tumbuh'
+    assert "tetap tumbuh" in result.reasoning
+
+
+def test_without_layout_levels_the_group_guard_still_holds():
+    table = _sbank_deposits(Deposito={(2025, "Q3"): 58.75, (2026, "Q2"): 72.7, (2026, "Q3"): 40.97},
+                            Giro={(2025, "Q3"): 50.82, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+    table.layout_levels = frozenset()
+
+    result = _one_quarter_trend("instrumen deposito", "instrumen deposito diprakirakan tetap tumbuh.",
+                                table)
+
+    assert result.verdict == "Inconclusive"
