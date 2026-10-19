@@ -1428,7 +1428,27 @@ def _net_balance_level_claim(fact: ExtractedFact, row: str, unit: str) -> Option
             said = {_QUARTER_WORD[q.lower()] for q in _CLAUSE_QUARTER.findall(clause)}
             if not said or latest in said:
                 return f"'{growth.group(0)}' pada saldo bersih"
+        # A sentence that compares with nothing can only be about the level. Listing the ways to
+        # say "grew" never ends — SBank Tw I-2026's "didukung oleh perkiraan pertumbuhan seluruh
+        # kategori DPK yaitu … Deposito (72,70%)" (73,81 -> 72,70) was refuted as a rise — while
+        # the words that compare are a short, closed list.
+        if not _COMPARES.search(quote) and not _SAID_NEGATIVE.search(quote):
+            said = {_QUARTER_WORD[q.lower()] for q in _CLAUSE_QUARTER.findall(quote)}
+            if not said or latest in said:
+                return "kalimat tidak membandingkan dengan periode lain"
     return None
+
+
+# Words that set a value against another period or another value. Any of them in the sentence
+# keeps a trend claim on a net balance a trend.
+_COMPARES = re.compile(
+    r"\b(dibandingkan|dibanding|sebelumnya|lalu|menjadi|stabil|tidak\s+berubah|sama"
+    r"|lebih\s+(tinggi|rendah|besar|kecil|baik|buruk)|meningkat|peningkatan|naik|kenaikan|menurun"
+    r"|penurunan|turun|membaik|perbaikan|memburuk|melambat|perlambatan|terakselerasi|akselerasi"
+    r"|menguat|penguatan|melemah|pelemahan|tertinggi|terendah)\b",
+    re.IGNORECASE)
+# A level said to be below zero: not read as a positive balance.
+_SAID_NEGATIVE = re.compile(r"\b(negatif|minus|kontraksi|terkontraksi|berkurang)\b", re.IGNORECASE)
 
 
 _CLAUSE_SPLIT = re.compile(r"[,;]|\b(?:dan|serta|namun|sementara|meski(?:pun)?)\b", re.IGNORECASE)
@@ -1665,6 +1685,12 @@ def _compute_threshold(
     matched_source = src.label
     periods = _build_periods(fact.periods, resolved, values)
     threshold = fact.claimed_value
+    if threshold is None and (_NET_BALANCE_UNIT.search(src.table.unit or "")
+                              or _NET_BALANCE_UNIT.search(label)):
+        # A net balance's line is zero: "SBT Deposito positif, menunjukkan pertumbuhan" names no
+        # bound. The Tinjauan AI answers such claims as above_threshold on the cited cell, and
+        # without a bound the engine could not reproduce it (SBank Tw I/II-2026, 4 answers).
+        threshold = 0.0
     if threshold is None:
         return _make_result(
             fact, periods, matched_source, None, fact.unit, value, fact.unit, None, "Inconclusive",
@@ -1884,6 +1910,13 @@ def _compute_operation(
         table_value = resolved[0][1] / factor
         computed = round(table_value, 4)
         periods = _build_periods(fact.periods, resolved, [table_value])
+        if fact.claimed_value is None:
+            # A Tinjauan AI answer "value" for a claim with no number of its own ("tetap tumbuh"):
+            # nothing to compare, and the subtraction used to crash.
+            return _make_result(
+                fact, periods, matched_source, None, fact.unit, computed, src.table.unit, None,
+                "Inconclusive", reasoning="Klaim nilai tanpa angka yang disebut; tidak dapat dinilai.",
+            )
         delta, verdict, rule = _value_verdict(fact.claimed_value, table_value, fact.context_quote)
         if verdict == "Refuted":
             recovered = _reinterpret_signed_level(fact, resolved, periods, table_value, src)

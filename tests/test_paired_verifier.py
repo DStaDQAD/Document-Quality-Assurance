@@ -3767,3 +3767,44 @@ def test_verify_paired_does_not_show_the_extractor_a_skipped_section(mock_parse,
         sent = mock_extract_facts.call_args.args[0]
         assert ("berarti lebih ketat" in sent) is shown
         assert "SBT 93,08%" in sent
+
+
+def test_a_net_balance_sentence_that_compares_with_nothing_is_about_the_level():
+    # SBank Tw I-2026: "didukung oleh perkiraan pertumbuhan seluruh kategori DPK yaitu … Deposito
+    # (72,70%)" came back is_increasing on 73,81 -> 72,70 and was refuted.
+    table = _sbank_deposits(Deposito={(2026, "Q1"): 73.81, (2026, "Q2"): 72.70})
+    quote = ("Hal ini terutama didukung oleh perkiraan pertumbuhan seluruh kategori DPK yaitu "
+             "Tabungan (82,47%), Giro (SBT 80,36%), dan Deposito (72,70%).")
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Deposito", month="Q2")])
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "tidak membandingkan" in result.reasoning
+
+
+def test_a_net_balance_sentence_that_compares_stays_a_trend():
+    table = _sbank_deposits(Deposito={(2026, "Q1"): 73.81, (2026, "Q2"): 72.70})
+    quote = "Deposito diprakirakan meningkat pada triwulan II 2026 dengan SBT 72,70%."
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Deposito", month="Q2")])
+
+    assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Refuted"
+
+
+def test_a_level_said_negative_is_not_read_as_positive():
+    table = _sbank_deposits(Deposito={(2026, "Q1"): 3.0, (2026, "Q2"): -2.0})
+    quote = "Deposito diprakirakan terkontraksi pada triwulan II 2026."
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Deposito", month="Q2")])
+
+    assert "tidak membandingkan" not in _evaluate_fact_safely(fact, [_make_source(table)]).reasoning
+
+
+def test_a_threshold_claim_on_a_growth_table_without_a_bound_stays_unjudged():
+    table = _make_table(unit="%, yoy", data={("Kredit", 2026, "Jun"): 7.6, ("Dana", 2026, "Jun"): 6.0})
+    fact = _make_fact(operation="above_threshold", claimed_value=None, unit=None,
+                      periods=[_make_period(metric_label="Kredit", month="Jun")])
+
+    assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Inconclusive"

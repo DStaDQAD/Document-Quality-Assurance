@@ -415,3 +415,44 @@ def test_raw_answers_go_to_the_log_file_only_when_one_is_named(tmp_path, monkeyp
     assert [line["index"] for line in lines] == [1, 2]
     assert lines[0]["verdict_before"] == "Refuted" and lines[0]["outcome"] == "to_entailed"
     assert lines[0]["review"]["claim_no"] == 1
+
+
+_DPK = _table(title="Tabel3", unit="SBT, %",
+              data={("Gabungan > Deposito", 2026, "Q1"): 73.81, ("Gabungan > Deposito", 2026, "Q2"): 72.70})
+_GROWTH_QUOTE = ("Hal ini terutama didukung oleh perkiraan pertumbuhan seluruh kategori DPK yaitu "
+                 "Tabungan (82,47%), Giro (SBT 80,36%), dan Deposito (72,70%).")
+
+
+def test_an_above_zero_answer_on_a_net_balance_is_accepted_without_a_stated_bound():
+    # SBank Tw I-2026: the AI read "pertumbuhan" as a positive balance and answered above_threshold
+    # on 72,70, but the claim (is_increasing) had no number, so the engine had no bound to check.
+    result = _result(verdict="Refuted", operation="is_increasing", claimed_value=None, unit=None,
+                     quote=_GROWTH_QUOTE, label="Deposito")
+    review = _review(first_words="Hal ini terutama didukung", subject="Deposito",
+                     operation="above_threshold",
+                     cells=[CitedCell(sheet="S1", row="Gabungan > Deposito", period="Q2 2026", value=72.70)])
+
+    final, outcome = judge_review(result, review, {"S1": _source(_DPK, sheet="Tabel3")})
+
+    assert (outcome, final.verdict) == ("to_entailed", "Entailed")
+
+
+def test_a_bound_is_still_needed_off_a_net_balance():
+    kredit = _table(unit="Miliar Rp", data={("Kredit Modal Kerja", 2026, "Jun"): 110.0})
+    result = _result(verdict="Refuted", operation="is_increasing", claimed_value=None, unit=None)
+    review = _review(operation="above_threshold")
+
+    final, outcome = judge_review(result, review, {"S1": _source(kredit)})
+
+    assert outcome == "unchanged"
+
+
+def test_a_value_answer_for_a_claim_without_a_number_does_not_crash():
+    result = _result(verdict="Refuted", operation="is_increasing", claimed_value=None, unit=None,
+                     quote=_GROWTH_QUOTE, label="Deposito")
+    review = _review(first_words="Hal ini terutama didukung", subject="Deposito", operation="value",
+                     cells=[CitedCell(sheet="S1", row="Gabungan > Deposito", period="Q2 2026", value=72.70)])
+
+    final, outcome = judge_review(result, review, {"S1": _source(_DPK, sheet="Tabel3")})
+
+    assert outcome == "unchanged"
