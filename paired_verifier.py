@@ -1928,6 +1928,15 @@ def _compute_operation(
             ),
         )
 
+    if op == "ratio" and len(resolved) == 1:
+        # A ratio given as ONE point is a row that holds the ratio itself ('Rasio Utang terhadap
+        # PDB'): compare it as a value. Unpacking it as numerator and denominator crashed.
+        as_value = ExtractedFact(
+            operation="value", periods=fact.periods, claimed_value=fact.claimed_value, unit=fact.unit,
+            context_quote=fact.context_quote, page_number=fact.page_number,
+        )
+        return _compute_operation(as_value, resolved, factor, src).model_copy(update={"operation": "ratio"})
+
     if op == "ratio":
         return _compute_ratio(fact, resolved, src)
 
@@ -2636,9 +2645,11 @@ def _combined_share(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optiona
     """A share held by several rows together, judged as their sum over the last point (B3).
 
     Either the extractor listed one numerator point per row (3+ points) or one numerator label
-    names the rows (see _rows_named_in). None when the claim is an ordinary two-point ratio.
+    names the rows (see _rows_named_in). None when the claim is an ordinary two-point ratio, or a
+    ratio the extractor gave as ONE point (SULNI Okt 2026: 'Rasio Utang terhadap PDB' alone, a row
+    holding the ratio itself) — that has no numerator to split, and indexing one crashed.
     """
-    if fact.claimed_value is None:
+    if fact.claimed_value is None or len(fact.periods) < 2:
         return None
     denominator = fact.periods[-1]
     numerators = fact.periods[:-1]

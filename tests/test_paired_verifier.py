@@ -3659,3 +3659,18 @@ def test_a_table_that_is_one_breakdown_counts_its_rows_for_a_majority_claim():
 
     assert result.verdict == "Entailed"
     assert "3 dari 4" in result.reasoning
+
+
+def test_a_ratio_given_as_one_point_is_judged_without_crashing():
+    # SULNI Okt 2026: "rasio ULN … terhadap PDB … 30,9%" came back as one point on the ratio row
+    # and crashed the combined-share check (IndexError), leaving "gagal dinilai".
+    table = _make_table(title="TabI.7", unit="%", data={("Rasio Utang terhadap PDB", 2026, "Aug"): 30.9,
+                                                       ("Total", 2026, "Aug"): 459273.0})
+    fact = _make_fact(operation="ratio", claimed_value=30.9, unit="persen",
+                      periods=[_make_period(metric_label="Rasio Utang terhadap PDB", month="Aug")],
+                      context_quote="rasio ULN Indonesia terhadap PDB yang tercatat sebesar 30,9% pada Agustus 2026")
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert "gagal dinilai" not in result.reasoning
+    assert result.verdict == "Entailed"  # the row holds the ratio itself
