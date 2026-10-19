@@ -44,6 +44,10 @@ LAYOUT_LEVELS_BY_SHEET = ((r"T3\b", frozenset({
     "masalah dalam memperoleh kredit :",
 })),)
 
+# Tabel 6 holds the respondents' expected inflation, a yoy rate: "LU Pengadaan Listrik dan Gas …
+# 2,61% (yoy)" is that cell, not a growth to compute over it (paired_verifier._growth_kind).
+YOY_SHEETS = (r"T6\b",)
+
 # A balance sheet whose rows carry no 'Saldo Bersih' level: the extractor's "Pertanian,
 # Kehutanan, dan Perikanan > Saldo Bersih" (copied from Tabel 8's row names) is the sector's row.
 MEASURE_LEVELS = frozenset({"saldo bersih", "saldo bersih tertimbang", "sbt"})
@@ -60,6 +64,8 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     for pattern, levels in LAYOUT_LEVELS_BY_SHEET:
         if re.match(pattern, sheet_name):
             table.layout_levels = levels
+    if any(re.match(pattern, sheet_name) for pattern in YOY_SHEETS):
+        table.unit = "%, yoy"
     if re.search(r"saldo\s+bersih", table.unit or "", re.IGNORECASE) and not any(
             "saldo bersih" in label.lower() for label in table.row_labels):
         table.measure_levels = MEASURE_LEVELS

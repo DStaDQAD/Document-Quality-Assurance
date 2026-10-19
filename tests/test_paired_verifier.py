@@ -4045,3 +4045,54 @@ def test_a_quarter_said_as_triwulan_is_not_moved_to_a_semester():
                       periods=[_make_period(metric_label="Total > Dibawah Mandor", month="Q2")])
 
     assert _evaluate_fact_safely(fact, _average_wages()).verdict == "Inconclusive"
+
+
+def _labour():
+    data = {("TOTAL", 2025, "Q2"): -0.34, ("TOTAL", 2025, "Q3"): -0.21,
+            ("TOTAL", 2026, "Q2"): 0.14, ("TOTAL", 2026, "Q3"): 0.07}
+    table = _make_table(title="TABEL 4. PENGGUNAAN TENAGA KERJA", unit="% Saldo Bersih Tertimbang - SBT", data=data)
+    return [_make_source(table, filename="SKDU.xlsx", sheet="T4 Penggunaan Tenaga Kerja")]
+
+
+_LABOUR = ("Pada triwulan III 2026, penggunaan tenaga kerja terindikasi tetap tumbuh, dengan SBT sebesar "
+           "0,07%, meski sedikit lebih rendah dibandingkan dengan SBT triwulan sebelumnya sebesar 0,14%.")
+
+
+@pytest.mark.parametrize("value, month", [(0.07, "Q3"), (0.14, "Q2")])
+def test_a_balance_the_extractor_read_as_yoy_growth_is_checked_as_a_value(value, month):
+    # SKDU Tw III-2026: both balances came back as yoy growth, and the engine computed the
+    # balance's own growth (133%, 141%) and refuted true sentences.
+    fact = _make_fact(operation="yoy_growth", claimed_value=value, unit="persen", context_quote=_LABOUR,
+                      periods=[_make_period(metric_label="penggunaan tenaga kerja", month=month)])
+
+    result = _evaluate_fact_safely(fact, _labour())
+
+    assert result.verdict == "Entailed"
+    assert result.operation == "value"
+
+
+def test_a_number_marked_yoy_stays_a_growth_claim():
+    from paired_verifier import _balance_read_as_growth
+    fact = _make_fact(operation="yoy_growth", claimed_value=2.61, unit="persen_yoy",
+                      context_quote="Responden memprakirakan inflasi sebesar 2,61% (yoy) dengan SB 2,61% (yoy).",
+                      periods=[_make_period(metric_label="Inflasi", month="Q3")])
+
+    assert _balance_read_as_growth(fact) is None
+
+
+def test_a_cited_table_that_cannot_answer_is_not_replaced_by_another():
+    # "LU Jasa Lainnya (SB 7,32%) … (Lampiran Tabel 8)" at Q3: the wages table keeps semesters
+    # only, and Tabel 4's 'JASA LAINNYA' (-0,04) is not what the author pointed at.
+    labour = _make_table(title="TABEL 4. PENGGUNAAN TENAGA KERJA", unit="% Saldo Bersih Tertimbang - SBT",
+                         data={("JASA LAINNYA", 2026, "Q3"): -0.04, ("TOTAL", 2026, "Q3"): 0.07})
+    wages = _make_table(title="TABEL 8. PERKEMBANGAN UPAH", unit="%, Saldo Bersih",
+                        data={("Jasa Lainnya > Saldo Bersih", 2026, "S2"): 7.32,
+                              ("TOTAL > Saldo Bersih", 2026, "S2"): 9.24})
+    fact = _make_fact(operation="value", claimed_value=7.32, unit="persen",
+                      context_quote="… antara lain LU Jasa Lainnya (SB 7,32%) (Lampiran Tabel 8).",
+                      periods=[_make_period(metric_label="LU Jasa Lainnya", month="Q3")])
+
+    result = _evaluate_fact_safely(fact, [_make_source(labour, sheet="T4"), _make_source(wages, sheet="T8")])
+
+    assert result.verdict == "Inconclusive"
+    assert "merujuk Tabel 8" in result.reasoning

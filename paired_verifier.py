@@ -656,6 +656,33 @@ def _only_per_semester(metric: str, year: int, quarter: str, semester: str,
     return any(src.table.lookup_fuzzy(metric, year, semester)[1] is not None for src in temporal)
 
 
+# A number printed as a net balance: "SBT sebesar 0,07%", "(SBT 0,48%)", "SB -0,36%".
+_BALANCE_NUMBER = re.compile(
+    r"\b(?:SBT|SB|saldo\s+bersih(?:\s+tertimbang)?)\b[^\d\-.;,]{0,40}?(-?\d+(?:,\d+)?)\s*%"
+    r"(?!\s*\(?\s*yoy)", re.IGNORECASE)
+
+
+def _balance_read_as_growth(fact: ExtractedFact) -> Optional[ExtractedFact]:
+    """The claim as a plain value, when its yoy growth is a number the sentence prints as a balance
+    ("SBT sebesar 0,07%", "SBT triwulan sebelumnya sebesar 0,14%").
+
+    SKDU Tw III-2026: "penggunaan tenaga kerja terindikasi tetap tumbuh, dengan SBT sebesar 0,07%"
+    came back as a yoy growth of 0,07%, and the engine computed the balance's own growth (133%) and
+    refuted it; "LU Pertambangan dan Penggalian (SBT 0,48%)" likewise. A balance is a level. Only
+    when the claimed number itself follows "SBT"/"SB"/"saldo bersih" and is not marked "(yoy)".
+    """
+    if fact.operation != "yoy_growth" or fact.claimed_value is None:
+        return None
+    for match in _BALANCE_NUMBER.finditer(fact.context_quote or ""):
+        if abs(float(match.group(1).replace(",", ".")) - fact.claimed_value) < 1e-9:
+            out = copy.copy(fact)
+            out.operation = "value"
+            out.unit = "persen"
+            out.periods = fact.periods[-1:]
+            return out
+    return None
+
+
 def _stable_band(a: float, b: float) -> float:
     """Largest move between two consecutive points still readable as "relatif stabil".
 
@@ -3155,6 +3182,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # "semester II 2026" the extractor wrote as Q2 2026, against a table of semesters.
     fact = _semester_periods(fact, sources) or fact
+    # "dengan SBT sebesar 0,07%" the extractor wrote as a yoy growth of 0,07%.
+    fact = _balance_read_as_growth(fact) or fact
 
     # A superlative ranks the named groups as well as giving their direction (B4).
     if fact.rank_group:
@@ -3428,6 +3457,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     cited = _cited_table(fact)
     if cited and any(_is_cited(c.src, cited) for c in candidates):
         candidates.sort(key=lambda c: not _is_cited(c.src, cited))
+    elif cited and any(_is_cited(src, cited) for src in sources):
+        # The cited table is there but cannot answer: another table's same-named row is not what
+        # the author pointed at. SKDU Tw III-2026: "LU Industri Pengolahan (SB 9,18%) … (Lampiran
+        # Tabel 8)" came back for Q3, which the semester-only wages table lacks, and Tabel 1's
+        # activity balance (1,53) refuted it.
+        named = next(src for src in sources if _is_cited(src, cited))
+        return _make_result(
+            fact, [], None, fact.claimed_value, fact.unit, None, None, None, "Inconclusive",
+            reasoning=(f"Kalimat merujuk Tabel {cited} ([{named.label}]), tetapi tabel itu tidak "
+                       f"memuat '{fact.display_label}' untuk periode klaim; tabel lain tidak dipakai."),
+        )
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
     # the user chose decide whenever they can answer at all. So is a chart — its labels are read

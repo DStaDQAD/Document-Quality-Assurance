@@ -399,3 +399,14 @@ def test_skdu_tabel_3_section_headings_are_layout(monkeypatch):
 
     assert "kondisi keuangan selama 3 bulan terakhir :" in skdu.parse(b"", "T3 Keuangan dan Akses Kredit").layout_levels
     assert not skdu.parse(b"", "T1 Kegiatan Usaha").layout_levels
+
+
+def test_skdu_tabel_6_holds_yoy_rates(monkeypatch):
+    # "prakiraan inflasi … 2,61% (yoy)" is the cell itself, not a growth to compute over it.
+    from publication_parsers import skdu
+
+    monkeypatch.setattr(skdu, "parse_with_generic_reader",
+                        lambda data, sheet: TableData(title="t", unit="%", row_labels=["TOTAL"]))
+
+    assert skdu.parse(b"", "T6 Prakiraan Inflasi").unit == "%, yoy"
+    assert skdu.parse(b"", "T2 Kapasitas Produksi").unit == "%"
