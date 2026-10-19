@@ -46,6 +46,11 @@ TERM_ALIASES = {
     # (6,3 -> 6,5). The receipts side is left out: the report's 0,6 -> 0,7 fits equity income
     # alone (0,58 -> 0,74), not the sum (0,63 -> 0,77), so no fixed definition can be written.
     "pembayaran imbal hasil atas investasi langsung": "Pendapatan investasi langsung > Pembayaran",
+    # Coupons are paid on debt securities: "pembayaran kupon/bunga menurun sejalan dengan pembayaran
+    # kupon surat berharga internasional pemerintah" = portfolio interest paid (2.711 -> 2.216).
+    # Not a bare "bunga", which is also direct-investment and loan interest.
+    "pembayaran kupon/bunga": "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran",
+    "pembayaran kupon": "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran",
     "neraca pembayaran indonesia": "Neraca Keseluruhan",
     "npi": "Neraca Keseluruhan",
     # Residents buying foreign securities = portfolio investment, asset side (-1.488 = 1,5).
@@ -79,6 +84,19 @@ def _add_memo_balances(table: TableData) -> None:
             table.row_labels.append(name)
 
 
+# Breakdowns the report discusses but the workbook never splits out, as {pattern: what it is}.
+# Tw II-2026: "impor minyak mentah 3,8" was judged on all oil imports (11,6, crude plus refined
+# products) and "kenaikan ekspor NG" on all gas exports (LNG plus NG) — both refuted, though the
+# workbook simply has no such row. A row that does name the item ('Harga rata-rata ekspor minyak
+# mentah', 'Produksi minyak mentah') still answers.
+ABSENT_ITEMS = {
+    r"\bminyak\s+mentah\b": "minyak mentah",
+    r"\bproduk\s+kilang\b": "produk kilang",
+    r"\bnatural\s+gas\b|\b(?-i:NG)\b": "natural gas (NG)",
+    r"\bliqu[ei]fied\s+natural\s+gas\b|\b(?-i:LNG)\b": "LNG",
+}
+
+
 # Rows the parser names by their own word alone (it keeps the shortest name that is unique), but
 # that the report only ever names with their parent: "defisit jasa transportasi penumpang" found
 # no row in Tw II-2026, while 'Transportasi > Barang' (named in full because 'Barang' repeats)
@@ -105,4 +123,5 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     _add_parents(table)
     _add_memo_balances(table)
     table.term_aliases = dict(TERM_ALIASES)
+    table.absent_items = dict(ABSENT_ITEMS)
     return table

@@ -250,3 +250,11 @@ def test_npi_names_passenger_transport_with_its_parent():
     assert table._data[("Transportasi > Penumpang", 2026, "Q2")] == -80.98
     assert table.lookup_fuzzy("defisit jasa transportasi penumpang", 2026, "Q2") == (
         "Transportasi > Penumpang", -80.98)
+
+
+def test_npi_reads_coupon_payments_as_portfolio_interest():
+    from publication_parsers import npi
+
+    assert npi.TERM_ALIASES["pembayaran kupon/bunga"] == (
+        "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran")
+    assert "investasi lainnya" not in npi.TERM_ALIASES  # would rewrite "pendapatan investasi lainnya" too

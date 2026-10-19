@@ -3453,3 +3453,62 @@ def test_section_guard_keeps_a_row_that_names_the_section_subject():
     fact.section_headings = ["PERKEMBANGAN DANA PIHAK KETIGA (DPK)"]
 
     assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+# ---------------------------------------------------------------------------
+# _absent_item_guard — a breakdown the table never splits out, judged on its total
+# ---------------------------------------------------------------------------
+
+def _npi_oil_table():
+    table = _npi_table({("Minyak > Impor", 2026, "Q2"): -11607.23,
+                        ("Gas > Ekspor", 2026, "Q1"): 1590.85, ("Gas > Ekspor", 2026, "Q2"): 1590.55,
+                        ("Harga rata-rata ekspor minyak mentah (USD/barel)", 2026, "Q2"): 102.76,
+                        ("Transaksi Berjalan", 2026, "Q2"): -12487.42})
+    table.absent_items = {r"\bminyak\s+mentah\b": "minyak mentah",
+                          r"\bnatural\s+gas\b|\b(?-i:NG)\b": "natural gas (NG)"}  # as npi.py
+    return table
+
+
+def test_absent_item_guard_sets_aside_crude_oil_judged_on_all_oil():
+    # NPI Tw II-2026: "impor minyak mentah 3,8 miliar" was refuted on all oil imports (11,6).
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Impor minyak mentah", month="Q2")],
+        claimed_value=3.8, unit="miliar dolar AS",
+        context_quote="Impor minyak mentah pada triwulan II 2026 meningkat menjadi sebesar 3,8 miliar dolar AS.",
+    )
+
+    result = _evaluate_fact_safely(fact, [_make_source(_npi_oil_table())])
+
+    assert result.verdict == "Inconclusive"
+    assert result.resolved_via == "absent_item_guard"
+
+
+def test_absent_item_guard_sets_aside_a_natural_gas_trend_judged_on_all_gas():
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        periods=[_make_period(metric_label="ekspor Natural Gas (NG)", month="Q1"),
+                 _make_period(metric_label="ekspor Natural Gas (NG)", month="Q2")],
+        context_quote="Perkembangan tersebut dipengaruhi oleh kenaikan ekspor Natural Gas (NG).",
+    )
+
+    assert _evaluate_fact_safely(fact, [_make_source(_npi_oil_table())]).verdict == "Inconclusive"
+
+
+def test_absent_item_guard_keeps_a_row_that_names_the_item():
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Harga rata-rata ekspor minyak mentah (USD/barel)", month="Q2")],
+        claimed_value=102.8, unit="dolar AS/barel",
+        context_quote="harga ekspor minyak mentah naik menjadi 102,8 dolar AS/barel",
+    )
+
+    assert _evaluate_fact_safely(fact, [_make_source(_npi_oil_table())]).verdict == "Entailed"
+
+
+def test_absent_item_guard_leaves_the_total_itself_alone():
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Impor minyak", month="Q2")],
+        claimed_value=11.6, unit="miliar dolar AS",
+        context_quote="Impor minyak pada triwulan II 2026 tercatat sebesar 11,6 miliar dolar AS.",
+    )
+
+    assert _evaluate_fact_safely(fact, [_make_source(_npi_oil_table())]).verdict == "Entailed"

@@ -3747,6 +3747,37 @@ def _section_guard(
     return result
 
 
+def _absent_item_guard(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """A verdict on a total row for a breakdown the table never splits out.
+
+    The publication parser lists those breakdowns (TableData.absent_items). NPI Tw II-2026:
+    "impor minyak mentah 3,8 miliar" was refuted on 'Minyak > Impor' (11,6 — crude oil plus
+    refined products), which the workbook does not split. The claim's own name decides; a matched
+    row that names the item itself ('Harga rata-rata ekspor minyak mentah') still answers.
+    """
+    if result.verdict == "Inconclusive":
+        return result
+    src = next((s for s in sources if s.label == result.matched_excel_source), None)
+    absent = getattr(src.table, "absent_items", None) if src is not None else None
+    if not absent:
+        return result
+    name = fact.display_label or ""
+    rows = " ".join(p.metric_label for p in result.periods)
+    for pattern, item in absent.items():
+        if re.search(pattern, name, re.IGNORECASE) and not re.search(pattern, rows, re.IGNORECASE):
+            return result.model_copy(update={
+                "verdict": "Inconclusive", "computed_value": None, "delta": None,
+                "resolved_via": "absent_item_guard",
+                "reasoning": (
+                    f"Klaim ini tentang {item}, yang tidak dirinci di tabel {src.sheet}; baris "
+                    f"'{rows}' adalah totalnya, bukan data yang dimaksud. | {result.reasoning}"
+                ),
+            })
+    return result
+
+
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     """_evaluate_fact, with any failure contained to the one claim that caused it.
 
@@ -3758,7 +3789,8 @@ def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> F
     """
     try:
         result = _unnamed_total_guard(fact, _evaluate_fact(fact, sources))
-        return _section_guard(fact, result, sources)
+        result = _section_guard(fact, result, sources)
+        return _absent_item_guard(fact, result, sources)
     except Exception as exc:
         logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
         return _make_result(

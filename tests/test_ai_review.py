@@ -285,7 +285,8 @@ def test_review_candidates_are_the_narrative_claims_the_code_did_not_confirm():
 def test_review_candidates_skip_a_claim_the_section_guard_set_aside():
     # The table holds no data for the claim's report section, so any cell the model cites is
     # on the wrong row (UB Agustus 2026: DPK's simpanan berjangka vs M2's).
-    results = [_result(), _result().model_copy(update={"resolved_via": "section_guard"})]
+    results = [_result(), _result().model_copy(update={"resolved_via": "section_guard"}),
+               _result().model_copy(update={"resolved_via": "absent_item_guard"})]
     assert review_candidates(results) == [0]
 
 

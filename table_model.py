@@ -344,6 +344,10 @@ class TableData:
     # 'Simpanan Berjangka' is M2's. Set by the publication parser; a claim under such a heading
     # that this table answered is made Tidak Cukup Data (paired_verifier._section_guard).
     uncovered_sections: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Breakdowns this table never splits out, as {regex: what it is}: NPI has all oil imports but
+    # not crude oil alone. Set by the publication parser; a claim whose own name is one of them,
+    # answered here by a row that is not, is made Tidak Cukup Data (paired_verifier._absent_item_guard).
+    absent_items: Dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
