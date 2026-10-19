@@ -574,25 +574,43 @@ _SEMESTER_IN_SENTENCE = re.compile(r"\bsemester\s+(?P<s>II|I)\s+(?P<y>\d{4})\b",
 
 
 def _semester_periods(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
-    """The claim with its quarters read as the semesters its sentence names, when a source keeps
-    semesters (SKDU Tabel 7b-10). "Margin usaha pada semester II 2026 …" came back as Q2 2026
-    against a table with only S1/S2 columns, and was left Tidak Cukup Data. A point moves only when
-    the sentence names that very semester and year ("semester II 2026" for Q2 2026)."""
-    said = {(int(m.group("y")), _SEMESTER_WORD[m.group("s").lower()])
-            for m in _SEMESTER_IN_SENTENCE.finditer(fact.context_quote or "")}
-    if not said or not any(
+    """The claim with its quarters read as semesters, when a source keeps semesters (SKDU Tabel
+    7b-10) and the sentence speaks of semesters.
+
+    "Margin usaha pada semester II 2026 …" came back as Q2 2026 against a table with only S1/S2
+    columns: a point moves when the sentence names that very semester and year. "SB upah sebesar
+    9,24% … dibandingkan … semester I 2026" came back as Q3 and Q4 2026, the two quarters of the
+    second half: a metric given exactly the two quarters of one half becomes that semester, when the
+    sentence speaks of semesters and never of a quarter ("triwulan").
+    """
+    quote = fact.context_quote or ""
+    if not re.search(r"\bsemester", quote, re.IGNORECASE) or not any(
             src.table.axis_type == "temporal"
             and any(len(key) == 3 and str(key[2]).startswith("S") for key in src.table._data)
             for src in sources):
         return None
-    moved, changed = [], False
+    said = {(int(m.group("y")), _SEMESTER_WORD[m.group("s").lower()])
+            for m in _SEMESTER_IN_SENTENCE.finditer(quote)}
+    by_metric: Dict[str, List[PeriodPoint]] = {}
     for p in fact.periods:
-        semester = {"Q1": "S1", "Q2": "S2"}.get(p.month or "")
-        if p.col_label is None and semester and (p.year, semester) in said:
-            moved.append(PeriodPoint(p.metric_label, p.year, semester))
+        by_metric.setdefault(p.metric_label, []).append(p)
+    moved, changed = [], False
+    for metric, points in by_metric.items():
+        months = tuple(sorted(p.month or "" for p in points))
+        years = {p.year for p in points}
+        half = {("Q1", "Q2"): "S1", ("Q3", "Q4"): "S2"}.get(months)
+        if (half and len(points) == 2 and len(years) == 1 and all(p.col_label is None for p in points)
+                and not re.search(r"\btriwulan\b", quote, re.IGNORECASE)):
+            moved.append(PeriodPoint(metric, points[0].year, half))
             changed = True
-        else:
-            moved.append(p)
+            continue
+        for p in points:
+            semester = {"Q1": "S1", "Q2": "S2"}.get(p.month or "")
+            if p.col_label is None and semester and (p.year, semester) in said:
+                moved.append(PeriodPoint(p.metric_label, p.year, semester))
+                changed = True
+            else:
+                moved.append(p)
     if not changed:
         return None
     out = copy.copy(fact)
@@ -1964,7 +1982,9 @@ def _compute_operation(
     if op == "value":
         table_value = resolved[0][1] / factor
         computed = round(table_value, 4)
-        periods = _build_periods(fact.periods, resolved, [table_value])
+        # One number is one cell; a value the extractor gave two periods ("semester II" as Q3 and
+        # Q4) is read at the first, as before, without indexing past the one value.
+        periods = _build_periods(fact.periods[:1], resolved[:1], [table_value])
         if fact.claimed_value is None:
             # A Tinjauan AI answer "value" for a claim with no number of its own ("tetap tumbuh"):
             # nothing to compare, and the subtraction used to crash.
@@ -2426,6 +2446,43 @@ def _drop_group_stand_ins(facts: List[ExtractedFact]) -> List[ExtractedFact]:
     return kept
 
 
+# A subject that is nothing but the word for the groups: "seluruh LU terindikasi melambat".
+_GROUP_WORD = r"(?:sub-?\s?LU|LU|lapangan\s+usaha|sektor)"
+_MEMBER_PREFIX = re.compile(r"^\s*" + _GROUP_WORD + r"\s+(?=\S)", re.IGNORECASE)
+_SAYS_BALANCE = re.compile(r"\b(SB|SBT|saldo\s+bersih)\b", re.IGNORECASE)
+
+
+def _attach_named_members(facts: List[ExtractedFact]) -> None:
+    """Turn "seluruh LU …" whose subject the extractor gave as the bare group word into a claim on
+    every group, pointed at the groups the same sentence names.
+
+    SKDU Tw III-2026: "Berdasarkan LU, seluruh LU terindikasi melambat dibandingkan semester I
+    2026, terutama … LU Industri Pengolahan (SB 9,18%), … LU Jasa Lainnya (SB 7,32%)" came back as
+    a trend on 'LU' with no group scope, while the named sectors came back as facts of their own.
+    Those names (without the 'LU' prefix, and as the balance row when the sentence speaks of SB)
+    show _judge_group_scope which breakdown "seluruh LU" ranges over.
+    """
+    for fact in facts:
+        labels = {p.metric_label.strip() for p in fact.periods}
+        if (fact.group_scope or fact.operation not in _TREND_OPS | _THRESHOLD_OPS or len(labels) != 1
+                or not re.fullmatch(_GROUP_WORD, next(iter(labels)), re.IGNORECASE)):
+            continue
+        quote = fact.context_quote or ""
+        if not re.search(r"\bseluruh\s+" + _GROUP_WORD + r"\b", quote, re.IGNORECASE):
+            continue
+        balance = " > Saldo Bersih" if _SAYS_BALANCE.search(quote) else ""
+        members = list(dict.fromkeys(
+            _MEMBER_PREFIX.sub("", p.metric_label).strip() + balance
+            for other in facts if other is not fact and other.context_quote == quote
+            for p in other.periods if _MEMBER_PREFIX.match(p.metric_label)
+        ))
+        if not members:
+            continue
+        times = list(dict.fromkeys((p.year, p.month, p.col_label) for p in fact.periods))
+        fact.group_scope = "all"
+        fact.periods = [PeriodPoint(member, y, m, c) for member in members for (y, m, c) in times]
+
+
 def _attach_group_exclusions(facts: List[ExtractedFact]) -> None:
     """Give each quantified fact the groups its own sentence names separately.
 
@@ -2580,7 +2637,9 @@ def _bundled_siblings(fact: ExtractedFact, sources: List[_ExcelSource]):
     if found_in:
         # SKDU repeats its sub-sectors in Tabel 1, 4, 5 and 7: "Perbaikan penggunaan tenaga kerja
         # didorong oleh beberapa sub-LU …" is Tabel 4's, whatever came first. A tie keeps order.
-        return max(found_in, key=lambda found: _title_words_in_sentence(fact, found[1]))
+        cited = _cited_table(fact)
+        return max(found_in, key=lambda found: (_is_cited(found[1], cited),
+                                                _title_words_in_sentence(fact, found[1])))
     return _components_of_one_total(fact, labels, sources)
 
 
@@ -2655,8 +2714,9 @@ def _judge_group_scope_members(
         found = _group_family(named_rows + excluded_rows, src)
         if found is None:
             continue
-        if best is None or len(named_rows) > best[0]:
-            best = (len(named_rows), src, found, excluded_rows)
+        rank = (_is_cited(src, _cited_table(fact)), len(named_rows))
+        if best is None or rank > best[0]:
+            best = (rank, src, found, excluded_rows)
     if best is None:
         # A table that is one breakdown with no parent row (PMI's T2 sub-sectors), named by the
         # sentence ("sebagian besar Sub-LU") or by two or more of its rows in the claim (PMI Tw
@@ -3284,6 +3344,12 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # Coverage first (a tie goes to the source whose title and matched rows carry the claim's
     # words themselves), then label quality. Stable sort, so ties keep source order as before.
     candidates.sort(key=_rank_key)
+    # The table the sentence itself cites goes first: SKDU's "seluruh LU terindikasi melambat
+    # … (Lampiran Tabel 8)" is the wages table, though Tabel 7b, 9 and 10 have the same sectors
+    # and semesters. Only when that table could answer at all.
+    cited = _cited_table(fact)
+    if cited and any(_is_cited(c.src, cited) for c in candidates):
+        candidates.sort(key=lambda c: not _is_cited(c.src, cited))
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
     # the user chose decide whenever they can answer at all. So is a chart — its labels are read
@@ -3358,6 +3424,22 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 break
 
     return _attach_source_comparison(evaluated, head_index, displaced_source)
+
+
+# "(Lampiran Tabel 8)", "Tabel 2": the author's own pointer to the table a sentence reads.
+_CITED_TABLE = re.compile(r"\b(?:lampiran\s+)?tabel\s+(\d+)\b", re.IGNORECASE)
+
+
+def _cited_table(fact: ExtractedFact) -> Optional[str]:
+    """The table number the sentence cites, when it cites exactly one."""
+    cited = set(_CITED_TABLE.findall(fact.context_quote or ""))
+    return cited.pop() if len(cited) == 1 else None
+
+
+def _is_cited(src: "_ExcelSource", number: Optional[str]) -> bool:
+    """True when `src` is the table the sentence cites: its title opens with 'Tabel <number>'."""
+    return bool(number) and bool(re.match(r"\s*tabel\s*" + number + r"\b", src.table.title or "",
+                                          re.IGNORECASE))
 
 
 def _rank_key(c: _Candidate) -> Tuple[float, float, int, float]:
@@ -4928,6 +5010,7 @@ async def verify_paired(
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))
     attach_section_headings(facts, narrative_text)
     facts = _drop_group_stand_ins(facts)
+    _attach_named_members(facts)
     _attach_group_exclusions(facts)
     _attach_rankings(facts)
     emit("extract", "done", detail=f"{len(facts)} klaim ditemukan")

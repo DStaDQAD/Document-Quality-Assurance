@@ -224,7 +224,8 @@ def cmd_replay(args) -> int:
     Tinjauan AI — so replay two commits and diff those, never a replay against a live run.
     """
     from paired_verifier import (
-        _attach_group_exclusions, _attach_rankings, _drop_group_stand_ins, _evaluate_fact_safely,
+        _attach_group_exclusions, _attach_named_members, _attach_rankings, _drop_group_stand_ins,
+        _evaluate_fact_safely,
     )
 
     run_dir, out = Path(args.dir), Path(args.out)
@@ -246,6 +247,7 @@ def cmd_replay(args) -> int:
         if narrative is not None:
             _catch_up_on_quotes(facts, narrative)
         facts = _drop_group_stand_ins(facts)
+        _attach_named_members(facts)
         _attach_group_exclusions(facts)
         _attach_rankings(facts)
         results = [_evaluate_fact_safely(f, sources).model_dump() for f in facts]

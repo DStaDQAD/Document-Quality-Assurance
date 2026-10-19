@@ -9,6 +9,7 @@ from excel_parser_bi import BITableData
 from langchain_core.runnables import RunnableLambda
 from paired_verifier import (
     _ExcelSource,
+    _attach_named_members,
     _build_table_suggestions,
     _deduplicate_facts,
     _evaluate_fact,
@@ -18,6 +19,7 @@ from paired_verifier import (
     _parse_scale_unit,
     _parse_table_with_fallback,
     _pointer_pass,
+    _semester_periods,
     _unit_factor,
     verify_paired,
 )
@@ -3905,3 +3907,74 @@ def test_a_quarter_the_sentence_does_not_call_a_semester_stays_a_quarter():
                       periods=[_make_period(metric_label="Perkiraan Margin Usaha", year=2026, month="Q2")])
 
     assert _evaluate_fact_safely(fact, _margin_table()).verdict == "Inconclusive"
+
+
+def _wages_and_investment():
+    """SKDU Tabel 8 (wages) and 7b (investment): the same sectors, semester columns."""
+    def sheet(title, values):
+        data = {}
+        for row, (s1, s2) in values.items():
+            data[(row, 2026, "S1")], data[(row, 2026, "S2")] = s1, s2
+        return _make_table(title=title, unit="%, Saldo Bersih", data=data)
+    upah = sheet("TABEL 8. PERKEMBANGAN UPAH / TABLE 8. WAGES/SALARIES", {
+        "Industri Pengolahan > Naik": (55.0, 12.0), "Industri Pengolahan > Saldo Bersih": (52.47, 9.18),
+        "Jasa Lainnya > Naik": (45.0, 9.0), "Jasa Lainnya > Saldo Bersih": (43.75, 7.32),
+        "Konstruksi > Naik": (28.0, 6.0), "Konstruksi > Saldo Bersih": (26.49, 4.92),
+        "TOTAL > Saldo Bersih": (39.20, 9.24),
+    })
+    investasi = sheet("TABEL 7b. INVESTASI SEMESTERAN", {
+        "Industri Pengolahan > Saldo Bersih": (1.0, 2.0), "Jasa Lainnya > Saldo Bersih": (1.0, 2.0),
+        "Konstruksi > Saldo Bersih": (1.0, 2.0),
+    })
+    return [_make_source(investasi, filename="SKDU.xlsx", sheet="T7b Investasi Semesteran"),
+            _make_source(upah, filename="SKDU.xlsx", sheet="T8 Perkembangan Upah")]
+
+
+_ALL_LU = ("Berdasarkan LU, seluruh LU terindikasi melambat dibandingkan semester I 2026, terutama pada LU "
+           "yang mencatat penurunan SB tertinggi, antara lain LU Industri Pengolahan (SB 9,18%), serta LU "
+           "Jasa Lainnya (SB 7,32%) (Lampiran Tabel 8).")
+
+
+def test_seluruh_lu_with_the_bare_group_word_is_judged_on_every_sector_of_the_cited_table():
+    # SKDU Tw III-2026: the trend came back on 'LU' at Q3 and Q4 2026 (semester II as two
+    # quarters), the named sectors as facts of their own; Tabel 7b has the same sectors and
+    # semesters, but the sentence cites Tabel 8.
+    trend = _make_fact(operation="is_decreasing", claimed_value=None, unit=None, context_quote=_ALL_LU,
+                       periods=[_make_period(metric_label="LU", month="Q3"),
+                                _make_period(metric_label="LU", month="Q4")])
+    named = [_make_fact(operation="value", claimed_value=v, unit="persen", context_quote=_ALL_LU,
+                        periods=[_make_period(metric_label=label, month="Q3"),
+                                 _make_period(metric_label=label, month="Q4")])
+             for label, v in (("LU Industri Pengolahan", 9.18), ("LU Jasa Lainnya", 7.32))]
+    facts = [trend, *named]
+
+    _attach_named_members(facts)
+    result = _evaluate_fact_safely(trend, _wages_and_investment())
+
+    assert trend.group_scope == "all"
+    assert result.verdict == "Entailed"
+    assert "T8 Perkembangan Upah" in result.reasoning
+    assert "3 dari 3" in result.reasoning  # Konstruksi too, though the sentence never names it
+    assert "Saldo Bersih" in result.reasoning and "> Naik" not in result.reasoning
+
+
+def test_two_quarters_of_a_half_are_read_as_that_semester():
+    fact = _make_fact(operation="value", claimed_value=9.24, unit="persen",
+                      context_quote="Kondisi ini terindikasi dari SB upah sebesar 9,24% pada semester ini.",
+                      periods=[_make_period(metric_label="TOTAL > Saldo Bersih", month="Q3"),
+                               _make_period(metric_label="TOTAL > Saldo Bersih", month="Q4")])
+
+    result = _evaluate_fact_safely(fact, _wages_and_investment())
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].month == "S2"
+
+
+def test_two_quarters_stay_quarters_when_the_sentence_speaks_of_triwulan():
+    moved = _semester_periods(_make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        context_quote="Upah semester II naik dari triwulan III ke triwulan IV.",
+        periods=[_make_period(metric_label="TOTAL > Saldo Bersih", month="Q3"),
+                 _make_period(metric_label="TOTAL > Saldo Bersih", month="Q4")]), _wages_and_investment())
+
+    assert moved is None
