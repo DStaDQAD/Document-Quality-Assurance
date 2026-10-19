@@ -186,6 +186,11 @@ class _Candidate:
     # `coverage` counting only the title and the matched rows — breaks coverage ties in favour
     # of the table whose own name says what the claim says (see TableData.query_coverage).
     direct_coverage: float = 0.0
+    # How many words of the table's title (and TableData.subject_words) the SENTENCE uses. Breaks
+    # a full tie for a claim WITHOUT a number, which used to go to the first source: SKDU's Tabel 1, 4, 5 and 7 all have a 'PERTANIAN, KEHUTANAN DAN
+    # PERIKANAN' row, and "tingkat penggunaan tenaga kerja LU Pertanian … dari -0,23% menjadi
+    # -0,10%" went to Tabel 1 (1,74 -> 0,39) because it came first, not to Tabel 4.
+    sentence_title: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -513,29 +518,49 @@ def _previous_period(
     return ((py, pm), val) if val is not None else None
 
 
-# The quarter a sentence compares with: "lebih tinggi dibandingkan SBT pada triwulan III 2025",
-# "dibandingkan dengan triwulan yang sama pada tahun sebelumnya".
-_COMPARED_QUARTER = re.compile(
-    r"\bdibandingkan\b[^.;]{0,60}?\btriwulan\s+(?P<q>IV|III|II|I)\s+(?P<y>\d{4})\b", re.IGNORECASE)
+# The period a sentence compares with: "lebih tinggi dibandingkan SBT pada triwulan III 2025",
+# "lebih rendah dari semester II 2025", "dibandingkan dengan triwulan yang sama pada tahun
+# sebelumnya". "dari" counts only after a direction word: "bersumber dari" names no baseline.
+_UP_WORDS = r"lebih\s+(?:tinggi|besar|baik)|meningkat|naik"
+_DOWN_WORDS = r"lebih\s+(?:rendah|kecil|buruk)|menurun|turun|melambat"
+_COMPARED_PERIOD = re.compile(
+    r"(?:\b(?P<dir>" + _UP_WORDS + "|" + _DOWN_WORDS + r")\s+(?:dari|dibandingkan)|\bdibandingkan)\b"
+    r"[^.;]{0,60}?\b(?P<kind>triwulan|semester)\s+(?P<q>IV|III|II|I)\s+(?P<y>\d{4})\b",
+    re.IGNORECASE)
 _SAME_QUARTER_LAST_YEAR = re.compile(
     r"\bdibandingkan\b[^.;]{0,60}?\b(triwulan|periode)\s+yang\s+sama\s+(pada\s+)?tahun\s+"
     r"(sebelumnya|lalu)\b", re.IGNORECASE)
+_SEMESTER_WORD = {"i": "S1", "ii": "S2"}
 
 
 def _stated_baseline(
-    quote: str, table: BITableData, label: str, year: int, month: str
+    quote: str, table: BITableData, label: str, year: int, month: str, operation: str = ""
 ) -> Optional[Tuple[Tuple[int, str], float]]:
-    """The earlier quarter the sentence itself names as the baseline, with its value — used in
-    place of the previous quarter to complete a single-point trend claim. SBank Tw II-2026:
-    "giro diprakirakan tumbuh lebih tinggi …, lebih tinggi dibandingkan SBT pada triwulan III 2025"
-    (50,82 -> 76,38) arrived as Q3 2026 alone, and against Q2 2026 (80,36) it read as a fall.
-    None when the sentence names no quarter, names a later one, or the table has no value there."""
-    if not re.fullmatch(r"Q[1-4]", month or ""):
+    """The earlier quarter or semester the sentence itself names as the baseline, with its value —
+    used in place of the previous period to complete a single-point trend claim.
+
+    SBank Tw II-2026: "giro … lebih tinggi dibandingkan SBT pada triwulan III 2025" (50,82 ->
+    76,38) arrived as Q3 2026 alone, and against Q2 2026 (80,36) it read as a fall. SKDU Tw
+    III-2026: "Margin usaha pada semester II 2026 diprakirakan lebih tinggi dibandingkan semester I
+    2026, namun lebih rendah dari semester II 2025" names two baselines; the rise is against the
+    first, the fall against the second, so the one whose direction word agrees with the claim wins.
+    None when the sentence names no such period, names a later one, or the table has no value there.
+    """
+    if re.fullmatch(r"Q[1-4]", month or ""):
+        kind, words = "triwulan", _QUARTER_WORD
+    elif re.fullmatch(r"S[12]", month or ""):
+        kind, words = "semester", _SEMESTER_WORD
+    else:
         return None
-    match = _COMPARED_QUARTER.search(quote or "")
-    if match:
-        key = (int(match.group("y")), _QUARTER_WORD[match.group("q").lower()])
-    elif _SAME_QUARTER_LAST_YEAR.search(quote or ""):
+    named = [m for m in _COMPARED_PERIOD.finditer(quote or "")
+             if m.group("kind").lower() == kind and m.group("q").lower() in words]
+    if named:
+        said = {"is_increasing": _UP_WORDS, "is_decreasing": _DOWN_WORDS}.get(operation)
+        agreeing = [m for m in named
+                    if said and m.group("dir") and re.fullmatch(said, m.group("dir"), re.IGNORECASE)]
+        match = (agreeing or named)[0]
+        key = (int(match.group("y")), words[match.group("q").lower()])
+    elif kind == "triwulan" and _SAME_QUARTER_LAST_YEAR.search(quote or ""):
         key = (year - 1, month)
     else:
         return None
@@ -543,6 +568,36 @@ def _stated_baseline(
         return None
     _, val = table.lookup_fuzzy(label, *key)
     return (key, val) if val is not None else None
+
+
+_SEMESTER_IN_SENTENCE = re.compile(r"\bsemester\s+(?P<s>II|I)\s+(?P<y>\d{4})\b", re.IGNORECASE)
+
+
+def _semester_periods(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
+    """The claim with its quarters read as the semesters its sentence names, when a source keeps
+    semesters (SKDU Tabel 7b-10). "Margin usaha pada semester II 2026 …" came back as Q2 2026
+    against a table with only S1/S2 columns, and was left Tidak Cukup Data. A point moves only when
+    the sentence names that very semester and year ("semester II 2026" for Q2 2026)."""
+    said = {(int(m.group("y")), _SEMESTER_WORD[m.group("s").lower()])
+            for m in _SEMESTER_IN_SENTENCE.finditer(fact.context_quote or "")}
+    if not said or not any(
+            src.table.axis_type == "temporal"
+            and any(len(key) == 3 and str(key[2]).startswith("S") for key in src.table._data)
+            for src in sources):
+        return None
+    moved, changed = [], False
+    for p in fact.periods:
+        semester = {"Q1": "S1", "Q2": "S2"}.get(p.month or "")
+        if p.col_label is None and semester and (p.year, semester) in said:
+            moved.append(PeriodPoint(p.metric_label, p.year, semester))
+            changed = True
+        else:
+            moved.append(p)
+    if not changed:
+        return None
+    out = copy.copy(fact)
+    out.periods = moved
+    return out
 
 
 def _stable_band(a: float, b: float) -> float:
@@ -1469,7 +1524,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         p0 = used_periods[0]
         if p0.col_label is None and p0.year is not None and p0.month is not None:
             prev = (_stated_baseline(fact.context_quote or "", src.table, labelled[0][0],
-                                     p0.year, p0.month)
+                                     p0.year, p0.month, fact.operation)
                     or _previous_period(src.table, labelled[0][0], p0.year, p0.month))
             if prev is not None:
                 (py, pm), pv = prev
@@ -2509,6 +2564,7 @@ def _bundled_siblings(fact: ExtractedFact, sources: List[_ExcelSource]):
     extractor put in one fact ('naik di usia 20-30 dan 31-40 tahun') — else None."""
     first = fact.periods[0]
     labels = list(dict.fromkeys(p.metric_label for p in fact.periods))
+    found_in = []
     for src in sources:
         if src.origin == "chart" or not src.table.row_labels:
             continue
@@ -2520,7 +2576,11 @@ def _bundled_siblings(fact: ExtractedFact, sources: List[_ExcelSource]):
         rows = list(dict.fromkeys(label for label, _ in resolved))
         found = _group_family(rows, src) if len(rows) == len(labels) else None
         if found and all(row in found[0] for row in rows):
-            return rows, src
+            found_in.append((rows, src))
+    if found_in:
+        # SKDU repeats its sub-sectors in Tabel 1, 4, 5 and 7: "Perbaikan penggunaan tenaga kerja
+        # didorong oleh beberapa sub-LU …" is Tabel 4's, whatever came first. A tie keeps order.
+        return max(found_in, key=lambda found: _title_words_in_sentence(fact, found[1]))
     return _components_of_one_total(fact, labels, sources)
 
 
@@ -2548,7 +2608,8 @@ def _components_of_one_total(fact: ExtractedFact, labels: List[str], sources: Li
         rows = list(dict.fromkeys(label for label, _ in resolved))
         if missing or len(rows) != len(labels) or any(QUAL_SEP in row for row in rows):
             continue
-        if _sig_words(src.table.title or "") & quote_words:
+        subject = _sig_words(src.table.title or "") | _sig_words(" ".join(src.table.subject_words))
+        if subject & quote_words:
             picked.append((rows, src))
     return picked[0] if len(picked) == 1 else None
 
@@ -2955,6 +3016,9 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             ),
         )
 
+    # "semester II 2026" the extractor wrote as Q2 2026, against a table of semesters.
+    fact = _semester_periods(fact, sources) or fact
+
     # A superlative ranks the named groups as well as giving their direction (B4).
     if fact.rank_group:
         plain = ExtractedFact(fact.operation, fact.periods, fact.claimed_value, fact.unit,
@@ -3207,6 +3271,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             score=_resolution_score(fact.periods, resolved),
             coverage=coverage,
             direct_coverage=_coverage_score(fact.periods, resolved, src, broken_out=False),
+            sentence_title=_title_words_in_sentence(fact, src),
             qualification=_qualification_rank(fact.periods, resolved),
             src=src, resolved=resolved, factor=factor, unit_comparable=unit_comparable,
         ))
@@ -3255,6 +3320,24 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # is the evidence of which series the sentence means; any other tied value still shows up
     # in the source comparison. A claim without a number (a trend) carries no such evidence.
     head_cand, head_result = evaluated[head_index]
+    # Without a number of its own (a trend, or a threshold, whose number is the bound and not a
+    # cell), the sentence's words are the only evidence: among fully tied tables that
+    # hold the SAME row, the one whose title the sentence uses most ("penggunaan tenaga kerja LU
+    # Pertanian … perbaikan" is Tabel 4, not Tabel 1, though both have the row). Only the same
+    # row: SULNI's "ULN publik" ties with Tabel II.1's 'Bank Sentral', a different series. A tie
+    # on the title too keeps upload order.
+    head_rows = [label for label, _ in head_cand.resolved]
+    numberless = fact.claimed_value is None or fact.operation in _THRESHOLD_OPS
+    if numberless and head_result.verdict != "Inconclusive":
+        tied = [index for index, (cand, result) in enumerate(evaluated)
+                if result.verdict != "Inconclusive" and _rank_key(cand) == _rank_key(head_cand)
+                and [label for label, _ in cand.resolved] == head_rows
+                and (cand.src.origin in _FALLBACK_ORIGINS)
+                == (head_cand.src.origin in _FALLBACK_ORIGINS)]
+        best = max(tied, key=lambda index: evaluated[index][0].sentence_title, default=head_index)
+        if evaluated[best][0].sentence_title > head_cand.sentence_title:
+            head_index = best
+            head_cand, head_result = evaluated[head_index]
     if head_result.verdict == "Refuted" and fact.claimed_value is not None:
         for index, (cand, result) in enumerate(evaluated):
             if (result.verdict == "Entailed" and _rank_key(cand) == _rank_key(head_cand)
@@ -3280,6 +3363,21 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 def _rank_key(c: _Candidate) -> Tuple[float, float, int, float]:
     """How _evaluate_fact orders candidate sources: coverage, title wording, qualification, label."""
     return (-c.coverage, -c.direct_coverage, c.qualification, -round(c.score, 9))
+
+
+# Words that carry no subject: every table title has "Tabel", most sentences "dan", and a unit
+# or growth tag ("(%, yoy)") says how a table measures, not what — a level sentence that adds
+# "atau tumbuh 8,9% (yoy)" is still about the level.
+_TITLE_FILLER = {"tabel", "table", "dan", "and", "the", "per", "atas", "dari", "yang",
+                 "yoy", "mtm", "qtq", "ytd", "persen", "juta", "miliar", "triliun", "usd"}
+
+
+def _title_words_in_sentence(fact: ExtractedFact, src: "_ExcelSource") -> int:
+    """How many of the table's own subject words — its title, its TableData.subject_words — the
+    claim's sentence uses (see _Candidate.sentence_title)."""
+    title = _sig_words(src.table.title or "") | _sig_words(" ".join(src.table.subject_words))
+    words = {w for w in title - _TITLE_FILLER if w.isalpha()}
+    return len(words & _sig_words(fact.context_quote or ""))
 
 
 def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:

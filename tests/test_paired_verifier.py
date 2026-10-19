@@ -3808,3 +3808,100 @@ def test_a_threshold_claim_on_a_growth_table_without_a_bound_stays_unjudged():
                       periods=[_make_period(metric_label="Kredit", month="Jun")])
 
     assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Inconclusive"
+
+
+_SECTORS = ("PERTANIAN, KEHUTANAN DAN PERIKANAN", "KONSTRUKSI", "REAL ESTAT")
+
+
+def _skdu_sector_sheet(title, values, total=(1.0, 1.0), unit="% Saldo Bersih Tertimbang - SBT"):
+    """An SKDU sector sheet: each sector's (Q2, Q3) 2026 balances above a TOTAL row."""
+    data = {}
+    for row, (q2, q3) in {**values, "TOTAL": total}.items():
+        data[(row, 2026, "Q2")], data[(row, 2026, "Q3")] = q2, q3
+    table = _make_table(title=title, unit=unit, data=data)
+    table.measure_levels = frozenset({"saldo bersih", "sbt"})
+    return table
+
+
+def _skdu_sources():
+    kegiatan = _skdu_sector_sheet("Tabel 1. Kegiatan Usaha / Table 1. Business Activity",
+                           {s: (1.74, 0.39) for s in _SECTORS})
+    kegiatan.subject_words = frozenset({"kinerja"})
+    tenaga = _skdu_sector_sheet("TABEL 4. PENGGUNAAN TENAGA KERJA / TABLE 4. LABOUR UTILISATION",
+                         {s: (-0.23, -0.10) for s in _SECTORS})
+    return [_make_source(kegiatan, filename="SKDU.xlsx", sheet="T1 Kegiatan Usaha"),
+            _make_source(tenaga, filename="SKDU.xlsx", sheet="T4 Penggunaan Tenaga Kerja")]
+
+
+def test_a_level_that_restates_the_tables_measure_is_dropped_from_the_claim():
+    # SKDU Tw III-2026: the extractor wrote "Pertanian, Kehutanan, dan Perikanan > Saldo Bersih"
+    # (Tabel 8's row style) for a Tabel 4 row that has no such level, and found nothing.
+    table = _skdu_sources()[1].table
+
+    assert table.lookup_fuzzy("Pertanian, Kehutanan, dan Perikanan > Saldo Bersih", 2026, "Q3") == (
+        "PERTANIAN, KEHUTANAN DAN PERIKANAN", -0.10)
+
+
+def test_a_trend_without_a_number_goes_to_the_tied_table_its_sentence_names():
+    # Both sheets hold the sector; "penggunaan tenaga kerja" is Tabel 4 (-0,23 -> -0,10), not
+    # Tabel 1 (1,74 -> 0,39), which came first and refuted a true claim.
+    quote = ("Sejalan dengan kegiatan usahanya, tingkat penggunaan tenaga kerja LU Pertanian, "
+             "Kehutanan, dan Perikanan terindikasi mengalami perbaikan dari SBT -0,23% menjadi -0,10%.")
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Pertanian, Kehutanan, dan Perikanan > Saldo Bersih",
+                                            month="Q3")])
+
+    result = _evaluate_fact_safely(fact, _skdu_sources())
+
+    assert result.verdict == "Entailed"
+    assert "T4 Penggunaan Tenaga Kerja" in result.reasoning
+
+
+def test_a_list_of_sectors_is_read_on_the_table_the_report_calls_kinerja():
+    # "Kinerja sejumlah LU tercatat meningkat, antara lain LU A, B, C": every sheet lists the
+    # sectors, and no title word is in the sentence — SKDU's 'kinerja' names Tabel 1.
+    sources = _skdu_sources()
+    sources[0].table._data.update({(s, 2026, "Q3"): 2.0 for s in _SECTORS})
+    quote = "Kinerja sejumlah LU tercatat meningkat, antara lain LU Pertanian, LU Konstruksi, serta LU Real Estat."
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label=s, month="Q3") for s in _SECTORS])
+
+    result = _evaluate_fact_safely(fact, sources)
+
+    assert result.verdict == "Entailed"
+    assert "T1 Kegiatan Usaha" in result.reasoning
+
+
+def _margin_table():
+    table = _make_table(title="Tabel 10. Margin Usaha", unit="%", data={
+        ("Total > Perkiraan Margin Usaha", 2025, "S2"): 16.70,
+        ("Total > Perkiraan Margin Usaha", 2026, "S1"): 16.02,
+        ("Total > Perkiraan Margin Usaha", 2026, "S2"): 16.51,
+    })
+    return [_make_source(table, filename="SKDU.xlsx", sheet="T10 Margin Usaha")]
+
+
+_MARGIN = ("Margin usaha pada semester II 2026 diprakirakan lebih tinggi dibandingkan semester I 2026, "
+           "namun lebih rendah dari semester II 2025.")
+
+
+@pytest.mark.parametrize("operation, baseline", [("is_increasing", "S1 2026=16.02"),
+                                                  ("is_decreasing", "S2 2025=16.7")])
+def test_a_semester_written_as_a_quarter_is_read_as_the_semester_with_its_own_baseline(operation, baseline):
+    # The extractor wrote "semester II 2026" as Q2 2026 against a table of semesters; the sentence
+    # names two baselines, one per direction.
+    fact = _make_fact(operation=operation, claimed_value=None, unit=None, context_quote=_MARGIN,
+                      periods=[_make_period(metric_label="Perkiraan Margin Usaha", year=2026, month="Q2")])
+
+    result = _evaluate_fact_safely(fact, _margin_table())
+
+    assert result.verdict == "Entailed"
+    assert baseline in result.reasoning
+
+
+def test_a_quarter_the_sentence_does_not_call_a_semester_stays_a_quarter():
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Margin usaha triwulan II 2026 meningkat.",
+                      periods=[_make_period(metric_label="Perkiraan Margin Usaha", year=2026, month="Q2")])
+
+    assert _evaluate_fact_safely(fact, _margin_table()).verdict == "Inconclusive"

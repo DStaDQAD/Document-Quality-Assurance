@@ -369,3 +369,23 @@ def test_only_sbank_skips_its_methodology_section():
     assert skipped_sections("sbank") == (r"metodologi",)
     assert skipped_sections("npi") == ()
     assert skipped_sections("") == ()
+
+
+def test_skdu_marks_its_rows_tables_and_measure(monkeypatch):
+    from publication_parsers import skdu
+
+    def reader(rows, unit):
+        return lambda data, sheet: TableData(title="t", unit=unit, row_labels=list(rows))
+
+    monkeypatch.setattr(skdu, "parse_with_generic_reader", reader(
+        ["Mudah", "Sulit", "Saldo Bersih (% Mudah - % Sulit)"], "% Responden"))
+    access = skdu.parse(b"", "T3 Keuangan dan Akses Kredit")
+    assert access.term_aliases["akses kredit"] == "Saldo Bersih (% Mudah - % Sulit)"
+    assert not access.measure_levels  # its rows ARE balances by name
+
+    monkeypatch.setattr(skdu, "parse_with_generic_reader", reader(
+        ["PERTANIAN, KEHUTANAN DAN PERIKANAN", "TOTAL"], "% Saldo Bersih Tertimbang - SBT"))
+    activity = skdu.parse(b"", "T1 Kegiatan Usaha")
+    assert "kinerja" in activity.subject_words
+    assert "saldo bersih" in activity.measure_levels
+    assert not skdu.parse(b"", "T4 Penggunaan Tenaga Kerja").subject_words

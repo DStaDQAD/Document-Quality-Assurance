@@ -371,6 +371,16 @@ class TableData:
     # banks, so "instrumen deposito" is that row, not one group of it. Set by the publication
     # parser; skipped by paired_verifier._answers_one_group_of_it.
     layout_levels: frozenset = field(default_factory=frozenset, repr=False)
+    # Words a report uses for this table's subject besides its title, lower-cased: SKDU writes
+    # Tabel 1 'Kegiatan Usaha' as "kinerja sejumlah LU tercatat meningkat". Set by the publication
+    # parser; read by paired_verifier._components_of_one_total to pick the one table a list of
+    # sectors belongs to.
+    subject_words: frozenset = field(default_factory=frozenset, repr=False)
+    # Levels of a claim's metric that only restate this table's measure, lower-cased: the extractor
+    # names SKDU Tabel 4 rows "Pertanian, Kehutanan, dan Perikanan > Saldo Bersih" (after Tabel 8,
+    # whose rows do end so), but every Tabel 4 row is a balance and none carries that level. Set by
+    # the publication parser; dropped from the query in _normalise_query.
+    measure_levels: frozenset = field(default_factory=frozenset, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
@@ -865,6 +875,11 @@ class TableData:
         """
         query = _expand_report_terms(query)
         query = self._apply_aliases(query)
+        if self.measure_levels and QUAL_SEP.strip() in query:
+            parts = [p.strip() for p in query.split(QUAL_SEP)]
+            kept = [p for p in parts if p.lower() not in self.measure_levels]
+            if kept:
+                query = QUAL_SEP.join(kept)
         abbreviations = self._abbreviations()
         if not abbreviations:
             return query
