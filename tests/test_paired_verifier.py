@@ -3978,3 +3978,70 @@ def test_two_quarters_stay_quarters_when_the_sentence_speaks_of_triwulan():
                  _make_period(metric_label="TOTAL > Saldo Bersih", month="Q4")]), _wages_and_investment())
 
     assert moved is None
+
+
+def _skdu_finance():
+    """SKDU Tabel 3: answer shares and the balance under each aspect, with its section heading."""
+    head = "Kondisi keuangan selama 3 bulan terakhir :"
+    rows = {"Baik": (22.78, 23.42), "Normal": (69.47, 68.72), "Buruk": (7.75, 7.86),
+            "Saldo Bersih (% Baik - % Buruk)": (15.03, 15.56)}
+    data = {}
+    for aspect in ("- Likuiditas", "- Rentabilitas"):
+        for leaf, (q2, q3) in rows.items():
+            label = f"{head} > {aspect} > {leaf}"
+            data[(label, 2026, "Q2")], data[(label, 2026, "Q3")] = q2, q3
+    table = _make_table(title="Tabel 3. Keuangan dan Akses Kredit", unit="% Responden", data=data)
+    table.layout_levels = frozenset({head.lower()})
+    return [_make_source(table, filename="SKDU.xlsx", sheet="T3 Keuangan dan Akses Kredit")]
+
+
+def test_an_aspect_said_to_improve_is_read_on_its_balance_not_on_one_answers_share():
+    # SKDU Tw III-2026 run 2: "kondisi keuangan … membaik pada aspek Likuiditas" came back on
+    # 'Likuiditas', found '… > Baik' and was refused as one group of it.
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Kondisi keuangan dunia usaha secara umum membaik pada aspek Likuiditas.",
+                      periods=[_make_period(metric_label="Likuiditas", month="Q3")])
+
+    result = _evaluate_fact_safely(fact, _skdu_finance())
+
+    assert result.verdict == "Entailed"
+    assert "Q2 2026=15.03, Q3 2026=15.56" in result.reasoning
+
+
+def test_a_claim_about_one_answers_share_keeps_its_row():
+    fact = _make_fact(operation="value", claimed_value=23.42, unit="persen",
+                      context_quote="Persentase responden yang menjawab likuiditas baik sebesar 23,42%.",
+                      periods=[_make_period(metric_label="Likuiditas > Baik", month="Q3")])
+
+    assert _evaluate_fact_safely(fact, _skdu_finance()).verdict == "Entailed"
+
+
+def _average_wages():
+    table = _make_table(title="TABEL 9. UPAH RATA-RATA", unit="Rp", data={
+        ("Total > Dibawah Mandor", 2026, "S1"): 3907771.59, ("Total > Dibawah Mandor", 2026, "S2"): 3865176.52,
+    })
+    quarterly = _make_table(title="Tabel 1. Kegiatan Usaha", unit="% Saldo Bersih Tertimbang - SBT",
+                            data={("TOTAL", 2026, "Q2"): 12.97, ("TOTAL", 2026, "Q3"): 11.46})
+    return [_make_source(quarterly, filename="SKDU.xlsx", sheet="T1 Kegiatan Usaha"),
+            _make_source(table, filename="SKDU.xlsx", sheet="T9 Upah Rata-rata")]
+
+
+def test_a_quarter_on_a_row_kept_only_per_semester_is_that_semester():
+    # "upah pegawai level di bawah mandor/supervisor sebesar Rp3,87 juta per bulan" follows the
+    # sentence naming semester II 2026 and came back as Q2 2026.
+    fact = _make_fact(operation="value", claimed_value=3.87, unit="juta Rp",
+                      context_quote="Sementara itu, upah pegawai level di bawah mandor/supervisor sebesar Rp3,87 juta per bulan.",
+                      periods=[_make_period(metric_label="Total > Dibawah Mandor", month="Q2")])
+
+    result = _evaluate_fact_safely(fact, _average_wages())
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].month == "S2"
+
+
+def test_a_quarter_said_as_triwulan_is_not_moved_to_a_semester():
+    fact = _make_fact(operation="value", claimed_value=3.87, unit="juta Rp",
+                      context_quote="Upah di bawah mandor pada triwulan II 2026 sebesar Rp3,87 juta.",
+                      periods=[_make_period(metric_label="Total > Dibawah Mandor", month="Q2")])
+
+    assert _evaluate_fact_safely(fact, _average_wages()).verdict == "Inconclusive"

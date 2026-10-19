@@ -584,11 +584,12 @@ def _semester_periods(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optio
     sentence speaks of semesters and never of a quarter ("triwulan").
     """
     quote = fact.context_quote or ""
-    if not re.search(r"\bsemester", quote, re.IGNORECASE) or not any(
-            src.table.axis_type == "temporal"
-            and any(len(key) == 3 and str(key[2]).startswith("S") for key in src.table._data)
-            for src in sources):
+    if not any(src.table.axis_type == "temporal"
+               and any(len(key) == 3 and str(key[2]).startswith("S") for key in src.table._data)
+               for src in sources):
         return None
+    if not re.search(r"\bsemester", quote, re.IGNORECASE):
+        return _semester_only_rows(fact, sources, quote)
     said = {(int(m.group("y")), _SEMESTER_WORD[m.group("s").lower()])
             for m in _SEMESTER_IN_SENTENCE.finditer(quote)}
     by_metric: Dict[str, List[PeriodPoint]] = {}
@@ -616,6 +617,43 @@ def _semester_periods(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optio
     out = copy.copy(fact)
     out.periods = moved
     return out
+
+
+def _semester_only_rows(
+    fact: ExtractedFact, sources: List[_ExcelSource], quote: str
+) -> Optional[ExtractedFact]:
+    """Q1/Q2 read as S1/S2 for a metric no source keeps per quarter but one keeps per semester.
+
+    SKDU Tw III-2026: "upah pegawai level di bawah mandor/supervisor sebesar Rp3,87 juta per bulan"
+    follows a sentence naming semester II 2026, and came back as Q2 2026; Tabel 9 has that row
+    only for S1/S2 (S2 2026 = 3.865.177). The extractor writes semester II as Q2, and a row with no
+    quarterly figures leaves nothing a quarter could mean. Not when the sentence says "triwulan".
+    """
+    if re.search(r"\btriwulan\b", quote, re.IGNORECASE):
+        return None
+    moved, changed = [], False
+    for p in fact.periods:
+        semester = {"Q1": "S1", "Q2": "S2"}.get(p.month or "")
+        if p.col_label is None and semester and _only_per_semester(p.metric_label, p.year, p.month,
+                                                                  semester, sources):
+            moved.append(PeriodPoint(p.metric_label, p.year, semester))
+            changed = True
+        else:
+            moved.append(p)
+    if not changed:
+        return None
+    out = copy.copy(fact)
+    out.periods = moved
+    return out
+
+
+def _only_per_semester(metric: str, year: int, quarter: str, semester: str,
+                       sources: List[_ExcelSource]) -> bool:
+    """True when some source has the metric for the semester and none has it for the quarter."""
+    temporal = [src for src in sources if src.table.axis_type == "temporal"]
+    if any(src.table.lookup_fuzzy(metric, year, quarter)[1] is not None for src in temporal):
+        return False
+    return any(src.table.lookup_fuzzy(metric, year, semester)[1] is not None for src in temporal)
 
 
 def _stable_band(a: float, b: float) -> float:
@@ -1053,7 +1091,9 @@ def _answers_one_group_of_it(
         # An aggregate level ('Total > …') names no group and is let through.
         layout = getattr(table, "layout_levels", None) or frozenset()
         for level in label.split(QUAL_SEP):
-            if level.strip().lower() in layout:
+            # A balance ('Saldo Bersih (% Baik - % Buruk)') measures the whole group above it: it
+            # is not one group of it (SKDU's "likuiditas membaik", see _balance_row_instead).
+            if level.strip().lower() in layout or level.strip().lower().startswith("saldo bersih"):
                 continue
             words = _sig_words(level) - _UNNAMED_PARTS
             if words and not (words & claim_words):
@@ -2205,6 +2245,43 @@ _SURVEY_ANSWER_WORDS = frozenset({
 })
 
 
+def _balance_row_instead(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
+) -> Optional[List[Tuple[str, float]]]:
+    """The group's balance row, when a trend or level claim landed on one answer's share of it.
+
+    SKDU Tw III-2026: "kondisi keuangan dunia usaha secara umum membaik pada aspek Likuiditas dan
+    Rentabilitas" came back on 'Likuiditas', which found '… - Likuiditas > Baik' (the share that
+    answered "baik") and was then refused as one group. What "membaik" is about is the group's
+    'Saldo Bersih (% Baik - % Buruk)' (15,03 -> 15,56). Only when the claim never names the answer
+    and the group has exactly one balance row; a claim about the share itself ("persentase
+    responden yang menjawab lebih baik") names it and keeps its row.
+    """
+    if fact.operation not in _TREND_OPS | _THRESHOLD_OPS:
+        return None
+    claim_words = _sig_words(" ".join(p.metric_label or "" for p in fact.periods))
+    out = []
+    for point, (label, _value) in zip(fact.periods, resolved):
+        if QUAL_SEP not in label:
+            return None
+        parent, leaf = label.rsplit(QUAL_SEP, 1)
+        leaf_words = _sig_words(leaf)
+        if not leaf_words or not leaf_words <= _SURVEY_ANSWER_WORDS or leaf_words & claim_words:
+            return None
+        balance = [row for row in src.table.row_labels
+                   if row.startswith(parent + QUAL_SEP)
+                   and row.rsplit(QUAL_SEP, 1)[-1].strip().lower().startswith("saldo bersih")]
+        if len(balance) != 1:
+            return None
+        key = ((balance[0], point.col_label) if point.col_label is not None
+               else (balance[0], point.year, point.month))
+        value = src.table._data.get(key)
+        if value is None:
+            return None
+        out.append((balance[0], value))
+    return out
+
+
 def _groups_the_sentence_names(
     fact: ExtractedFact, sources: List[_ExcelSource]
 ) -> List[str]:
@@ -3170,6 +3247,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
             continue
+        resolved = _balance_row_instead(fact, resolved, src) or resolved
         other_kind = (
             _not_a_yoy_cell(fact, resolved[0][0], src) if fact.operation == "yoy_growth" else None
         )

@@ -389,3 +389,13 @@ def test_skdu_marks_its_rows_tables_and_measure(monkeypatch):
     assert "kinerja" in activity.subject_words
     assert "saldo bersih" in activity.measure_levels
     assert not skdu.parse(b"", "T4 Penggunaan Tenaga Kerja").subject_words
+
+
+def test_skdu_tabel_3_section_headings_are_layout(monkeypatch):
+    from publication_parsers import skdu
+
+    monkeypatch.setattr(skdu, "parse_with_generic_reader", lambda data, sheet: TableData(
+        title="t", unit="% Responden", row_labels=["Kondisi keuangan selama 3 bulan terakhir : > - Likuiditas > Baik"]))
+
+    assert "kondisi keuangan selama 3 bulan terakhir :" in skdu.parse(b"", "T3 Keuangan dan Akses Kredit").layout_levels
+    assert not skdu.parse(b"", "T1 Kegiatan Usaha").layout_levels

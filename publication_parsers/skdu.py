@@ -37,6 +37,13 @@ TERM_ALIASES_BY_SHEET = (
 # sectors is read on Tabel 1 only when the sentence names it (paired_verifier._components_of_one_total).
 SUBJECT_WORDS_BY_SHEET = ((r"T1\b", frozenset({"kinerja"})),)
 
+# Tabel 3's section headings, which head its rows as a level: layout, not a group, so "likuiditas
+# membaik" is '… > - Likuiditas > Saldo Bersih (% Baik - % Buruk)' itself.
+LAYOUT_LEVELS_BY_SHEET = ((r"T3\b", frozenset({
+    "kondisi keuangan selama 3 bulan terakhir :", "akses kredit selama 3 bulan terakhir :",
+    "masalah dalam memperoleh kredit :",
+})),)
+
 # A balance sheet whose rows carry no 'Saldo Bersih' level: the extractor's "Pertanian,
 # Kehutanan, dan Perikanan > Saldo Bersih" (copied from Tabel 8's row names) is the sector's row.
 MEASURE_LEVELS = frozenset({"saldo bersih", "saldo bersih tertimbang", "sbt"})
@@ -50,6 +57,9 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     for pattern, words in SUBJECT_WORDS_BY_SHEET:
         if re.match(pattern, sheet_name):
             table.subject_words = words
+    for pattern, levels in LAYOUT_LEVELS_BY_SHEET:
+        if re.match(pattern, sheet_name):
+            table.layout_levels = levels
     if re.search(r"saldo\s+bersih", table.unit or "", re.IGNORECASE) and not any(
             "saldo bersih" in label.lower() for label in table.row_labels):
         table.measure_levels = MEASURE_LEVELS
