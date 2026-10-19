@@ -26,8 +26,12 @@ ALIASES = {"uln publik": "Pemerintah dan Bank Sentral"}
 
 
 def _trend(operation, label="ULN publik"):
+    # The sentence words the same direction as the claim: a sentence's own single direction
+    # overrides the extractor's (paired_verifier._direction_said_for), so a flipped claim needs a
+    # flipped sentence.
+    said = "peningkatan" if operation == "is_increasing" else "penurunan"
     return ExtractedFact(operation, [PeriodPoint(label, 2026, "Jul")], None, None,
-                         "Perkembangan ini dipengaruhi oleh peningkatan ULN publik.")
+                         f"Perkembangan ini dipengaruhi oleh {said} ULN publik.")
 
 
 def test_a_table_without_the_alias_does_not_know_the_term():
