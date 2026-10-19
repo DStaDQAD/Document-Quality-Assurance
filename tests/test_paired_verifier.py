@@ -3587,3 +3587,75 @@ def test_publication_guards_also_catch_a_verdict_the_review_put_on_the_wrong_row
     )
 
     assert _publication_guards(fact, reviewed, [source]).verdict == "Inconclusive"
+
+
+# ---------------------------------------------------------------------------
+# PMI Tw III-2026: direction read from the sentence, PMI level phrases, T2 as one group
+# ---------------------------------------------------------------------------
+
+def _pmi_components(older, newer, label="Kecepatan Penerimaan Barang Input"):
+    table = _make_table(title="PMI-BI", unit="%, Indeks",
+                        data={(label, 2026, "Q2"): older, (label, 2026, "Q3"): newer,
+                              ("Volume Produksi", 2026, "Q3"): 54.31})
+    return table
+
+
+def _pmi_trend(operation, quote, table, label="Kecepatan Penerimaan Barang Input"):
+    fact = _make_fact(operation=operation, claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label=label, month="Q2"),
+                               _make_period(metric_label=label, month="Q3")])
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+_IMPROVED = ("Komponen Kecepatan Penerimaan Barang Input pada triwulan III 2026 menunjukkan perbaikan "
+             "meskipun masih berada pada fase kontraksi (indeks < 50%), tercermin dari indeks sebesar "
+             "48,68%, lebih tinggi dibandingkan 47,46% pada triwulan II 2026 (Grafik 4).")
+
+
+def test_the_sentences_own_direction_beats_the_extractors():
+    # The extractor read "kontraksi" as the direction and wrote is_decreasing.
+    result = _pmi_trend("is_decreasing", _IMPROVED, _pmi_components(47.46, 48.68))
+
+    assert result.verdict == "Entailed"
+    assert "arah dibaca dari kalimat" in result.reasoning
+
+
+def test_a_writer_who_got_the_direction_wrong_is_still_refuted():
+    # The sentence says "perbaikan … lebih tinggi" but the index fell: a real error.
+    assert _pmi_trend("is_decreasing", _IMPROVED, _pmi_components(48.68, 47.46)).verdict == "Refuted"
+
+
+def test_a_sentence_naming_both_directions_keeps_the_extractors():
+    # SK: "IKK mengalami peningkatan tertinggi di Pontianak …, sementara penurunan IKK terbesar …"
+    quote = ("Secara spasial, Kecepatan Penerimaan Barang Input mengalami peningkatan tertinggi di A, "
+             "sementara penurunan terbesar terjadi di B.")
+    assert _pmi_trend("is_decreasing", quote, _pmi_components(48.68, 47.46)).verdict == "Entailed"
+
+
+def test_a_pmi_level_phrase_is_judged_as_a_level_not_a_change():
+    # "diprakirakan tetap berada pada fase ekspansi" came back is_increasing on 54,8 -> 53,69.
+    table = _pmi_components(54.8, 53.69, label="Volume Persediaan Barang Jadi")
+    table.level_phrases = {r"\btetap\s+(berada\s+)?(pada|di)\s+(fase|zona)\s+ekspansi\b": ("above", 50.0)}
+    quote = ("Berdasarkan komponen pembentuknya, Volume Produksi, Volume Persediaan Barang Jadi, dan "
+             "Volume Total Pesanan diprakirakan tetap berada pada fase ekspansi.")
+
+    result = _pmi_trend("is_increasing", quote, table, label="Volume Persediaan Barang Jadi")
+
+    assert result.verdict == "Entailed"
+    assert "level > 50" in result.reasoning
+
+
+def test_a_table_that_is_one_breakdown_counts_its_rows_for_a_majority_claim():
+    rows = {"Industri Makanan dan Minuman": 55.03, "Industri Pengolahan Tembakau": 46.41,
+            "Industri Tekstil dan Pakaian Jadi": 52.40, "Industri Furnitur": 50.61}
+    table = _make_table(title="PMI-BI Sub-LU", unit="%, Indeks",
+                        data={(name, 2026, "Q3"): value for name, value in rows.items()})
+    table.whole_table_group = (r"\bsub-?\s?lu\b", "Sub-LU")
+    fact = _make_fact(operation="above_threshold", claimed_value=50.0, unit="persen",
+                      context_quote="berada pada fase ekspansi", group_scope="majority",
+                      periods=[_make_period(metric_label=name, month="Q3") for name in rows])
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "3 dari 4" in result.reasoning

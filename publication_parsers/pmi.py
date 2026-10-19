@@ -25,10 +25,35 @@ SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 INTERNAL_T2 = ((r"T2\b.*", SheetSpec(label_cols=(4,), unit="%, Indeks", end_at_forecast=True)),)
 
 
+# "Kinerja (LU) Industri Pengolahan … tecermin dari PMI-BI sebesar 52,28%": every release names the
+# overall index by the sector's performance. Not "kinerja kegiatan LU Industri Pengolahan", which
+# the same releases use for the SKDU balance (SBT), a different survey.
+TERM_ALIASES = {
+    "kinerja lapangan usaha (lu) industri pengolahan": "PMI - BI",
+    "kinerja lapangan usaha industri pengolahan": "PMI - BI",
+    "kinerja lu industri pengolahan": "PMI - BI",
+    "kinerja industri pengolahan": "PMI - BI",
+}
+
+# A PMI index states its phase by the 50% line: "tetap berada pada fase ekspansi" is a level.
+LEVEL_PHRASES = {
+    r"\btetap\s+(berada\s+)?(pada|di)\s+(fase|zona)\s+ekspansi\b": ("above", 50.0),
+    r"\btetap\s+(berada\s+)?(pada|di)\s+(fase|zona)\s+kontraksi\b": ("below", 50.0),
+}
+
+# T2 is the 14 sub-sectors side by side, with no parent row: "sebagian besar Sub-LU" counts them.
+T2_GROUP = (r"\bsub-?\s?lu\b|\bsub\s*lapangan\s+usaha\b|\bsublapangan\s+usaha\b", "Sub-LU")
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     try:
-        return parse_with_specs(data, sheet_name, SPECS)
+        table = parse_with_specs(data, sheet_name, SPECS)
     except PublicationParseError:
         if not sheet_matches(r"T2\b.*", sheet_name):
             raise
-        return parse_with_specs(data, sheet_name, INTERNAL_T2)
+        table = parse_with_specs(data, sheet_name, INTERNAL_T2)
+    table.term_aliases = dict(TERM_ALIASES)
+    table.level_phrases = dict(LEVEL_PHRASES)
+    if sheet_matches(r"T2\b.*", sheet_name):
+        table.whole_table_group = T2_GROUP
+    return table

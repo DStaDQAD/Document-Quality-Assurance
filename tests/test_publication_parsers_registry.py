@@ -320,3 +320,11 @@ def test_pmi_reads_the_internal_t2_layout_without_the_short_name_column():
 
     assert table.row_labels == ["Industri Makanan dan Minuman", "Industri Pengolahan Tembakau"]
     assert table._data[("Industri Makanan dan Minuman", 2026, "Q2")] == 52.4
+
+
+def test_pmi_reads_sector_performance_as_the_overall_index():
+    from publication_parsers import pmi
+
+    assert pmi.TERM_ALIASES["kinerja lu industri pengolahan"] == "PMI - BI"
+    # SKDU's wording in the same release is a different survey.
+    assert not any("kegiatan" in phrase for phrase in pmi.TERM_ALIASES)

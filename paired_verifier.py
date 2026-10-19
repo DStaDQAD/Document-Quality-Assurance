@@ -1257,6 +1257,50 @@ _DEFICIT_TREND_NOUN_FIRST = re.compile(
 )
 # A claim whose metric name starts with the deficit: "defisit neraca perdagangan migas".
 _DEFICIT_CLAIM_NAME = re.compile(r"\s*defisit\b", re.IGNORECASE)
+
+# Words that say which way a value moved. "Ekspansi"/"kontraksi" are not among them: they name a
+# level (PMI index above/below 50), and "perbaikan meskipun masih berada pada fase kontraksi" is
+# exactly where the extractor took the level for the direction.
+_SAID_UP = re.compile(
+    r"\b(lebih\s+tinggi|meningkat|peningkatan|naik|kenaikan|membaik|perbaikan|terakselerasi|"
+    r"akselerasi|menguat|penguatan)\b", re.IGNORECASE)
+_SAID_DOWN = re.compile(
+    r"\b(lebih\s+rendah|menurun|penurunan|turun|melambat|perlambatan|memburuk|melemah|pelemahan)\b",
+    re.IGNORECASE)
+_NEGATED = re.compile(r"\b(tidak|belum|bukan|tanpa)\s+(\w+\s+)?$", re.IGNORECASE)
+
+
+def _direction_said_for(fact: ExtractedFact, quote: str) -> Optional[str]:
+    """'is_increasing' / 'is_decreasing' when the WHOLE sentence words one direction only and
+    names the claim's metric; None when any word points the other way or is negated.
+
+    The whole sentence, not the part after the metric: SK's "IKK mengalami peningkatan tertinggi
+    di Pontianak, Medan, dan Padang, sementara penurunan IKK terbesar …" puts the direction BEFORE
+    the city, so reading from 'Pontianak' on found only "penurunan" and refuted 11 true claims.
+    """
+    words = [w for w in _sig_words(fact.display_label or "") if len(w) > 3]
+    if not any(w in quote.lower() for w in words):
+        return None
+    found = set()
+    for pattern, direction in ((_SAID_UP, "is_increasing"), (_SAID_DOWN, "is_decreasing")):
+        for match in pattern.finditer(quote):
+            if _NEGATED.search(quote[:match.start()]):
+                return None
+            found.add(direction)
+    return found.pop() if len(found) == 1 else None
+
+
+def _publication_level_claim(quote: str, table: BITableData) -> Optional[Tuple[str, float]]:
+    """("above" | "below", threshold) when the sentence states a level its publication defines
+    (TableData.level_phrases) and names no direction at all — "diprakirakan tetap berada pada fase
+    ekspansi" is PMI > 50, not a rise."""
+    phrases = getattr(table, "level_phrases", None) or {}
+    if _SAID_UP.search(quote) or _SAID_DOWN.search(quote):
+        return None
+    for pattern, level in phrases.items():
+        if re.search(pattern, quote, re.IGNORECASE):
+            return level
+    return None
 # The words among them that say the size went DOWN; every other one says it went up.
 _SIZE_DOWN = re.compile(
     r"menurun|turun|menyempit|mengecil|berkurang|lebih\s+(rendah|kecil|sempit)"
@@ -1447,11 +1491,31 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         values = [-v for v in values]
         size_note = " (dinilai pada besarnya; baris debit dicatat negatif)"
 
+    direction_note = ""
+    if not size_note and operation in ("is_increasing", "is_decreasing"):
+        said = _direction_said_for(fact, quote)
+        if said and said != operation:
+            # PMI Tw III-2026: "Kecepatan Penerimaan Barang Input … menunjukkan perbaikan meskipun
+            # masih berada pada fase kontraksi …, lebih tinggi dibandingkan 47,46%" came back
+            # is_decreasing — the extractor read "kontraksi" as the direction. The sentence is the
+            # claim: its own direction is judged. A wrong direction BY THE WRITER still refutes,
+            # because then the sentence and the data disagree.
+            operation = said
+            direction_note = " (arah dibaca dari kalimat: " + (
+                "naik" if said == "is_increasing" else "turun") + ")"
+
     band_note = ""
-    level_reason = None if size_note else _net_balance_level_claim(
+    publication_level = None if size_note or direction_note else _publication_level_claim(
+        quote, src.table
+    )
+    level_reason = None if size_note or publication_level else _net_balance_level_claim(
         fact, labelled[-1][0], src.table.unit
     )
-    if level_reason:
+    if publication_level:
+        side, threshold = publication_level
+        ok = values[-1] > threshold if side == "above" else values[-1] < threshold
+        band_note = f" (dinilai sebagai level {'>' if side == 'above' else '<'} {threshold:g}, bukan perubahan)"
+    elif level_reason:
         # The level at the claim's own (latest) period must be positive (= tumbuh / ekspansi).
         ok = values[-1] > 0
         band_note = f" (dinilai sebagai SBT positif: {level_reason})"
@@ -1466,7 +1530,9 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
         )
         band_note = f" (ambang stabil ±{round(max(bands), 4)})"
 
-    if not ok and operation == "is_stable" and not level_reason and _says_held_not_unchanged(quote):
+    band_note += direction_note
+    if not ok and operation == "is_stable" and not level_reason and not publication_level \
+            and _says_held_not_unchanged(quote):
         return _make_result(
             fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
             reasoning=(
@@ -2450,6 +2516,26 @@ def _judge_group_scope_members(
             continue
         if best is None or len(named_rows) > best[0]:
             best = (len(named_rows), src, found, excluded_rows)
+    if best is None:
+        # A table that is one breakdown with no parent row (PMI's T2 sub-sectors), named by the
+        # sentence ("sebagian besar Sub-LU") or by two or more of its rows in the claim (PMI Tw
+        # III-2026: the quote was only "berada pada fase ekspansi", the rows all 14 sub-sectors).
+        for src in sources:
+            group = getattr(src.table, "whole_table_group", None)
+            if src.origin == "chart" or not group:
+                continue
+            in_table = {r[0][0] for r in (
+                _try_resolve([PeriodPoint(p.metric_label, first.year, first.month, first.col_label)], src)[0]
+                for p in fact.periods) if r}
+            if len(in_table) < 2 and not re.search(group[0], fact.context_quote or "", re.IGNORECASE):
+                continue
+            family = [row for row in src.table.row_labels if not _AGGREGATE_GROUP_RE.match(row)]
+            excluded = _try_resolve(
+                [PeriodPoint(label, first.year, first.month, first.col_label) for label in fact.group_exclude],
+                src,
+            )[0]
+            best = (0, src, (family, group[1]), list(dict.fromkeys(label for label, _ in excluded)))
+            break
     if best is None:
         from_sentence = _family_from_sentence(fact, sources)
         if from_sentence:

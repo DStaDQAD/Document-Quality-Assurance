@@ -358,6 +358,14 @@ class TableData:
     # pembayaran utang luar negeri pemerintah", not the "5,6 bulan impor" printed before it.
     # Set by the publication parser; checked by paired_verifier._number_phrase_guard.
     number_phrases: Dict[str, str] = field(default_factory=dict, repr=False)
+    # The whole table is one breakdown with no parent row, as (regex the sentence names it with,
+    # its name): PMI's T2 lists the 14 sub-sectors side by side, so "PMI-BI pada sebagian besar
+    # Sub-LU berada pada fase ekspansi" had no group family to count. Set by the publication parser.
+    whole_table_group: Optional[Tuple[str, str]] = field(default=None, repr=False)
+    # Phrases that state a LEVEL, not a change, as {regex: ("above" | "below", threshold)}: PMI's
+    # "diprakirakan tetap berada pada fase ekspansi" is index > 50, not a rise. Applied to a trend
+    # claim whose sentence names no direction (paired_verifier._compute_trend).
+    level_phrases: Dict[str, Tuple[str, float]] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
