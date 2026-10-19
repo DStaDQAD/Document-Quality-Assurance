@@ -3749,3 +3749,21 @@ def test_without_layout_levels_the_group_guard_still_holds():
                                 table)
 
     assert result.verdict == "Inconclusive"
+
+
+@patch("paired_verifier.extract_structured_facts_async")
+@patch("paired_verifier.parse_bi_table")
+def test_verify_paired_does_not_show_the_extractor_a_skipped_section(mock_parse, mock_extract_facts):
+    # SBank: "Nilai SBT > 0 berarti lebih ketat" in the METODOLOGI came back as two threshold claims.
+    mock_parse.return_value = _make_table(data={})
+    mock_extract_facts.return_value = []
+    narrative = ("[== Halaman 1 ==]\nKredit baru tumbuh dengan SBT 93,08%." + " x" * 120
+                 + "\nMETODOLOGI\nNilai SBT > 0 berarti lebih ketat.\n[== Halaman 2 ==]\nTabel 1")
+
+    for publication, shown in (("sbank", False), ("", True)):
+        asyncio.run(verify_paired(narrative_text=narrative,
+                                  excel_sources=[(b"xls-bytes", "I.1", "TABEL1_1.xls")],
+                                  llm=Mock(), publication=publication))
+        sent = mock_extract_facts.call_args.args[0]
+        assert ("berarti lebih ketat" in sent) is shown
+        assert "SBT 93,08%" in sent

@@ -38,6 +38,11 @@ LAYOUT_LEVELS = frozenset({
     "realisasi per triwulan", "prakiraan per triwulan", "prakiraan selama setahun", "gabungan",
 })
 
+# The report's METODOLOGI explains the survey: "Nilai SBT > 0 berarti lebih ketat, dan SBT < 0 berarti
+# lebih longgar" came back as two threshold claims on the new-loans total. Not shown to the
+# extractor (paired_verifier.verify_paired, publication_parsers.skipped_sections).
+SKIPPED_SECTIONS = (r"metodologi",)
+
 
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)

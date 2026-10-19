@@ -42,7 +42,7 @@ from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _expand_report_terms, _same_root, _sig_words, label_match_score
 from publication_parsers import load_grid as _load_grid
-from publication_parsers import parse_for_publication
+from publication_parsers import parse_for_publication, skipped_sections
 from table_parser_generic import (
     _MONTH_ABBREVS,
     parse_generic_grid,
@@ -61,6 +61,7 @@ from structured_extractor import (
     ExtractedFact,
     PeriodPoint,
     attach_section_headings,
+    drop_sections,
     extract_structured_facts,
     extract_structured_facts_async,
 )
@@ -4781,8 +4782,10 @@ async def verify_paired(
     def _on_chunk_progress(done: int, total: int) -> None:
         emit("extract", "running", current=done, total=total, detail=f"{total} bagian teks")
 
+    # Sections the publication marks as holding no claims (SBank's METODOLOGI) are never shown
+    # to the extractor: their figures ("SBT > 0 berarti lebih ketat") only look like claims.
     raw_facts = await extract_structured_facts_async(
-        narrative_text,
+        drop_sections(narrative_text, skipped_sections(publication)),
         all_row_labels,
         extraction_primary,
         fallback_llm=extraction_fallback,

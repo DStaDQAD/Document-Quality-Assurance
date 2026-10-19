@@ -25,7 +25,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Literal, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Sequence, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
@@ -1374,6 +1374,31 @@ def _is_section_heading(line: str) -> bool:
     digits = sum(c.isdigit() for c in line)
     return (letters >= 4 and digits * 2 <= letters and line == line.upper()
             and len(line.split()) <= _HEADING_MAX_WORDS)
+
+
+# Where a skipped section ends when no heading follows it: SBank's METODOLOGI runs straight into
+# the appendix's 'Tabel 1' caption.
+_CAPTION_LINE = re.compile(r"(Tabel|Grafik|Gambar|Lampiran)\s+\d+\b", re.IGNORECASE)
+
+
+def drop_sections(narrative_text: str, headings: Sequence[str]) -> str:
+    """The narrative without the sections whose heading matches one of `headings` (regexes on the
+    whole heading line, case-insensitive): from the heading up to the next heading or table/chart
+    caption. Page markers stay, so the pages after it keep their numbers."""
+    if not headings:
+        return narrative_text
+    patterns = [re.compile(h, re.IGNORECASE) for h in headings]
+    kept: List[str] = []
+    skipping = False
+    for line in narrative_text.split("\n"):
+        stripped = line.strip()
+        if _is_section_heading(stripped):
+            skipping = any(p.fullmatch(stripped) for p in patterns)
+        elif skipping and _CAPTION_LINE.match(stripped):
+            skipping = False
+        if not skipping or stripped.startswith("[=="):
+            kept.append(line)
+    return "\n".join(kept)
 
 
 def attach_section_headings(facts: List[ExtractedFact], narrative_text: str) -> None:

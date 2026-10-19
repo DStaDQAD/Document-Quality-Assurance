@@ -17,6 +17,7 @@ from structured_extractor import (
     _parse_indonesian_number,
     _split_into_page_chunks,
     attach_section_headings,
+    drop_sections,
     extract_structured_facts,
     extract_structured_facts_async,
 )
@@ -1293,3 +1294,38 @@ def test_labels_for_chunk_keeps_a_sheet_that_fits_and_cuts_a_huge_one_by_relevan
     assert "Transfer personal > Pembayaran" in chosen and len(chosen) == 3
     assert chosen == [r for r in rows if r in chosen]  # the sheet's order is kept
     assert _labels_for_chunk(None, chunk) is None
+
+
+_SBANK_TAIL = "\n".join([
+    "[== Halaman 2 ==]",
+    "Penghimpunan DPK diprakirakan tetap tumbuh dengan SBT 87,52%.",
+    "[== Halaman 3 ==]",
+    "METODOLOGI",
+    "Survei Perbankan dilaksanakan secara triwulanan sejak triwulan III 1999.",
+    "Nilai SBT > 0 berarti lebih ketat, dan SBT < 0 berarti lebih longgar.",
+    "[== Halaman 4 ==]",
+    "Tabel 1",
+    "Penyaluran Kredit Baru Berdasarkan Jenis Kredit (SBT, %)",
+])
+
+
+def test_drop_sections_cuts_a_section_up_to_the_next_caption_and_keeps_page_markers():
+    text = drop_sections(_SBANK_TAIL, (r"metodologi",))
+
+    assert "berarti lebih ketat" not in text
+    assert "METODOLOGI" not in text
+    assert "SBT 87,52%" in text  # before the heading
+    assert "Tabel 1" in text and "Penyaluran Kredit Baru" in text  # after it
+    assert text.count("[== Halaman") == 3
+
+
+def test_drop_sections_stops_at_the_next_heading():
+    text = "METODOLOGI\nCara survei.\nPERKEMBANGAN KREDIT\nKredit tumbuh 9,1%."
+
+    assert drop_sections(text, (r"metodologi",)) == "PERKEMBANGAN KREDIT\nKredit tumbuh 9,1%."
+
+
+def test_drop_sections_without_headings_returns_the_text_unchanged():
+    assert drop_sections(_SBANK_TAIL, ()) == _SBANK_TAIL
+    # A heading that only contains the word is not the section.
+    assert "Cara" in drop_sections("METODOLOGI BARU\nCara survei.", (r"metodologi",))

@@ -28,7 +28,10 @@ PARSERS: Dict[str, ModuleType] = {
     "pmi": pmi,
 }
 
-__all__ = ["PARSERS", "PublicationParseError", "covers", "load_grid", "parse_for_publication"]
+__all__ = [
+    "PARSERS", "PublicationParseError", "covers", "load_grid", "parse_for_publication",
+    "skipped_sections",
+]
 
 
 def covers(publication: str, sheet_name: str) -> bool:
@@ -44,3 +47,11 @@ def parse_for_publication(publication: str, data: bytes, sheet_name: str) -> Opt
     if not covers(publication, sheet_name):
         return None
     return PARSERS[publication].parse(data, sheet_name)
+
+
+def skipped_sections(publication: str) -> tuple:
+    """Headings (regexes on the whole heading line) of report sections the extractor is not shown:
+    they hold no claim about the data, only figures that look like one (SBank's METODOLOGI:
+    "Nilai SBT > 0 berarti lebih ketat")."""
+    module = PARSERS.get(publication or "")
+    return tuple(getattr(module, "SKIPPED_SECTIONS", ()))

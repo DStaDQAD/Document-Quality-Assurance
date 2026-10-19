@@ -361,3 +361,11 @@ def test_sbank_marks_its_net_balance_tables_and_names_dpk(monkeypatch):
         [None, "TOTAL", None, "TOTAL", 93.08],
     ])
     assert parse_for_publication("sbank", b"bytes", "Tabel1").term_aliases == {}
+
+
+def test_only_sbank_skips_its_methodology_section():
+    from publication_parsers import skipped_sections
+
+    assert skipped_sections("sbank") == (r"metodologi",)
+    assert skipped_sections("npi") == ()
+    assert skipped_sections("") == ()
