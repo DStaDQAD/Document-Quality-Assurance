@@ -4096,3 +4096,43 @@ def test_a_cited_table_that_cannot_answer_is_not_replaced_by_another():
 
     assert result.verdict == "Inconclusive"
     assert "merujuk Tabel 8" in result.reasoning
+
+
+def _shpr_growth():
+    """SHPR Tabel 3: every city under a quarterly and a yearly band, one unit for both."""
+    data = {("TRIWULANAN (QTQ) > PADANG > TOTAL", 2026, "Q1"): 1.08,
+            ("TRIWULANAN (QTQ) > PADANG > TOTAL", 2026, "Q2"): -0.25,
+            ("TAHUNAN (YOY) > PADANG > TOTAL", 2026, "Q1"): 1.21,
+            ("TAHUNAN (YOY) > PADANG > TOTAL", 2026, "Q2"): 0.63}
+    table = _make_table(title="TABEL 3", unit="%, qtq & yoy", data=data)
+    return [_make_source(table, filename="SHPR.xlsx", sheet="TABEL 3")]
+
+
+_PADANG = ("IHPR di sejumlah kota tercatat tumbuh lebih rendah dibandingkan triwulan sebelumnya, terutama "
+           "di Padang yang terkontraksi sebesar {}% (qtq) (Tabel 3).")
+
+
+@pytest.mark.parametrize("printed, value, verdict", [("0,25", -0.25, "Entailed"), ("0,26", -0.26, "Refuted")])
+def test_a_qtq_claim_is_read_in_the_quarterly_band(printed, value, verdict):
+    # SHPR Tw II-2026: the claim found the yearly band's Padang (0,63), was refused as the wrong
+    # kind, and the report's 0,26 — the table says -0,25 — went unchecked.
+    fact = _make_fact(operation="value", claimed_value=value, unit="persen",
+                      context_quote=_PADANG.format(printed),
+                      periods=[_make_period(metric_label="Padang > TOTAL", month="Q2")])
+
+    result = _evaluate_fact_safely(fact, _shpr_growth())
+
+    assert result.verdict == verdict
+    assert "TRIWULANAN (QTQ) > PADANG > TOTAL" in result.reasoning
+
+
+def test_a_growth_section_under_a_level_unit_is_not_a_band():
+    # NPI's 'Id' keeps a 'Pertumbuhan (%, yoy)' section under 'Juta USD'; its rows are not bands.
+    from paired_verifier import _in_the_claims_band
+    table = _make_table(title="NPI", unit="Juta USD", data={
+        ("Pertumbuhan (%, yoy) > Ekspor", 2026, "Q2"): 5.0, ("Ekspor", 2026, "Q2"): 70000.0})
+    fact = _make_fact(operation="value", claimed_value=5.0, unit="persen",
+                      context_quote="Ekspor tumbuh 5,0% (yoy).",
+                      periods=[_make_period(metric_label="Ekspor", month="Q2")])
+
+    assert _in_the_claims_band(fact, _make_source(table)) is None

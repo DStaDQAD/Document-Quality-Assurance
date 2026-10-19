@@ -867,6 +867,30 @@ def _growth_kind(unit: Optional[str], label: str) -> Optional[str]:
     return in_unit.pop() if len(in_unit) == 1 else "mixed"
 
 
+def _in_the_claims_band(fact: ExtractedFact, src: "_ExcelSource"):
+    """The claim resolved inside the band of `src` that holds the growth kind the claim states, or
+    None. SHPR Tabel 3 repeats every city under 'TRIWULANAN (QTQ)' and 'TAHUNAN (YOY)'; "Padang …
+    terkontraksi sebesar 0,26% (qtq)" found the yoy band's Padang (0,63), which was then refused as
+    the wrong kind, and the claim — off by 0,01 from the qtq band's -0,25 — went unchecked."""
+    kind = _claimed_rate_kind(fact)
+    # Only a table whose unit itself says its cells are several growth kinds side by side ('%,
+    # qtq & yoy'); NPI's 'Id' has a yoy growth section under a 'Juta USD' unit, and its rows there
+    # are not the bands of one series.
+    if not kind or len({k.lower() for k in _GROWTH_KIND_RE.findall(src.table.unit or "")}) < 2:
+        return None
+    band = next((level for level in dict.fromkeys(row.split(QUAL_SEP)[0] for row in src.table.row_labels)
+                 if kind in {k.lower() for k in _GROWTH_KIND_RE.findall(level)}), None)
+    if band is None:
+        return None
+    points = [p if (p.metric_label or "").upper().startswith(band.upper())
+              else PeriodPoint(band + QUAL_SEP + (p.metric_label or ""), p.year, p.month, p.col_label)
+              for p in fact.periods]
+    resolved, missing, col_units = _try_resolve(points, src)
+    if missing or not all(label.startswith(band) for label, _ in resolved):
+        return None
+    return resolved, missing, col_units
+
+
 def _not_a_yoy_cell(fact: ExtractedFact, label: str, src: "_ExcelSource") -> Optional[str]:
     """The growth kind of a cell a yoy claim landed on, when it is NOT a yoy figure.
 
@@ -3271,7 +3295,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     candidates: List[_Candidate] = []
 
     for src in sources:
-        resolved, missing, col_units = _try_resolve(fact.periods, src)
+        resolved, missing, col_units = _in_the_claims_band(fact, src) or _try_resolve(fact.periods, src)
         if missing:
             if best_missing is None or len(missing) < len(best_missing):
                 best_missing = missing
