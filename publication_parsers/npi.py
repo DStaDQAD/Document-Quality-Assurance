@@ -51,6 +51,15 @@ TERM_ALIASES = {
     # Not a bare "bunga", which is also direct-investment and loan interest.
     "pembayaran kupon/bunga": "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran",
     "pembayaran kupon": "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran",
+    # A bare "investasi lainnya" is the financial-account item ("investasi lainnya mencatat defisit
+    # yang lebih rendah": -7.359 -> -1.037); the income on it is always named as income. Safe only
+    # because aliases apply in one pass (TableData._apply_aliases): the two income phrases below
+    # are matched first and never rewritten again.
+    "neraca pendapatan atas investasi lainnya": "Pendapatan investasi lainnya",
+    "neraca pendapatan investasi lainnya": "Pendapatan investasi lainnya",
+    "pendapatan atas investasi lainnya": "Pendapatan investasi lainnya",
+    "pendapatan investasi lainnya": "Pendapatan investasi lainnya",
+    "investasi lainnya": "Transaksi Finansial > Investasi Lainnya",
     "neraca pembayaran indonesia": "Neraca Keseluruhan",
     "npi": "Neraca Keseluruhan",
     # Residents buying foreign securities = portfolio investment, asset side (-1.488 = 1,5).
@@ -97,6 +106,24 @@ ABSENT_ITEMS = {
 }
 
 
+# Words that pick one child of the matched row (TableData.child_keywords). Tw II-2026: "Di pasar
+# surat utang, sisi kewajiban sektor swasta mencatat net inflow 1,5" is the 'Surat utang' child
+# (1.526), not private-sector portfolio liabilities as a whole (-1.609, shares included).
+# "pasar saham", not a bare "saham": a chart caption ("Indeks Bursa Saham …") lands in sentences.
+CHILD_KEYWORDS = {
+    r"\bsurat\s+utang\b": "Surat utang",
+    r"\bpasar\s+saham\b": "Modal ekuitas",
+}
+
+# Rows that answer only a number followed by these words (TableData.number_phrases): reserves
+# are "5,6 bulan impor atau 5,4 bulan impor dan pembayaran utang luar negeri pemerintah", and
+# the workbook has only the second measure.
+NUMBER_PHRASES = {
+    "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah":
+        r"bulan\s+impor\s+dan\s+pembayaran",
+}
+
+
 # Rows the parser names by their own word alone (it keeps the shortest name that is unique), but
 # that the report only ever names with their parent: "defisit jasa transportasi penumpang" found
 # no row in Tw II-2026, while 'Transportasi > Barang' (named in full because 'Barang' repeats)
@@ -124,4 +151,6 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     _add_memo_balances(table)
     table.term_aliases = dict(TERM_ALIASES)
     table.absent_items = dict(ABSENT_ITEMS)
+    table.child_keywords = dict(CHILD_KEYWORDS)
+    table.number_phrases = dict(NUMBER_PHRASES)
     return table

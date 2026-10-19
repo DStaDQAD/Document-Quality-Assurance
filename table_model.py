@@ -348,6 +348,16 @@ class TableData:
     # not crude oil alone. Set by the publication parser; a claim whose own name is one of them,
     # answered here by a row that is not, is made Tidak Cukup Data (paired_verifier._absent_item_guard).
     absent_items: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Words in a sentence that pick one child of the matched row, as {regex: child's own name}:
+    # NPI's "pasar surat utang" means the 'Surat utang' child of the private-sector portfolio
+    # liabilities, not the row itself (shares plus debt). Set by the publication parser; used by
+    # paired_verifier._child_named_in_sentence.
+    child_keywords: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Rows that answer only a number the sentence follows with these words, as {row: regex}:
+    # NPI's 'Dalam Bulan Impor dan Pembayaran ULN Pemerintah' answers "5,4 bulan impor dan
+    # pembayaran utang luar negeri pemerintah", not the "5,6 bulan impor" printed before it.
+    # Set by the publication parser; checked by paired_verifier._number_phrase_guard.
+    number_phrases: Dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)
@@ -841,8 +851,7 @@ class TableData:
         but the abbreviation is rewritten, and only when this table uses it for one name.
         """
         query = _expand_report_terms(query)
-        for pattern, row_name in self._alias_patterns():
-            query = pattern.sub(row_name, query)
+        query = self._apply_aliases(query)
         abbreviations = self._abbreviations()
         if not abbreviations:
             return query
@@ -863,12 +872,34 @@ class TableData:
             return full
         return level
 
-    def _alias_patterns(self) -> List[Tuple["re.Pattern", str]]:
+    def _apply_aliases(self, query: str) -> str:
+        """term_aliases applied in ONE pass, longest phrase first at each position: a row name an
+        alias wrote is never rewritten by a shorter alias. Applied one after another, NPI's
+        "pendapatan atas investasi lainnya" -> 'Pendapatan investasi lainnya' was then caught by
+        "investasi lainnya" and sent to the financial-account row.
+
+        A row name an alias points to stays as it is, so applying this twice changes nothing: the
+        lookup tiers normalise an already-normalised query again."""
+        if not self.term_aliases:
+            return query
+        targets = {row: row for row in self.term_aliases.values()
+                   if row.lower() not in {phrase.lower() for phrase in self.term_aliases}}
+        patterns = self._alias_patterns({**self.term_aliases, **targets})
+        combined = re.compile("|".join(f"(?:{p.pattern})" for p, _ in patterns), re.IGNORECASE)
+
+        def _row_for(match: "re.Match") -> str:
+            return next(row for p, row in patterns if p.fullmatch(match.group(0)))
+
+        return combined.sub(_row_for, query)
+
+    def _alias_patterns(self, aliases: Optional[Dict[str, str]] = None) -> List[Tuple["re.Pattern", str]]:
         """term_aliases as (pattern, row name), longest phrase first so 'uln sektor publik' wins
-        over 'sektor publik'. Whole words, any case, any spacing."""
+        over 'sektor publik'. Whole words, any case, any spacing. The edges are lookarounds rather
+        than word boundaries so a phrase may end in ')' ('… TKI (ribuan orang)')."""
+        aliases = self.term_aliases if aliases is None else aliases
         return [
-            (re.compile(r"\b" + r"\s+".join(map(re.escape, phrase.split())) + r"\b", re.IGNORECASE), row)
-            for phrase, row in sorted(self.term_aliases.items(), key=lambda kv: -len(kv[0]))
+            (re.compile(r"(?<!\w)" + r"\s+".join(map(re.escape, phrase.split())) + r"(?!\w)", re.IGNORECASE), row)
+            for phrase, row in sorted(aliases.items(), key=lambda kv: -len(kv[0]))
         ]
 
     # The abbreviation a row level ends with: 'Indeks Keyakinan Konsumen (IKK)' -> 'IKK'.

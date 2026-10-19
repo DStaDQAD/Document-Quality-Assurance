@@ -20,7 +20,18 @@ UNCOVERED_SECTIONS = {
 }
 
 
+# Uang Primer (M0) items, which I.1 / I.1A never split out but whose words overlap M2's rows. UB
+# Agustus 2026: "uang kartal yang diedarkan sebesar 12,9%" (M0, the report's Tabel 9) was accepted
+# on M2's 'Uang Kartal di Luar Bank Umum dan BPR' by the Tinjauan AI — the same 12,9 by chance.
+ABSENT_ITEMS = {
+    r"\buang\s+kartal\s+yang\s+diedarkan\b": "uang kartal yang diedarkan (komponen M0)",
+    r"\bgiro\s+bank\s+umum\s+di\s+(bank\s+indonesia|BI)\b": "giro bank umum di Bank Indonesia (komponen M0)",
+    r"\buang\s+primer\b|\b(?-i:M0)\b": "Uang Primer (M0)",
+}
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_bi_reader(data, sheet_name)
     table.uncovered_sections = dict(UNCOVERED_SECTIONS)
+    table.absent_items = dict(ABSENT_ITEMS)
     return table

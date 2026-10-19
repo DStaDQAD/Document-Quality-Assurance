@@ -370,7 +370,7 @@ def review_candidates(results: List[FactVerificationResult]) -> List[int]:
     ]
 
 
-_GUARDED = ("section_guard", "absent_item_guard")
+_GUARDED = ("section_guard", "absent_item_guard", "number_phrase_guard")
 
 
 def _claim_line(n: int, r: FactVerificationResult) -> str:

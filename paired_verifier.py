@@ -3778,6 +3778,110 @@ def _absent_item_guard(
     return result
 
 
+_NO_NUMBER_OPS = {"above_threshold", "below_threshold", "is_increasing", "is_decreasing", "is_stable"}
+
+
+def _number_phrase_guard(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """A row that only answers a number the sentence follows with certain words, used for another.
+
+    The publication parser lists such rows (TableData.number_phrases). NPI Tw II-2026: "setara
+    dengan pembiayaan 5,6 bulan impor atau 5,4 bulan impor dan pembayaran utang luar negeri
+    pemerintah" — the extractor put 5,6 on 'Dalam Bulan Impor dan Pembayaran ULN Pemerintah'
+    (5,41), the row of the 5,4. The words printed after the claim's own number decide. Not for a
+    threshold or a trend, which state no figure of the row (5,41 months of imports and debt
+    payments does show reserves above "3 bulan impor").
+    """
+    if result.verdict == "Inconclusive" or fact.operation in _NO_NUMBER_OPS or fact.claimed_value is None:
+        return result
+    src = next((s for s in sources if s.label == result.matched_excel_source), None)
+    phrases = getattr(src.table, "number_phrases", None) if src is not None else None
+    if not phrases:
+        return result
+    quote = fact.context_quote or ""
+    for row in dict.fromkeys(p.metric_label for p in result.periods):
+        if row not in phrases:
+            continue
+        afters = [quote[m.end():m.end() + 80] for m in _PRINTED_NUMBER.finditer(quote)
+                  if any(abs(n - abs(fact.claimed_value)) < 1e-9 for n, _ in _readings(m.group(0)))]
+        if not afters or any(re.match(r"\W*" + phrases[row], a, re.IGNORECASE) for a in afters):
+            continue
+        said = " ".join(afters[0].split()[:4])
+        return result.model_copy(update={
+            "verdict": "Inconclusive", "computed_value": None, "delta": None,
+            "resolved_via": "number_phrase_guard",
+            "reasoning": (
+                f"Angka {fact.claimed_value:g} di kalimat diikuti '{said}…', bukan ukuran baris "
+                f"'{row}'; tabel {src.sheet} tidak memuat ukuran itu. | {result.reasoning}"
+            ),
+        })
+    return result
+
+
+def _child_named_in_sentence(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """The verdict on the matched row's child when the sentence names that child.
+
+    The publication parser lists the words (TableData.child_keywords). NPI Tw II-2026: "Di pasar
+    surat utang, sisi kewajiban sektor swasta mencatat net inflow sebesar 1,5 miliar dolar AS"
+    was refuted on the private-sector portfolio liabilities (−1,61, shares plus debt) while its
+    'Surat utang' child holds 1,53. Only when exactly one listed child is named, and exactly one
+    such child sits under the row.
+    """
+    if result.matched_excel_source is None:
+        return result
+    src = next((s for s in sources if s.label == result.matched_excel_source), None)
+    keywords = getattr(src.table, "child_keywords", None) if src is not None else None
+    rows = list(dict.fromkeys(p.metric_label for p in result.periods))
+    if not keywords or len(rows) != 1:
+        return result
+    named = {child for pattern, child in keywords.items()
+             if re.search(pattern, fact.context_quote or "", re.IGNORECASE)}
+    if len(named) != 1:
+        return result
+    child = named.pop()
+    row_levels = [level.strip().lower() for level in rows[0].split(QUAL_SEP.strip())]
+    if row_levels[-1] == child.lower():
+        return result
+
+    def _under_row(label: str) -> bool:
+        levels = [level.strip().lower() for level in label.split(QUAL_SEP.strip())]
+        parent = levels[:-1]
+        return levels[-1] == child.lower() and bool(parent) and row_levels[-len(parent):] == parent
+
+    children = [label for label in src.table.row_labels if _under_row(label)]
+    if len(children) != 1:
+        return result
+    moved = ExtractedFact(
+        operation=fact.operation,
+        periods=[PeriodPoint(metric_label=children[0], year=p.year, month=p.month, col_label=p.col_label)
+                 for p in fact.periods],
+        claimed_value=fact.claimed_value, unit=fact.unit, context_quote=fact.context_quote,
+        page_number=fact.page_number, group_scope=fact.group_scope,
+    )
+    on_child = _evaluate_fact(moved, [src])
+    if on_child.verdict == "Inconclusive":
+        return result
+    return on_child.model_copy(update={
+        "metric_label": result.metric_label,
+        "reasoning": f"Kalimat menyebut '{child}'; dinilai pada baris '{children[0]}'. | {on_child.reasoning}",
+    })
+
+
+def _publication_guards(
+    fact: ExtractedFact, result: FactVerificationResult, sources: List[_ExcelSource]
+) -> FactVerificationResult:
+    """The checks a publication parser configures (report sections, absent breakdowns, number
+    phrases). Run after the code path and again after the cell pointer and the Tinjauan AI, which
+    can put a claim on the same wrong row (UB "uang kartal yang diedarkan" was accepted on M2's
+    currency row by the review)."""
+    result = _section_guard(fact, result, sources)
+    result = _absent_item_guard(fact, result, sources)
+    return _number_phrase_guard(fact, result, sources)
+
+
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     """_evaluate_fact, with any failure contained to the one claim that caused it.
 
@@ -3789,8 +3893,8 @@ def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> F
     """
     try:
         result = _unnamed_total_guard(fact, _evaluate_fact(fact, sources))
-        result = _section_guard(fact, result, sources)
-        return _absent_item_guard(fact, result, sources)
+        result = _child_named_in_sentence(fact, result, sources)
+        return _publication_guards(fact, result, sources)
     except Exception as exc:
         logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
         return _make_result(
@@ -4622,6 +4726,11 @@ async def verify_paired(
                 n_reviewed, n_flagged = review_stats.changed, review_stats.flagged
             except Exception:
                 logger.warning("Tinjauan AI gagal; vonis kode dipertahankan", exc_info=True)
+
+    # The publication's own checks once more, over verdicts the cell pointer or the review reached.
+    results = [
+        _publication_guards(fact, result, table_sources) for fact, result in zip(facts, results)
+    ] + results[len(facts):]
 
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")

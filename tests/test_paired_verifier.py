@@ -3512,3 +3512,78 @@ def test_absent_item_guard_leaves_the_total_itself_alone():
     )
 
     assert _evaluate_fact_safely(fact, [_make_source(_npi_oil_table())]).verdict == "Entailed"
+
+
+# ---------------------------------------------------------------------------
+# Publication checks added after NPI Tw II-2026 / UB Agustus 2026
+# ---------------------------------------------------------------------------
+
+_RESERVES_QUOTE = ("Posisi cadangan devisa pada akhir Juni 2026 tetap terjaga sebesar 145,6 miliar dolar AS, "
+                   "yang setara dengan pembiayaan 5,6 bulan impor atau 5,4 bulan impor dan pembayaran utang "
+                   "luar negeri pemerintah.")
+_MONTHS_ROW = "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah"
+
+
+def _reserves_source():
+    table = _npi_table({(_MONTHS_ROW, 2026, "Q2"): 5.41, ("Posisi Cadangan Devisa", 2026, "Q2"): 145593.58,
+                        ("Transaksi Berjalan", 2026, "Q2"): -12487.42})
+    table.number_phrases = {_MONTHS_ROW: r"bulan\s+impor\s+dan\s+pembayaran"}  # as npi.py
+    return _make_source(table)
+
+
+@pytest.mark.parametrize("operation, claimed, verdict", [
+    ("value", 5.6, "Inconclusive"),         # "5,6 bulan impor atau …" is imports only: not in the workbook
+    ("value", 5.4, "Entailed"),             # "5,4 bulan impor dan pembayaran …" is this row
+    ("above_threshold", 3.0, "Entailed"),   # a threshold states no figure of the row
+])
+def test_number_phrase_guard_reads_the_words_after_the_claims_own_number(operation, claimed, verdict):
+    fact = _make_fact(operation=operation, claimed_value=claimed, unit="bulan", context_quote=_RESERVES_QUOTE,
+                      periods=[_make_period(metric_label=_MONTHS_ROW, month="Q2")])
+
+    assert _evaluate_fact_safely(fact, [_reserves_source()]).verdict == verdict
+
+
+def test_a_sentence_naming_the_debt_market_is_judged_on_the_debt_child_row():
+    # NPI Tw II-2026: refuted on the private portfolio liabilities (shares + debt, −1,61); the
+    # 'Surat utang' child holds +1,53. The chart caption's "Bursa Saham" must not count as "saham".
+    table = _npi_table({
+        ("Transaksi Finansial > Investasi Portofolio > Kewajiban > Sektor swasta", 2026, "Q2"): -1609.48,
+        ("Kewajiban > Sektor swasta > Surat utang", 2026, "Q2"): 1525.97,
+        ("Kewajiban > Sektor swasta > Modal ekuitas", 2026, "Q2"): -3135.45,
+        ("Aset > Sektor swasta > Surat utang", 2026, "Q2"): -881.09,
+    })
+    table.child_keywords = {r"\bsurat\s+utang\b": "Surat utang", r"\bpasar\s+saham\b": "Modal ekuitas"}
+    fact = _make_fact(
+        claimed_value=1.5, unit="miliar USD",
+        periods=[_make_period(metric_label="Investasi Portofolio > Kewajiban > Sektor swasta", month="Q2")],
+        context_quote=("Perkembangan Indeks Bursa Saham Beberapa Negara ASEAN Di pasar surat utang, sisi "
+                       "kewajiban sektor swasta mencatat net inflow sebesar 1,5 miliar dolar AS."),
+    )
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].metric_label == "Kewajiban > Sektor swasta > Surat utang"
+
+
+def test_publication_guards_also_catch_a_verdict_the_review_put_on_the_wrong_row():
+    # UB Agustus 2026: the Tinjauan AI accepted M0's "uang kartal yang diedarkan 12,9%" on M2's
+    # currency row. The guards run again after the review and set it aside.
+    from paired_verifier import _publication_guards
+
+    table = _make_table(title="UANG BEREDAR", unit="Miliar Rp",
+                        data={("Uang Kartal di Luar Bank Umum dan BPR", 2026, "Aug"): 1222488.2})
+    table.absent_items = {r"\buang\s+kartal\s+yang\s+diedarkan\b": "uang kartal yang diedarkan (komponen M0)"}
+    source = _make_source(table, filename="TABEL1_1_1.xls", sheet="I.1A")
+    fact = _make_fact(operation="yoy_growth", claimed_value=12.9, unit="persen_yoy",
+                      periods=[_make_period(metric_label="uang kartal yang diedarkan", year=2026, month="Aug")],
+                      context_quote="… dan uang kartal yang diedarkan sebesar 12,9% (yoy).")
+    reviewed = FactVerificationResult(
+        metric_label="Uang Kartal di Luar Bank Umum dan BPR", operation="yoy_growth", claimed_value=12.9,
+        verdict="Entailed", matched_excel_source=source.label, resolved_via="ai_review",
+        reasoning="Ditinjau AI", context_quote=fact.context_quote,
+        periods=[{"metric_label": "Uang Kartal di Luar Bank Umum dan BPR", "year": 2026, "month": "Aug",
+                  "excel_value": 1222488.2}],
+    )
+
+    assert _publication_guards(fact, reviewed, [source]).verdict == "Inconclusive"

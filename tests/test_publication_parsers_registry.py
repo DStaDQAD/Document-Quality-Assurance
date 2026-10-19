@@ -257,4 +257,33 @@ def test_npi_reads_coupon_payments_as_portfolio_interest():
 
     assert npi.TERM_ALIASES["pembayaran kupon/bunga"] == (
         "Pendapatan investasi portofolio > Pendapatan utang (bunga) > Pembayaran")
-    assert "investasi lainnya" not in npi.TERM_ALIASES  # would rewrite "pendapatan investasi lainnya" too
+    # Safe only with the income phrases beside it, now that aliases apply in one pass.
+    assert npi.TERM_ALIASES["investasi lainnya"] == "Transaksi Finansial > Investasi Lainnya"
+    assert npi.TERM_ALIASES["pendapatan atas investasi lainnya"] == "Pendapatan investasi lainnya"
+
+
+def test_aliases_apply_in_one_pass_and_twice_change_nothing():
+    # NPI: "pendapatan atas investasi lainnya" must stay the income row although the shorter
+    # "investasi lainnya" points to the financial-account row.
+    table = TableData(title="t", unit="Juta USD", row_labels=[])
+    table.term_aliases = {"pendapatan atas investasi lainnya": "Pendapatan investasi lainnya",
+                          "pendapatan investasi lainnya": "Pendapatan investasi lainnya",
+                          "investasi lainnya": "Transaksi Finansial > Investasi Lainnya"}
+
+    once = table._apply_aliases("neraca pendapatan atas investasi lainnya")
+
+    assert once == "neraca Pendapatan investasi lainnya"
+    assert table._apply_aliases(once) == once
+    assert table._apply_aliases("Investasi Lainnya") == "Transaksi Finansial > Investasi Lainnya"
+
+
+@patch("publication_parsers._common.parse_bi_table")
+def test_uang_beredar_lists_the_m0_items_it_does_not_hold(mock_bi):
+    mock_bi.return_value = TableData(title="t", unit="Miliar Rp", row_labels=["Uang Kuasi"],
+                                     _data={("Uang Kuasi", 2026, "Aug"): 1.0})
+
+    table = parse_for_publication("uang-beredar", b"bytes", "I.1A")
+
+    for name in ("uang kartal yang diedarkan", "giro bank umum di Bank Indonesia adjusted", "Uang Primer (M0) adjusted"):
+        assert any(re.search(p, name, re.IGNORECASE) for p in table.absent_items), name
+    assert not any(re.search(p, "Uang Kartal di Luar Bank Umum dan BPR", re.IGNORECASE) for p in table.absent_items)
