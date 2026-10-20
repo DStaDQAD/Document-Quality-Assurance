@@ -4136,3 +4136,28 @@ def test_a_growth_section_under_a_level_unit_is_not_a_band():
                       periods=[_make_period(metric_label="Ekspor", month="Q2")])
 
     assert _in_the_claims_band(fact, _make_source(table)) is None
+
+
+def test_a_combined_share_is_not_summed_from_one_group_the_sentence_never_names():
+    # SULNI Okt 2026: with the denominator named only 'TOTAL', Tbl III.6 (by kind of borrower)
+    # answered first and summed its 'Perusahaan Induk' sector rows (62,4%) against the claim's
+    # 80,5% of all private debt, which Tbl III.2's sector rows give.
+    by_borrower = _make_table(title="Tabel III.6 ULN Swasta menurut Kelompok Peminjam", unit="Juta USD", data={
+        ("Perusahaan Induk > Industri Pengolahan", 2026, "Aug"): 23694.5,
+        ("Perusahaan Induk > Jasa Keuangan", 2026, "Aug"): 498.8,
+        ("Anak Perusahaan > Industri Pengolahan", 2026, "Aug"): 30787.3,
+        ("TOTAL", 2026, "Aug"): 38291.0})
+    by_sector = _make_table(title="Tabel III.2 ULN Swasta menurut Sektor Ekonomi", unit="Juta USD", data={
+        ("Industri Pengolahan", 2026, "Aug"): 54481.8, ("Jasa Keuangan", 2026, "Aug"): 38995.5,
+        ("Konstruksi", 2026, "Aug"): 22000.0, ("TOTAL", 2026, "Aug"): 115477.3})
+    fact = _make_fact(operation="ratio", claimed_value=80.9, unit="persen",
+                      context_quote="ULN swasta terutama berasal dari Sektor Industri Pengolahan dan Jasa Keuangan "
+                                    "dengan pangsa mencapai 80,9% dari total ULN swasta.",
+                      periods=[_make_period(metric_label=m, month="Aug")
+                               for m in ("Industri Pengolahan", "Jasa Keuangan", "TOTAL")])
+
+    result = _evaluate_fact_safely(fact, [_make_source(by_borrower, sheet="Tbl III.6"),
+                                          _make_source(by_sector, sheet="Tbl III.2")])
+
+    assert result.verdict == "Entailed"
+    assert "Tbl III.2" in result.reasoning

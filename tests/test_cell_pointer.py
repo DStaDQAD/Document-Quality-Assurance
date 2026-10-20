@@ -651,3 +651,18 @@ def test_select_rows_keeps_the_total_row_a_whole_table_claim_needs():
     queries = [PointQuery(fact_index=0, data_key=("SBT tenaga kerja", 2026, "Q1"), desc="d")]
     rows = _select_rows(grid, queries)
     assert 8 in rows
+
+
+def test_pointer_column_guard_looks_past_the_columns_own_figures_for_its_header():
+    # SULNI TabI.7 keeps 'Rasio Utang terhadap PDB' a dozen data rows below its 'Q2-2026**'
+    # header; with a lookback of 8 rows the guard saw only numbers, read no date, and let the Q2
+    # ratio (30,63) answer "30,9% pada Agustus 2026".
+    from cell_pointer import pointer_column_matches
+
+    grid = [["", "(Dalam persen)", "Q2-2026**"]]
+    grid += [["", f"- Rasio {i}", float(i)] for i in range(12)]
+    grid += [["", "- Rasio Utang terhadap PDB", 30.6306]]
+    row = len(grid) - 1
+
+    assert pointer_column_matches(grid, row=row, col=2, year=2026, month="Aug") is False
+    assert pointer_column_matches(grid, row=row, col=2, year=2026, month="Q2") is True

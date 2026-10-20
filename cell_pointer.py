@@ -800,12 +800,23 @@ def pointer_column_dates(grid: List[List], row: int, col: int) -> Optional[Tuple
     """
     month: Optional[str] = None
     year: Optional[int] = None
-    for r in range(row - 1, max(-1, row - 1 - _HEADER_LOOKBACK), -1):
+    # The lookback counts header-like cells only: the column's own figures above the pointed one
+    # are its data, not another table's header. SULNI TabI.7 keeps 'Rasio Utang terhadap PDB' 12
+    # data rows below its 'Q2-2026**' header, so a lookback of 8 rows saw only numbers, found no
+    # date, and let the Q2 ratio (30,63) answer "30,9% pada Agustus 2026".
+    seen = 0
+    for r in range(row - 1, -1, -1):
+        if seen >= _HEADER_LOOKBACK:
+            break
         if not (0 <= r < len(grid)) or col >= len(grid[r]):
             continue
         cell = grid[r][col]
         if cell is None or (isinstance(cell, str) and not cell.strip()):
             continue
+        if isinstance(cell, (int, float)) and not isinstance(cell, bool) and not (
+                month is not None and _is_year_cell(cell)):
+            continue
+        seen += 1
         if month is None:
             parsed = _parse_period(cell)
             if parsed:

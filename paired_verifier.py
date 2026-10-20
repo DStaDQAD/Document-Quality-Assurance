@@ -2989,6 +2989,13 @@ def _combined_share(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optiona
             resolved, missing, _ = _try_resolve(numerators, src)
             if missing:
                 continue
+            # Rows of ONE group the sentence never names are not the sectors' own: SULNI Tbl III.6
+            # files them under 'Perusahaan Induk', and "Sektor Industri Pengolahan, Jasa Keuangan
+            # … pangsa 80,5% dari total ULN swasta" summed the parent companies' 62,4%.
+            probe = copy.copy(fact)
+            probe.periods = list(numerators)
+            if _answers_one_group_of_it(probe, resolved, src.table):
+                continue
             rows = [label for label, _ in resolved]
         else:
             # Several rows that account for every word of the label beat a looser match of the
