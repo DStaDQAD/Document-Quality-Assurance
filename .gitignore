@@ -80,6 +80,14 @@ eval/cases/sbank_tw1_2026/
 eval/cases/skdu_tw3_2026/
 eval/cases/shpr_tw2_2026/
 eval/cases/spe_agu2026/
+eval/cases/pii_tw2_2026/
+eval/cases/ub_jul2026/
+eval/cases/m0_agu2026/
+eval/cases/cadev_agu2026/
+eval/cases/sulni_sep2026/
+eval/cases/pmi_tw2_2026/
+eval/cases/sk_agu2026/
+eval/cases/npi_tw1_2026/
 
 # BI files downloaded from the DSTA SharePoint for manual checks — never committed
 sample_data/sharepoint/

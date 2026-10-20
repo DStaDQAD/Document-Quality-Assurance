@@ -1,8 +1,24 @@
-"""The rows the PII parser derives from SEKI V.39: net positions and external debt."""
+"""The rows the PII parser derives from SEKI V.39: net positions and external debt; and the
+Cadangan Devisa parser's name for V.9's total."""
+from unittest import mock
+
 import pytest
 
-from publication_parsers import pii
+from publication_parsers import cadangan_devisa, pii
 from table_model import TableData
+
+
+def test_the_reserves_total_is_called_what_the_release_calls_it():
+    # "posisi cadangan devisa … 146,5" found 'Cadangan Devisa Lainnya' (125,4) before 'Total'.
+    sheet = TableData(title="V.9. Posisi Cadangan Devisa", unit="Juta USD",
+                      row_labels=["Cadangan Devisa Lainnya", "Total"])
+    sheet._data = {("Cadangan Devisa Lainnya", 2026, "Aug"): 125377.24,
+                   ("Total", 2026, "Aug"): 146507.61}
+    with mock.patch.object(cadangan_devisa, "parse_with_bi_reader", return_value=sheet):
+        table = cadangan_devisa.parse(b"", "5.9")
+
+    assert table.lookup_fuzzy("Cadangan Devisa", 2026, "Aug") == ("Cadangan Devisa", 146507.61)
+    assert table.lookup_fuzzy("cadangan devisa lainnya", 2026, "Aug")[1] == 125377.24
 
 _ROWS = {
     "Aset > Investasi Portofolio": 43485.39,

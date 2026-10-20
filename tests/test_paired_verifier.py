@@ -14,6 +14,7 @@ from paired_verifier import (
     _deduplicate_facts,
     _evaluate_fact,
     _evaluate_fact_safely,
+    _printed_signed,
     _growth_tolerance,
     _numeric_verdict,
     _parse_scale_unit,
@@ -2908,6 +2909,35 @@ def test_net_liabilities_as_a_sign_claim_are_checked_on_the_net_row():
     assert result.verdict == "Entailed"
 
 
+def _reserves_threshold(row, quote, claimed=3.0):
+    table = _make_table(title="Posisi Cadangan Devisa", unit="Juta USD",
+                        data={(row, 2026, "Aug"): 146507.61})
+    fact = _make_fact(
+        operation="above_threshold", claimed_value=claimed, unit=None, context_quote=quote,
+        periods=[_make_period(metric_label=row, month="Aug")],
+    )
+    return _evaluate_fact_safely(fact, [_make_source(table, filename="TABEL5_9.xls", sheet="5.9")])
+
+
+def test_a_bound_in_months_of_imports_is_not_answered_by_reserves_in_dollars():
+    # Cadangan Devisa Agustus 2026: "di atas standar kecukupan internasional sekitar 3 bulan
+    # impor" was Sesuai on 146.507 juta USD > 3.
+    result = _reserves_threshold(
+        "Cadangan Devisa",
+        "setara dengan pembiayaan 5,4 bulan impor, serta berada di atas standar kecukupan "
+        "internasional sekitar 3 bulan impor")
+
+    assert result.verdict == "Inconclusive"
+    assert result.resolved_via == "months_of_imports_guard"
+
+
+def test_a_row_in_months_of_imports_still_answers_such_a_bound():
+    result = _reserves_threshold(
+        "Dalam Bulan Impor", "berada di atas standar kecukupan internasional sekitar 3 bulan impor")
+
+    assert result.verdict == "Entailed"
+
+
 def test_a_net_figure_is_not_answered_by_a_top_level_side_row():
     table = _make_table(
         title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
@@ -3911,6 +3941,46 @@ def test_a_trend_without_a_number_goes_to_the_tied_table_its_sentence_names():
 
     assert result.verdict == "Entailed"
     assert "T4 Penggunaan Tenaga Kerja" in result.reasoning
+
+
+def test_a_trend_goes_to_the_tied_table_whose_figure_its_sentence_prints():
+    # SKDU Tw II-2026: "beberapa sub-LU yang terindikasi turun antara lain … (SBT -0,13%)" names
+    # no table, and Tabel 1 (0,03 -> 0,09) refuted it; the -0,13 is Tabel 4's.
+    sources = _skdu_sources()
+    sources[0].table._data.update({("KONSTRUKSI", 2026, "Q2"): 0.03, ("KONSTRUKSI", 2026, "Q3"): 0.09})
+    sources[1].table._data.update({("KONSTRUKSI", 2026, "Q2"): -0.09, ("KONSTRUKSI", 2026, "Q3"): -0.13})
+    quote = "Namun demikian, beberapa LU yang terindikasi turun antara lain LU Konstruksi (SBT -0,13%)."
+    fact = _make_fact(operation="is_decreasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Konstruksi", month="Q3")])
+
+    result = _evaluate_fact_safely(fact, sources)
+
+    assert result.verdict == "Entailed"
+    assert "T4 Penggunaan Tenaga Kerja" in result.reasoning
+
+
+@pytest.mark.parametrize("value, quote, printed", [
+    (-0.07, "Industri Logam Dasar (SBT -0,07%)", True),
+    (0.07, "Industri Logam Dasar (SBT -0,07%)", False),
+    (0.07, "LU Konstruksi (SBT 0,07%)", True),
+    (-0.13, "LU Konstruksi (SBT 0,13%)", False),
+])
+def test_a_printed_figure_carries_its_sign(value, quote, printed):
+    assert _printed_signed(value, quote) is printed
+
+
+def test_a_small_move_of_a_net_balance_is_stable():
+    # SKDU Tw II-2026: "tingkat penggunaan tenaga kerja LU Industri Pengolahan … relatif stabil" at
+    # SBT -0,47 -> -0,54 was Tidak Sesuai on a band of 0,05.
+    table = _make_table(title="Tabel 4. Penggunaan Tenaga Kerja", unit="% Saldo Bersih Tertimbang - SBT",
+                        data={("INDUSTRI PENGOLAHAN", 2026, "Q1"): -0.47,
+                              ("INDUSTRI PENGOLAHAN", 2026, "Q2"): -0.54})
+    fact = _make_fact(operation="is_stable", claimed_value=None, unit=None,
+                      context_quote="tingkat penggunaan tenaga kerja LU Industri Pengolahan terindikasi relatif stabil",
+                      periods=[_make_period(metric_label="Industri Pengolahan", month="Q1"),
+                               _make_period(metric_label="Industri Pengolahan", month="Q2")])
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
 
 
 def test_a_list_of_sectors_is_read_on_the_table_the_report_calls_kinerja():

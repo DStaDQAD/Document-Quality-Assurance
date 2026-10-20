@@ -695,14 +695,24 @@ def _balance_read_as_growth(fact: ExtractedFact) -> Optional[ExtractedFact]:
     return None
 
 
-def _stable_band(a: float, b: float) -> float:
+# The narrowest "relatif stabil" on a net-balance (SBT) series, in percentage points. A balance runs
+# from -100 to 100 and often sits near zero, where the relative band shrinks to nothing: SKDU
+# Tw II-2026 called Industri Pengolahan's labour use "relatif stabil" at -0,47 -> -0,54 and its
+# activity at 1,46 -> 1,34, and both were Tidak Sesuai on a band of 0,05. The reports' own
+# "stabil" moves on these tables run 0,01-0,12 points.
+_STABLE_NET_BALANCE_FLOOR = 0.25
+
+
+def _stable_band(a: float, b: float, net_balance: bool = False) -> float:
     """Largest move between two consecutive points still readable as "relatif stabil".
 
     Proportional to the pair's own magnitude, floored at MATCH_TOLERANCE so a series hovering
-    near zero (SBT balances, growth rates that cross sign) still admits two readings that are
-    identical to the precision they were printed at, instead of getting a band of nearly zero.
+    near zero (growth rates that cross sign) still admits two readings that are identical to
+    the precision they were printed at, instead of getting a band of nearly zero — and at
+    _STABLE_NET_BALANCE_FLOOR on a net-balance series.
     """
-    return max(MATCH_TOLERANCE, _STABLE_RELATIVE_BAND * (abs(a) + abs(b)) / 2)
+    floor = _STABLE_NET_BALANCE_FLOOR if net_balance else MATCH_TOLERANCE
+    return max(floor, _STABLE_RELATIVE_BAND * (abs(a) + abs(b)) / 2)
 
 
 def _printed_in(value: Optional[float], quote: Optional[str]) -> bool:
@@ -713,6 +723,19 @@ def _printed_in(value: Optional[float], quote: Optional[str]) -> bool:
     whole, _, frac = text.partition(".")
     pattern = re.escape(whole) + (r"[,.]" + re.escape(frac) if frac else "") + r"(?![\d])"
     return re.search(r"(?<![\d,.])" + pattern, quote) is not None
+
+
+def _printed_signed(value: Optional[float], quote: Optional[str]) -> bool:
+    """Whether the sentence prints this number with its sign: '-0,13' for -0.13, and '0,07' not
+    preceded by a minus for 0.07. Rounded to the two decimals survey tables print."""
+    if value is None or not quote:
+        return False
+    whole, _, frac = f"{abs(value):.2f}".partition(".")
+    number = re.escape(whole) + r"[,.]" + re.escape(frac) + r"(?![\d])"
+    minus = r"[-−–]\s?"
+    if value < 0:
+        return re.search(r"(?<![\d,.])" + minus + number, quote) is not None
+    return re.search(r"(?<![\d,.\-−–])(?<![-−–]\s)" + number, quote) is not None
 
 
 def _numeric_verdict(
@@ -1824,7 +1847,10 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     elif operation == "is_decreasing":
         ok = all(values[i + 1] <= values[i] for i in range(len(values) - 1))
     else:  # is_stable — see _stable_band
-        bands = [_stable_band(values[i], values[i + 1]) for i in range(len(values) - 1)]
+        net_balance = bool(_NET_BALANCE_UNIT.search(src.table.unit or "")
+                           or _NET_BALANCE_UNIT.search(labelled[-1][0]))
+        bands = [_stable_band(values[i], values[i + 1], net_balance)
+                 for i in range(len(values) - 1)]
         ok = all(
             abs(values[i + 1] - values[i]) <= bands[i] for i in range(len(values) - 1)
         )
@@ -3728,8 +3754,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 and [label for label, _ in cand.resolved] == head_rows
                 and (cand.src.origin in _FALLBACK_ORIGINS)
                 == (head_cand.src.origin in _FALLBACK_ORIGINS)]
+        # A tied table whose own figure for the claim's period the sentence prints, sign and all,
+        # is the one it reads from: "sub-LU Industri Tekstil dan Pakaian Jadi (SBT -0,13%) …
+        # terindikasi turun" (SKDU Tw II-2026) is Tabel 4's -0,13, not Tabel 1's 0,09 —
+        # whichever title the sentence's words lean to. Only when exactly one table qualifies.
+        printing = [index for index in tied
+                    if _printed_signed(evaluated[index][0].resolved[-1][1], fact.context_quote)]
         best = max(tied, key=lambda index: evaluated[index][0].sentence_title, default=head_index)
-        if evaluated[best][0].sentence_title > head_cand.sentence_title:
+        if len(printing) == 1:
+            best = printing[0]
+        if best != head_index and (len(printing) == 1
+                                   or evaluated[best][0].sentence_title > head_cand.sentence_title):
             head_index = best
             head_cand, head_result = evaluated[head_index]
     if head_result.verdict == "Refuted" and fact.claimed_value is not None:
@@ -4575,7 +4610,43 @@ def _publication_guards(
     currency row by the review)."""
     result = _section_guard(fact, result, sources)
     result = _absent_item_guard(fact, result, sources)
+    result = _months_of_imports_guard(fact, result)
     return _number_phrase_guard(fact, result, sources)
+
+
+_MONTHS_OF_IMPORTS = re.compile(r"\s*bulan\s+impor\b", re.IGNORECASE)
+
+
+def _months_of_imports_guard(fact: ExtractedFact, result: FactVerificationResult) -> FactVerificationResult:
+    """A number the sentence counts in months of imports, answered by a row that is not.
+
+    Cadangan Devisa Agustus 2026: "berada di atas standar kecukupan internasional sekitar 3 bulan
+    impor" came back as 'Cadangan Devisa' above 3 and was Sesuai on 125.377 juta USD. Only a row
+    that names the measure ('Dalam Bulan Impor', NPI's V.9 has it) can answer such a number.
+    """
+    if result.verdict == "Inconclusive" or not fact.claimed_value:
+        return result
+    quote = fact.context_quote or ""
+    in_months = False
+    for m in _QUOTE_NUMBER.finditer(quote):
+        try:
+            same = abs(_id_number(m.group(0).rstrip(".")) - abs(fact.claimed_value)) <= 1e-9
+        except ValueError:
+            continue
+        if same and _MONTHS_OF_IMPORTS.match(quote, m.end()):
+            in_months = True
+            break
+    if not in_months or any("bulan" in p.metric_label.lower() for p in result.periods):
+        return result
+    rows = ", ".join(dict.fromkeys(p.metric_label for p in result.periods))
+    return result.model_copy(update={
+        "verdict": "Inconclusive", "computed_value": None, "delta": None,
+        "resolved_via": "months_of_imports_guard",
+        "reasoning": (
+            f"Angka klaim dinyatakan dalam bulan impor, sedangkan baris '{rows}' bukan ukuran "
+            f"bulan impor. | {result.reasoning}"
+        ),
+    })
 
 
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
