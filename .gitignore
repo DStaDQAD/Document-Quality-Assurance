@@ -79,6 +79,7 @@ eval/cases/sbank_tw2_2026/
 eval/cases/sbank_tw1_2026/
 eval/cases/skdu_tw3_2026/
 eval/cases/shpr_tw2_2026/
+eval/cases/spe_agu2026/
 
 # BI files downloaded from the DSTA SharePoint for manual checks — never committed
 sample_data/sharepoint/

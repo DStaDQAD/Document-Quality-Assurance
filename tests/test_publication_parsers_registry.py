@@ -410,3 +410,23 @@ def test_skdu_tabel_6_holds_yoy_rates(monkeypatch):
 
     assert skdu.parse(b"", "T6 Prakiraan Inflasi").unit == "%, yoy"
     assert skdu.parse(b"", "T2 Kapasitas Produksi").unit == "%"
+
+
+def test_spe_tabel_9_is_also_keyed_by_the_month_each_expectation_is_for():
+    # "IEP November 2026 … 148,2" is the August survey's 3-month figure; "Februari 2027 … 143,8"
+    # its 6-month one. The survey-month rows stay for the golden numbers.
+    from publication_parsers import spe
+
+    table = TableData(title="Tabel 9", unit="Indeks", row_labels=[
+        "Ekspektasi Penjualan > 3 bulan yang akan datang", "Ekspektasi Penjualan > 6 bulan yang akan datang"])
+    table._data.update({
+        ("Ekspektasi Penjualan > 3 bulan yang akan datang", 2026, "Jul"): 143.9,
+        ("Ekspektasi Penjualan > 3 bulan yang akan datang", 2026, "Aug"): 148.2,
+        ("Ekspektasi Penjualan > 6 bulan yang akan datang", 2026, "May"): 153.8,
+        ("Ekspektasi Penjualan > 6 bulan yang akan datang", 2026, "Aug"): 143.8})
+    spe._add_target_month_rows(table)
+
+    assert table._data[("Ekspektasi Penjualan", 2026, "Nov")] == 148.2   # 3-month beats May's 6-month
+    assert table._data[("Ekspektasi Penjualan", 2026, "Oct")] == 143.9
+    assert table._data[("Ekspektasi Penjualan", 2027, "Feb")] == 143.8
+    assert table._data[("Ekspektasi Penjualan > 3 bulan yang akan datang", 2026, "Aug")] == 148.2

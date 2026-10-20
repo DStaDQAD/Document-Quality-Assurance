@@ -533,6 +533,12 @@ _SAME_QUARTER_LAST_YEAR = re.compile(
 _SEMESTER_WORD = {"i": "S1", "ii": "S2"}
 
 
+# "secara tahunan": the sentence's own baseline is the same period a year before — unless it also
+# names another period to compare with, which then decides.
+_YEAR_ON_YEAR_ONLY = re.compile(r"\bsecara\s+tahunan\b", re.IGNORECASE)
+_COMPARES_WITH_A_PERIOD = re.compile(r"\b(dibandingkan|dibanding|sebelumnya|lalu)\b", re.IGNORECASE)
+
+
 def _stated_baseline(
     quote: str, table: BITableData, label: str, year: int, month: str, operation: str = ""
 ) -> Optional[Tuple[Tuple[int, str], float]]:
@@ -550,6 +556,12 @@ def _stated_baseline(
         kind, words = "triwulan", _QUARTER_WORD
     elif re.fullmatch(r"S[12]", month or ""):
         kind, words = "semester", _SEMESTER_WORD
+    elif (_YEAR_ON_YEAR_ONLY.search(quote or "") and not _COMPARES_WITH_A_PERIOD.search(quote or "")
+          and _growth_kind(table.unit, label) is None):   # a level or index table, not a growth one
+        # SPE: "peningkatan penjualan secara tahunan pada Kelompok … Suku Cadang dan Aksesori" is
+        # August against August a year before (yoy +3,9%), not against July (148,9 -> 141,5).
+        _, val = table.lookup_fuzzy(label, year - 1, month)
+        return ((year - 1, month), val) if val is not None else None
     else:
         return None
     named = [m for m in _COMPARED_PERIOD.finditer(quote or "")
@@ -2061,6 +2073,78 @@ def _joined_rows_as_sum(fact: ExtractedFact, sources: List[_ExcelSource]) -> Opt
     return None
 
 
+# A sentence carrying several periods' figures: "… masing-masing tercatat sebesar 149,9 dan 177,9,
+# lebih tinggi dibandingkan … periode sebelumnya yang masing-masing tercatat sebesar 146,5 dan 166,0".
+_SEVERAL_PERIODS_RE = re.compile(r"\b(sebelumnya|masing-masing|masing\s+masing)\b", re.IGNORECASE)
+_NEIGHBOURS = {"month": 6, "quarter": 2}
+
+
+_MONTH_WORD_ID = {"Jan": "januari", "Feb": "februari", "Mar": "maret", "Apr": "april", "May": "mei",
+                  "Jun": "juni", "Jul": "juli", "Aug": "agustus", "Sep": "september", "Oct": "oktober",
+                  "Nov": "november", "Dec": "desember"}
+_QUARTER_ROMAN = {"Q1": "I", "Q2": "II", "Q3": "III", "Q4": "IV"}
+
+
+def _period_printed_beside(quote: str, value: float, year: int, month: str) -> bool:
+    """True when the sentence prints (year, month) within a few words of the claimed number."""
+    if month in _MONTH_WORD_ID:
+        period = re.compile(r"\b" + _MONTH_WORD_ID[month] + r"\s+" + str(year) + r"\b", re.IGNORECASE)
+    elif month in _QUARTER_ROMAN:
+        period = re.compile(r"\b(?:triwulan|tw\.?)\s+" + _QUARTER_ROMAN[month] + r"\s+" + str(year) + r"\b",
+                            re.IGNORECASE)
+    else:
+        return False
+    for match in _PRINTED_NUMBER.finditer(quote):
+        if not any(abs(n - abs(value)) < 1e-9 for n, _ in _readings(match.group(0))):
+            continue
+        if period.search(quote[max(0, match.start() - 60):match.end() + 45]):
+            return True
+    return False
+
+
+def _value_at_a_neighbouring_period(
+    fact: ExtractedFact, label: str, factor: float, src: "_ExcelSource"
+) -> Optional[str]:
+    """'<Mon YYYY>' when a refuted number is the same row's figure a few periods away, in a sentence
+    that lists several periods' figures — the extractor put it on the wrong one.
+
+    SPE Agustus 2026: "IEH November 2026 dan Februari 2027 … 149,9 dan 177,9, lebih tinggi
+    dibandingkan … periode sebelumnya … 146,5 dan 166,0": 166,0 is January 2027's, filed under
+    November 2026 (149,9) and refuted. A stale number in a report would also land here — it then
+    comes back as a question for the checker, not as a confirmed error.
+    """
+    point = fact.periods[0] if fact.periods else None
+    quote = fact.context_quote or ""
+    if (point is None or point.col_label is not None or point.year is None or not point.month
+            or fact.claimed_value is None):
+        return None
+    # Only where the sentence lists several periods' figures, or the quote is just the number
+    # ("dan 166,0") — and never where it prints the claim's own period beside the number: NPI's
+    # "0,7 miliar dolar AS pada triwulan II 2026" is dated by its author, and 0,7 also being Q4
+    # 2025's figure is a coincidence, not a sign of misreading.
+    if not (_SEVERAL_PERIODS_RE.search(quote) or len(quote.strip()) < 40):
+        return None
+    if _period_printed_beside(quote, fact.claimed_value, point.year, point.month):
+        return None
+    if point.month in _MONTH_ABBREVS:
+        names, span = _MONTH_ABBREVS, _NEIGHBOURS["month"]
+    elif re.fullmatch(r"Q[1-4]", point.month):
+        names, span = ("Q1", "Q2", "Q3", "Q4"), _NEIGHBOURS["quarter"]
+    else:
+        return None
+    here = point.year * len(names) + names.index(point.month)
+    for step in range(1, span + 1):
+        for index in (here - step, here + step):
+            year, month = divmod(index, len(names))
+            raw = src.table._data.get((label, year, names[month]))
+            if raw is None:
+                continue
+            _d, verdict, _rule = _value_verdict(fact.claimed_value, raw / factor, fact.context_quote)
+            if verdict == "Entailed":
+                return f"{names[month]} {year}"
+    return None
+
+
 def _compute_operation(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], factor: float, src: _ExcelSource
 ) -> FactVerificationResult:
@@ -2088,6 +2172,18 @@ def _compute_operation(
             recovered = _reinterpret_signed_level(fact, resolved, periods, table_value, src)
             if recovered is not None:
                 return recovered
+            elsewhere = _value_at_a_neighbouring_period(fact, resolved[0][0], factor, src)
+            if elsewhere is not None:
+                return _make_result(
+                    fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit,
+                    None, "Inconclusive",
+                    reasoning=(
+                        f"PDF: {fact.claimed_value} {fact.unit} | Excel [{matched_source}] "
+                        f"({resolved[0][0]}) {fact.periods[0].month} {fact.periods[0].year}: {computed} | "
+                        f"angka yang diklaim sama dengan {elsewhere} pada baris yang sama — kalimat ini "
+                        f"menyebut beberapa periode, kemungkinan periodenya tertukar; perlu dicek manual."
+                    ),
+                )
         return _make_result(
             fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit, delta, verdict,
             reasoning=(
@@ -2203,6 +2299,20 @@ def _inconclusive_result(
 # Per-fact evaluation (multi-source): tries each source in order, first source with ALL
 # periods resolved AND a compatible unit (if the operation needs one) wins.
 # ---------------------------------------------------------------------------
+
+def _without_own_names(quote: str, fact: ExtractedFact) -> str:
+    """The sentence with the claim's own row names cut out, for the subset-phrase test.
+
+    SPE Agustus 2026: "kenaikan penjualan pada Kelompok Barang Lainnya, Kelompok Perlengkapan
+    Rumah Tangga Lainnya, serta Kelompok Barang Budaya dan Rekreasi" names three groups; but
+    'Kelompok Barang Lainnya' reads as the hedge "kelompok … lainnya" (the other groups), and
+    every claim of the sentence was refused as unnamed."""
+    for label in {p.metric_label for p in fact.periods if p.metric_label}:
+        leaf = label.rsplit(QUAL_SEP, 1)[-1].strip()
+        if len(leaf) > 3:
+            quote = re.sub(re.escape(leaf), " ", quote, flags=re.IGNORECASE)
+    return quote
+
 
 def _quote_names_qualifier(metric_label: str, quote: str) -> bool:
     """True when a qualified metric's leaf ('… > Makassar') is actually named in the sentence.
@@ -3241,7 +3351,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # still verify normally (see _SUBSET_PHRASE_RE and _quote_names_qualifier).
     if fact.operation in _TREND_OPS | _THRESHOLD_OPS:
         quote = fact.context_quote or ""
-        if _SUBSET_PHRASE_RE.search(quote) and not any(
+        if _SUBSET_PHRASE_RE.search(_without_own_names(quote, fact)) and not any(
             _quote_names_qualifier(p.metric_label, quote) for p in fact.periods
         ):
             return _make_result(
@@ -3705,6 +3815,11 @@ def _may_contradict(head: "_Candidate", other: "_Candidate") -> bool:
 
 # A metric named as the GROWTH of something rather than the thing itself.
 _GROWTH_METRIC_RE = re.compile(r"\bpertumbuhan\b", re.IGNORECASE)
+# Words that only describe how a RATE moves: an index does not "melambat". With a growth tag in
+# the sentence they make a trend about the growth series (SPE: "penjualan di Medan … tetap tumbuh
+# meski melambat, … 0,6% (mtm)" is the monthly growth 1,3 -> 0,6, not the index 381,1 -> 383,5).
+_RATE_MOVE_RE = re.compile(r"\b(melambat|perlambatan|terakselerasi|akselerasi)\b", re.IGNORECASE)
+_GROWTH_TAG_RE = re.compile(r"\b(yoy|mtm|qtq)\b", re.IGNORECASE)
 # A yoy figure quoted in the same sentence, which is what makes 'pertumbuhan' there a
 # comparison of RATES rather than a passing mention.
 _YOY_IN_QUOTE_RE = re.compile(r"\byoy\b", re.IGNORECASE)
@@ -3726,6 +3841,8 @@ def _is_about_a_growth_rate(fact: ExtractedFact) -> bool:
     if any(_GROWTH_METRIC_RE.search(p.metric_label or "") for p in fact.periods):
         return True
     quote = fact.context_quote or ""
+    if _RATE_MOVE_RE.search(quote) and _GROWTH_TAG_RE.search(quote):
+        return True
     return bool(_GROWTH_METRIC_RE.search(quote) and _YOY_IN_QUOTE_RE.search(quote))
 
 
@@ -3747,10 +3864,15 @@ def _prefer_growth_source_for_a_growth_trend(
         return candidates
     if not _is_about_a_growth_rate(fact):
         return candidates
-    growth = [c for c in candidates if _is_growth_series(c.src.table.unit)]
+    # The kind the sentence tags its figures with picks among growth tables: SPE has a yoy and
+    # an mtm table of the same cities, and "… melambat, … 0,6% (mtm)" is the mtm one.
+    kinds = {k.lower() for k in _GROWTH_TAG_RE.findall(fact.context_quote or "")}
+    tagged = [c for c in candidates
+              if len(kinds) == 1 and _growth_kind(c.src.table.unit, "") in kinds]
+    growth = tagged or [c for c in candidates if _is_growth_series(c.src.table.unit)]
     if not growth:
         return candidates
-    return growth + [c for c in candidates if not _is_growth_series(c.src.table.unit)]
+    return growth + [c for c in candidates if c not in growth]
 
 
 def _match_quality(cand: "_Candidate") -> float:

@@ -4161,3 +4161,99 @@ def test_a_combined_share_is_not_summed_from_one_group_the_sentence_never_names(
 
     assert result.verdict == "Entailed"
     assert "Tbl III.2" in result.reasoning
+
+
+def _spe_cities():
+    index = _make_table(title="Tabel 5. Indeks Penjualan Riil Per Kota", unit="Indeks", data={
+        ("Medan", 2026, "Aug"): 381.1, ("Medan", 2026, "Sep"): 383.5,
+        ("Denpasar", 2026, "Aug"): 128.5, ("Denpasar", 2026, "Sep"): 128.9})
+    yoy = _make_table(title="Tabel 6. Pertumbuhan Tahunan Per Kota (%, yoy)", unit="%, yoy", data={
+        ("Medan", 2026, "Aug"): 21.6, ("Medan", 2026, "Sep"): 26.0,
+        ("Denpasar", 2026, "Aug"): 7.9, ("Denpasar", 2026, "Sep"): 8.2})
+    mtm = _make_table(title="Tabel 7. Pertumbuhan Bulanan Per Kota (%, mtm)", unit="%, mtm", data={
+        ("Medan", 2026, "Aug"): 1.3, ("Medan", 2026, "Sep"): 0.6,
+        ("Denpasar", 2026, "Aug"): 0.0, ("Denpasar", 2026, "Sep"): 0.3})
+    return [_make_source(index, sheet="Tabel 5"), _make_source(yoy, sheet="Tabel 6"), _make_source(mtm, sheet="Tabel 7")]
+
+
+_SLOWER = ("Sementara itu, penjualan di Medan dan Denpasar diprakirakan tetap tumbuh meski melambat, "
+           "masing-masing sebesar 0,6% (mtm) dan 0,3% (mtm).")
+
+
+@pytest.mark.parametrize("city, verdict", [("Medan", "Entailed"), ("Denpasar", "Refuted")])
+def test_a_rate_said_to_slow_is_read_on_the_growth_table_of_its_tag(city, verdict):
+    # SPE Agustus 2026: checked on the index, Medan "melambat" (381,1 -> 383,5) was refuted; it is
+    # the monthly growth 1,3 -> 0,6. Denpasar's monthly growth rose (0,0 -> 0,3) — the report's
+    # "melambat" does not hold for it.
+    fact = _make_fact(operation="is_decreasing", claimed_value=None, unit=None, context_quote=_SLOWER,
+                      periods=[_make_period(metric_label=f"penjualan di {city}", month="Sep")])
+
+    result = _evaluate_fact_safely(fact, _spe_cities())
+
+    assert result.verdict == verdict
+    assert "Tabel 7" in result.reasoning
+
+
+def test_a_rise_secara_tahunan_compares_with_the_same_month_a_year_before():
+    table = _make_table(title="Tabel 1. Indeks Penjualan Riil Menurut Kelompok", unit="Indeks", data={
+        ("Suku Cadang dan Aksesori", 2025, "Aug"): 136.2, ("Suku Cadang dan Aksesori", 2026, "Jul"): 148.9,
+        ("Suku Cadang dan Aksesori", 2026, "Aug"): 141.5, ("Barang Lainnya", 2026, "Aug"): 85.2})
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Kenaikan tersebut didorong oleh peningkatan penjualan secara tahunan pada "
+                                    "Kelompok Suku Cadang dan Aksesori.",
+                      periods=[_make_period(metric_label="Suku Cadang dan Aksesori", month="Aug")])
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "Aug 2025=136.2" in result.reasoning
+
+
+def test_a_group_named_lainnya_is_not_the_hedge_other_groups():
+    table = _make_table(title="Tabel 1. Indeks Penjualan Riil Menurut Kelompok", unit="Indeks", data={
+        ("Barang Lainnya", 2026, "Aug"): 85.2, ("Barang Lainnya", 2026, "Sep"): 85.5,
+        ("Barang Budaya dan Rekreasi", 2026, "Sep"): 60.2})
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Peningkatan penjualan tersebut didorong oleh kenaikan penjualan pada Kelompok "
+                                    "Barang Lainnya, serta Kelompok Barang Budaya dan Rekreasi.",
+                      periods=[_make_period(metric_label="Barang Lainnya", month="Sep")])
+
+    assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def _ieh():
+    table = _make_table(title="Tabel 9", unit="Indeks", data={
+        ("Ekspektasi Harga Umum", 2026, "Oct"): 146.5, ("Ekspektasi Harga Umum", 2026, "Nov"): 149.9,
+        ("Ekspektasi Harga Umum", 2027, "Jan"): 166.0, ("Ekspektasi Harga Umum", 2027, "Feb"): 177.9})
+    return [_make_source(table, sheet="Tabel 9")]
+
+
+@pytest.mark.parametrize("quote", [
+    "IEH November 2026 dan Februari 2027 yang masing-masing tercatat sebesar 149,9 dan 177,9, lebih tinggi "
+    "dibandingkan dengan indeks pada periode sebelumnya yang masing-masing tercatat sebesar 146,5 dan 166,0.",
+    "dan 166,0",
+])
+def test_a_number_the_extractor_put_on_the_wrong_period_is_not_refuted(quote):
+    # 166,0 is January 2027's; the extractor filed it under November 2026 (149,9).
+    fact = _make_fact(operation="value", claimed_value=166.0, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Ekspektasi Harga Umum", year=2026, month="Nov")])
+
+    result = _evaluate_fact_safely(fact, _ieh())
+
+    assert result.verdict == "Inconclusive"
+    assert "Jan 2027" in result.reasoning
+
+
+def test_a_number_dated_beside_it_by_the_author_stays_refuted():
+    # NPI: "0,7 miliar dolar AS pada triwulan II 2026" (table 0,77); 0,7 also being Q4 2025's
+    # figure is a coincidence.
+    table = _make_table(title="NPI", unit="miliar USD", data={
+        ("Pendapatan investasi langsung > Penerimaan", 2025, "Q4"): 0.70,
+        ("Pendapatan investasi langsung > Penerimaan", 2026, "Q1"): 0.62,
+        ("Pendapatan investasi langsung > Penerimaan", 2026, "Q2"): 0.77})
+    fact = _make_fact(operation="value", claimed_value=0.7, unit="miliar USD",
+                      context_quote="penerimaan imbal hasil … meningkat menjadi 0,7 miliar dolar AS pada triwulan "
+                                    "II 2026, dari 0,6 miliar dolar AS pada periode sebelumnya.",
+                      periods=[_make_period(metric_label="Pendapatan investasi langsung > Penerimaan", month="Q2")])
+
+    assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Refuted"
