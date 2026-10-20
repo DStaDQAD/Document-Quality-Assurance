@@ -3783,6 +3783,14 @@ def _may_contradict(head: "_Candidate", other: "_Candidate") -> bool:
     silenced, and only across universes — two credit tables that disagree are reported however
     far apart they are.
     """
+    # Two Excel sources are not two readings of one figure: the conflict check exists to set a
+    # report's own tables against the workbook ("PDF vs Excel") or against each other. Between
+    # sheets, a shared row name is another series — SKDU's 'REAL ESTAT' is business activity in
+    # Tabel 1 and employment in Tabel 4, SULNI's 'Total' is all debt in TabI.1 and government
+    # debt in Tbl II.1 — and every such claim was flagged "PDF vs Excel berbeda" (100+ per SKDU
+    # report) over a verdict that was right.
+    if head.src.origin == "excel" and other.src.origin == "excel":
+        return False
     head_subject = head.src.table.table_subject()
     other_subject = other.src.table.table_subject()
     if head_subject is None or other_subject is None or head_subject == other_subject:

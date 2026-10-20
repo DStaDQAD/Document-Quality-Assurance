@@ -4257,3 +4257,22 @@ def test_a_number_dated_beside_it_by_the_author_stays_refuted():
                       periods=[_make_period(metric_label="Pendapatan investasi langsung > Penerimaan", month="Q2")])
 
     assert _evaluate_fact_safely(fact, [_make_source(table)]).verdict == "Refuted"
+
+
+def test_two_excel_sheets_sharing_a_row_name_are_not_a_source_conflict():
+    # SKDU: 'REAL ESTAT' is business activity in Tabel 1 (0,25 -> 0,34) and employment in Tabel 4
+    # (falling); the claim was flagged "PDF vs Excel berbeda" though its verdict was right.
+    activity = _make_table(title="Tabel 1. Kegiatan Usaha", unit="% Saldo Bersih Tertimbang - SBT",
+                           data={("REAL ESTAT", 2026, "Q2"): 0.25, ("REAL ESTAT", 2026, "Q3"): 0.34})
+    labour = _make_table(title="Tabel 4. Penggunaan Tenaga Kerja", unit="% Saldo Bersih Tertimbang - SBT",
+                         data={("REAL ESTAT", 2026, "Q2"): 0.12, ("REAL ESTAT", 2026, "Q3"): 0.05})
+    fact = _make_fact(operation="is_increasing", claimed_value=None, unit=None,
+                      context_quote="Kinerja LU Real Estat tercatat meningkat.",
+                      periods=[_make_period(metric_label="REAL ESTAT", month="Q2"),
+                               _make_period(metric_label="REAL ESTAT", month="Q3")])
+
+    result = _evaluate_fact_safely(fact, [_make_source(activity, sheet="T1"), _make_source(labour, sheet="T4")])
+
+    assert result.verdict == "Entailed"
+    assert result.source_conflict is None
+    assert len(result.source_values or []) <= 1
