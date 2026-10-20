@@ -1038,6 +1038,72 @@ def _gross_row_for_a_net_number(fact: ExtractedFact, resolved: List[Tuple[str, f
     return None
 
 
+def _net_row_instead(
+    fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
+) -> Optional[List[Tuple[str, float]]]:
+    """The component's net row, when a net number landed on one gross side of it.
+
+    PII Tw II-2026: "investasi portofolio mencatat kewajiban neto sebesar 229,6" resolved to
+    'Aset > Investasi Portofolio' (43,5); the figure is Aset − Kewajiban (−229,62), which the
+    parser derives (TableData.net_rows). Only for a number the sentence presents as net
+    (_is_a_net_figure) and a row that is one side of a component the table has a net row for;
+    anything else keeps its row and meets _gross_row_for_a_net_number as before.
+    """
+    if not src.table.net_rows or not _is_a_net_figure(fact):
+        return None
+    out = []
+    for point, (label, _value) in zip(fact.periods, resolved):
+        side, _, component = label.partition(QUAL_SEP)
+        net = src.table.net_rows.get(component.strip().lower())
+        if side.strip().lower() not in _BALANCE_SIDES or net is None:
+            return None
+        value = src.table._data.get((net, point.year, point.month))
+        if value is None:
+            return None
+        out.append((net, value))
+    return out
+
+
+def _net_position_threshold(
+    fact: ExtractedFact, sources: List[_ExcelSource]
+) -> Optional[ExtractedFact]:
+    """A sign claim on a net position, asked of the component's net row.
+
+    PII Tw II-2026: "posisi investasi portofolio mencatat kewajiban neto sebesar 229,6" also came
+    back as 'Investasi Portofolio' below 0. Read as a group claim it was judged on the sentence's
+    'kewajiban' — 'Kewajiban > Investasi Portofolio', 273,1 > 0 — and reported Tidak Sesuai. What
+    is below 0 is Aset − Kewajiban (TableData.net_rows). Only a threshold at 0 whose sentence
+    states the net side before naming any gross one (KFLN/AFLN/bruto), and only a claim that
+    resolves to one side of a component with a net row; the label becomes that row's exact key.
+    """
+    if fact.operation not in _THRESHOLD_OPS or (fact.claimed_value or 0) != 0:
+        return None
+    quote = fact.context_quote or ""
+    net = _NET_POSITION.search(quote)
+    if net is None:
+        return None
+    sentence_start = max((m.end() for m in re.finditer(r"[.;]\s", quote[:net.start()])), default=0)
+    if _GROSS_SIDE.search(quote[sentence_start:net.end()]):
+        return None
+    for src in sources:
+        if not src.table.net_rows:
+            continue
+        labels = []
+        for point in fact.periods:
+            label, _value = src.table.lookup_fuzzy(point.metric_label, point.year, point.month)
+            side, _, component = (label or "").partition(QUAL_SEP)
+            row = src.table.net_rows.get(component.strip().lower())
+            if side.strip().lower() not in _BALANCE_SIDES or row is None or \
+                    src.table._data.get((row, point.year, point.month)) is None:
+                break
+            labels.append(row)
+        else:
+            moved = copy.copy(fact)
+            moved.periods = [PeriodPoint(row, p.year, p.month) for p, row in zip(fact.periods, labels)]
+            return moved
+    return None
+
+
 def _is_percent_unit(unit: Optional[str]) -> bool:
     return bool(unit and (unit.strip().lower().startswith("persen") or "%" in unit))
 
@@ -3364,6 +3430,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 ),
             )
 
+    fact = _net_position_threshold(fact, sources) or fact
+
     # A trend or threshold the sentence states for named groups is checked on THOSE groups,
     # whatever name the extractor gave it — see _groups_the_sentence_names.
     if fact.operation in _TREND_OPS | _THRESHOLD_OPS:
@@ -3418,6 +3486,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 best_missing = missing
             continue
         resolved = _balance_row_instead(fact, resolved, src) or resolved
+        resolved = _net_row_instead(fact, resolved, src) or resolved
         other_kind = (
             _not_a_yoy_cell(fact, resolved[0][0], src) if fact.operation == "yoy_growth" else None
         )

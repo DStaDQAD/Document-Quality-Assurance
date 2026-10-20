@@ -381,6 +381,12 @@ class TableData:
     # whose rows do end so), but every Tabel 4 row is a balance and none carries that level. Set by
     # the publication parser; dropped from the query in _normalise_query.
     measure_levels: frozenset = field(default_factory=frozenset, repr=False)
+    # A component's net position, which the sheet prints only as its two gross sides, as
+    # {component lower-cased: row in _data}: PII's "investasi portofolio mencatat kewajiban neto
+    # sebesar 229,6" is 'Aset > Investasi Portofolio' − 'Kewajiban > Investasi Portofolio'. The rows
+    # are not in row_labels, so no lookup lands on them; set by the publication parser and read by
+    # paired_verifier._net_row_instead.
+    net_rows: Dict[str, str] = field(default_factory=dict, repr=False)
 
     # ------------------------------------------------------------------
     # Temporal lookups (unchanged behaviour from the original BITableData)

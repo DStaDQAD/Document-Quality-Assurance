@@ -2854,6 +2854,60 @@ def test_a_gross_figure_after_a_net_one_is_judged_as_gross():
     assert result.verdict == "Entailed"
 
 
+def _with_net_row(operation, metric_label, quote, claimed):
+    # The PII parser derives 'Investasi Portofolio (neto)' = Aset − Kewajiban, outside row_labels.
+    table = _make_table(
+        title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+        data={
+            ("Aset > Investasi Portofolio", 2026, "Q2"): 43.49,
+            ("Kewajiban > Investasi Portofolio", 2026, "Q2"): 273.1,
+        },
+    )
+    table._data[("Investasi Portofolio (neto)", 2026, "Q2")] = 43.49 - 273.1
+    table.net_rows = {"investasi portofolio": "Investasi Portofolio (neto)"}
+    fact = _make_fact(
+        operation=operation, claimed_value=claimed, unit="miliar USD", context_quote=quote,
+        periods=[_make_period(metric_label=metric_label, month="Q2")],
+    )
+    return _evaluate_fact(fact, [_make_source(table)])
+
+
+@pytest.mark.parametrize("metric_label", [
+    "Investasi Portofolio", "Investasi Portofolio, Neto", "Kewajiban > Investasi Portofolio",
+])
+def test_a_net_figure_is_read_from_the_components_net_row(metric_label):
+    # PII Tw II-2026: "investasi portofolio mencatat kewajiban neto sebesar 229,6" stayed Tidak
+    # Cukup Data; the table's net row (−229,61) answers it.
+    result = _with_net_row(
+        "value", metric_label,
+        "posisi investasi portofolio mencatat kewajiban neto sebesar 229,6 miliar dolar AS", 229.6,
+    )
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].metric_label == "Investasi Portofolio (neto)"
+
+
+def test_a_gross_figure_never_reaches_the_net_row():
+    result = _with_net_row(
+        "value", "Aset > Investasi Portofolio",
+        "posisi AFLN investasi portofolio tercatat sebesar 43,5 miliar dolar AS", 43.5,
+    )
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].metric_label == "Aset > Investasi Portofolio"
+
+
+def test_net_liabilities_as_a_sign_claim_are_checked_on_the_net_row():
+    # The same sentence also came back as 'Investasi Portofolio' below 0, which was judged on the
+    # sentence's 'kewajiban' — the gross 273,1 — and reported Tidak Sesuai.
+    result = _with_net_row(
+        "below_threshold", "Investasi Portofolio",
+        "posisi investasi portofolio mencatat kewajiban neto sebesar 229,6 miliar dolar AS", 0.0,
+    )
+
+    assert result.verdict == "Entailed"
+
+
 def test_a_net_figure_is_not_answered_by_a_top_level_side_row():
     table = _make_table(
         title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
