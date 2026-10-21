@@ -1,7 +1,7 @@
 """Changes between two periods that the claim does not label as such, or prints without decimals.
 
 PII Tw I-2026: "penurunan posisi aset derivatif finansial sebesar 23 juta dolar AS" on
-817,1 -> 794,3 (a change printed to the unit), and "posisi cadangan devisa yang menurun terutama
+817,1 -> 794,3 (a change printed to the unit, kept Tidak Sesuai), and "posisi cadangan devisa yang menurun terutama
 bersumber dari posisi cadangan devisa lainnya sebesar 9,1 miliar dolar AS" — 9,1 is how far the
 row fell, not its level. Synthetic tables with the same figures.
 """
@@ -30,15 +30,10 @@ def _value(claimed, quote, label=LAINNYA):
     return ExtractedFact("value", [PeriodPoint(label, 2026, "Q1")], claimed, "miliar dolar AS", quote)
 
 
-def test_a_change_printed_without_decimals_is_read_to_the_unit():
+def test_a_change_printed_without_decimals_is_not_widened_to_the_unit():
+    # The user's call: "23 juta" for a fall of 22,78 is Tidak Sesuai — the report prints its other
+    # changes to one decimal ("0,3 miliar"), and 22,8 is what it should have said.
     quote = "serta penurunan posisi aset derivatif finansial sebesar 23 juta dolar AS."
-    fact = ExtractedFact("diff", [PeriodPoint(DERIVATIF, 2025, "Q4"), PeriodPoint(DERIVATIF, 2026, "Q1")],
-                         -23.0, "juta dolar AS", quote)
-    assert _evaluate_fact(fact, [PII]).verdict == "Entailed"
-
-
-def test_a_change_printed_with_a_decimal_keeps_its_tolerance():
-    quote = "serta penurunan posisi aset derivatif finansial sebesar 23,0 juta dolar AS."
     fact = ExtractedFact("diff", [PeriodPoint(DERIVATIF, 2025, "Q4"), PeriodPoint(DERIVATIF, 2026, "Q1")],
                          -23.0, "juta dolar AS", quote)
     assert _evaluate_fact(fact, [PII]).verdict == "Refuted"

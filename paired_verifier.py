@@ -2139,10 +2139,11 @@ def _reinterpret_value_as_change(
     change = round(table_value - prior, 4)
     if (change < 0 and not falls) or (change > 0 and not rises):
         return None
-    # Both ends are rounded, so the change carries both roundings: a unit of the last digit the
-    # sentence prints (9,1 -> 0,1; 0,22 -> 0,01).
+    # Held to MATCH_TOLERANCE like any stated change, and to the last printed digit when the
+    # sentence prints more (0,22 -> 0,01). A change printed without decimals gets no wider bound:
+    # the user's call (2026-10-21) — "23 juta" for a fall of 22,78 is Tidak Sesuai.
     printed = _printed_decimals(fact.claimed_value, quote)
-    tolerance = 10 ** -printed if printed is not None else 2 * MATCH_TOLERANCE
+    tolerance = min(MATCH_TOLERANCE, 10 ** -printed) if printed is not None else 2 * MATCH_TOLERANCE
     delta, verdict = _numeric_verdict(abs(fact.claimed_value), abs(change), tolerance)
     if verdict != "Entailed":
         return None
@@ -2458,11 +2459,6 @@ def _compute_operation(
         # prints: both ends are rounded, so the change carries both roundings (8,26 here).
         diff_tolerance = (MATCH_TOLERANCE if _printed_in(fact.claimed_value, fact.context_quote)
                           else 2 * MATCH_TOLERANCE)
-        # "penurunan posisi aset derivatif finansial sebesar 23 juta dolar AS" on 817,1 -> 794,3:
-        # a change printed without decimals is stated to the nearest unit (22,78 is 23).
-        printed = _printed_decimals(fact.claimed_value, fact.context_quote)
-        if printed is not None:
-            diff_tolerance = max(diff_tolerance, 0.5 * 10 ** -printed)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed, diff_tolerance)
         if verdict == "Refuted":
             recovered = _reinterpret_diff_as_value(fact, resolved, converted, computed, src)
