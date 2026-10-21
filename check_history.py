@@ -37,7 +37,7 @@ CHECKER_NAME_MAX_CHARS = 80
 # the UI holds the labels). A check run under "Umum" has no publication.
 PUBLICATIONS = (
     "uang-beredar", "uang-primer-m0", "npi", "pii", "cadangan-devisa", "sulni",
-    "sk", "spe", "skdu", "pmi", "sbank", "shpr",
+    "sk", "spe", "skdu", "pmi", "sbank", "shpr", "ppkom",
 )
 
 _metadata = MetaData()

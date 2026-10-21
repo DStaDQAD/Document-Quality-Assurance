@@ -1039,8 +1039,8 @@ body.auth-locked .app {
                   </button>
                 </div>
               </div>
-              <!-- Jenis publikasi picks the upload columns above it: every publication has a
-                   Siaran Pers, plus a Laporan when it has one. The options are built from
+              <!-- Jenis publikasi picks the upload columns above it: a Siaran Pers (unless the
+                   publication has none, press: false), plus a Laporan when it has one. The options are built from
                    PUBLICATIONS in the script; nothing is chosen on load. -->
               <fieldset class="rules" id="publication-types">
                 <legend class="upload-label">Jenis publikasi</legend>
@@ -1500,6 +1500,8 @@ body.auth-locked .app {
   // as a rule no charts, so those publications skip both.
   const WITH_REPORT_RULES = ["intra", "cross", "excel", "charts", "typo"];
   const PRESS_ONLY_RULES = ["intra", "excel", "typo"];
+  // A publication released as a report alone (no Siaran Pers): nothing to cross-check against.
+  const REPORT_ONLY_RULES = ["intra", "excel", "charts", "typo"];
   const PUBLICATIONS = {
     "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A", rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2", rules: PRESS_ONLY_RULES },
@@ -1513,6 +1515,7 @@ body.auth-locked .app {
     "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, excel: "Data-Series-PMI zip dari halaman Laporan PMI", rules: WITH_REPORT_RULES },
     "sbank":           { label: "Survei Perbankan (SBank)", report: true, excel: "SBank.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
     "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
+    "ppkom":           { label: "Survei Properti Komersial (PPKom)", report: true, press: false, excel: "Tabel PPKom (xlsx)", rules: REPORT_ONLY_RULES },
   };
 
   const publicationSelect = document.getElementById("publication-select");
@@ -1552,13 +1555,14 @@ body.auth-locked .app {
   // that has one stays picked, but is not sent, when a publication without one is chosen.
   function activeReportSources() {
     const pub = PUBLICATIONS[currentPublication()];
-    return pub?.report ? [pressSlot, reportSlot] : [pressSlot];
+    return [...(pub?.press === false ? [] : [pressSlot]), ...(pub?.report ? [reportSlot] : [])];
   }
 
   function applyPublication() {
     const pub = PUBLICATIONS[currentPublication()];
     document.getElementById("publication-report-field").hidden = !pub?.report;
-    document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report);
+    document.getElementById("press-upload-field").hidden = pub?.press === false;
+    document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report && pub?.press !== false);
     syncRules();
   }
   publicationSelect.addEventListener("change", applyPublication);
