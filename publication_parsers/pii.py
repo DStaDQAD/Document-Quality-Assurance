@@ -35,6 +35,18 @@ TERM_ALIASES = {
     "kfln dalam instrumen utang": ULN_ROW,
 }
 
+# The totals by the report's names — whole claims only (TableData.label_aliases): AFLN/KFLN also
+# head breakdowns the sheet lacks ("AFLN sektor publik", "KFLN jangka panjang"), and a ratio's
+# "total AFLN" stays out so its numerator is never read off the wrong side. A bare "KFLN" or
+# "posisi KFLN" is left out too: inside a component's section it is that component's
+# ("penurunan posisi KFLN sebesar 13,3" under II.2 is portfolio liabilities, Tw I-2026).
+LABEL_ALIASES = {
+    **{name: "Aset" for name in ("posisi afln indonesia", "aset finansial luar negeri",
+                                 "aset finansial luar negeri (afln)")},
+    **{name: "Kewajiban" for name in ("posisi kfln indonesia", "kewajiban finansial luar negeri",
+                                      "kewajiban finansial luar negeri (kfln)")},
+}
+
 
 # Rows that are already a net position, and the gross rows that stand for them. The memorandum
 # nets direct investment by direction ('Ke luar negeri' − 'Di Indonesia (PMA)'); reserve assets
@@ -56,6 +68,7 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     table.net_rows.update({key: row for key, row in NET_ALIASES.items() if row in table.row_labels})
     if _add_sum_row(table, ULN_ROW, ULN_PARTS):
         table.term_aliases = dict(TERM_ALIASES)
+    table.label_aliases = {name: row for name, row in LABEL_ALIASES.items() if row in table.row_labels}
     return table
 
 

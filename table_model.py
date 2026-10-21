@@ -335,6 +335,10 @@ class TableData:
     # dan Bank Sentral"}. Set by the publication parser (it is the publication's fixed
     # definition, not a guess) and applied wherever a claim is read in this table's words.
     term_aliases: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Like term_aliases, but only for a claim whose WHOLE metric is the phrase: PII's "Posisi AFLN
+    # Indonesia" is 'Aset', while "AFLN sektor publik" (a breakdown V.39 lacks) must not become
+    # "Aset sektor publik". Lowercase keys, whitespace collapsed.
+    label_aliases: Dict[str, str] = field(default_factory=dict, repr=False)
     # Rows whose unit differs from the table's, by row name: NPI's 'Ke dalam negeri' sits under
     # 'Jumlah pelawat (ribuan orang)' in a 'Juta USD' table. Set by the series parser from the
     # row's full path, which the (shortened) row name may no longer show.
@@ -881,6 +885,9 @@ class TableData:
         per-city claims found no row though every city was there. Only a level that is NOTHING
         but the abbreviation is rewritten, and only when this table uses it for one name.
         """
+        whole = self.label_aliases.get(" ".join(query.split()).lower())
+        if whole is not None:
+            return whole
         query = _expand_report_terms(query)
         query = self._apply_aliases(query)
         if self.measure_levels and QUAL_SEP.strip() in query:

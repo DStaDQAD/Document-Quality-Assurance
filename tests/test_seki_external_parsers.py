@@ -62,6 +62,20 @@ def test_external_debt_is_the_liabilities_debt_instruments_and_the_report_finds_
     assert value == pytest.approx(453368.54)
 
 
+def test_afln_and_kfln_are_the_totals_only_as_a_whole_claim():
+    # PII Tw I-2026: "Posisi AFLN Indonesia menurun …" found no row; "AFLN sektor publik" (a
+    # breakdown V.39 lacks) and a ratio's "total AFLN" must still find none.
+    table = TableData(title="V.39", unit="Juta USD", row_labels=["Aset", "Kewajiban"])
+    table._data = {("Aset", 2026, "Q1"): 556651.3, ("Kewajiban", 2026, "Q1"): 784283.89}
+    table.label_aliases = {name: row for name, row in pii.LABEL_ALIASES.items()
+                           if row in table.row_labels}
+
+    assert table.lookup_fuzzy("Posisi AFLN Indonesia", 2026, "Q1")[0] == "Aset"
+    assert table.lookup_fuzzy("Kewajiban Finansial Luar Negeri (KFLN)", 2026, "Q1")[0] == "Kewajiban"
+    for other in ("AFLN sektor publik", "total AFLN", "posisi KFLN jangka panjang", "KFLN"):
+        assert table.lookup_fuzzy(other, 2026, "Q1") == (None, None)
+
+
 def test_npi_reads_still_in_surplus_as_a_level():
     # NPI Tw I-2026: "Investasi langsung tetap mencatatkan surplus" came back as a rise on
     # 3,15 -> 2,02 — still a surplus, a smaller one.

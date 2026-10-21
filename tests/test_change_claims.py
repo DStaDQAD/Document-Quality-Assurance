@@ -67,6 +67,20 @@ def test_the_change_is_held_to_the_printed_digits():
     assert _evaluate_fact(_value(9.03, quote), [PII]).verdict == "Refuted"
 
 
+def test_a_zero_bound_the_sentence_never_states_is_not_judged():
+    # The same sentence also came back as 'Cadangan Devisa Lainnya' below 0.
+    quote = ("Berdasarkan instrumen, posisi cadangan devisa yang menurun terutama bersumber dari posisi "
+             "cadangan devisa lainnya sebesar 9,1 miliar dolar AS.")
+    fact = ExtractedFact("below_threshold", [PeriodPoint(LAINNYA, 2026, "Q1")], 0.0, None, quote)
+    assert _evaluate_fact(fact, [PII]).verdict == "Inconclusive"
+
+
+def test_a_zero_bound_named_by_a_sign_word_is_judged():
+    quote = "Posisi cadangan devisa lainnya tercatat negatif."
+    fact = ExtractedFact("below_threshold", [PeriodPoint(LAINNYA, 2026, "Q1")], 0.0, None, quote)
+    assert _evaluate_fact(fact, [PII]).verdict == "Refuted"
+
+
 def test_a_tied_table_that_prints_the_level_answers_before_a_change():
     """SKDU Tw III-2026: "sub-LU Industri Makanan dan Minuman (SBT 0,22%) … meningkat" is Tabel 4's
     level 0,22, though Tabel 2's capacity rose by 0,20 (76,73 -> 76,93)."""

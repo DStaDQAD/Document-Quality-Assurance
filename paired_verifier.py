@@ -1974,6 +1974,16 @@ def _says_held_not_unchanged(quote: str) -> bool:
     return bool(_HELD_LEVEL_WORDS.search(quote)) and not _UNCHANGED_WORDS.search(quote)
 
 
+# Words that speak of a figure's sign, which is what a bound of zero tests.
+_SIGN_WORDS = re.compile(
+    r"\b(negatif|positif|(ter)?kontraksi|ekspansi\w*|defisit|surplus|di\s+bawah|di\s+atas|minus|nol"
+    r"|tumbuh|pertumbuhan|optimis|pesimis|net\s+(inflow|outflow)|inflow|outflow|arus\s+(masuk|keluar)"
+    # PII: "cadangan devisa dan investasi lainnya mencatat aset neto" says both are above zero.
+    r"|(aset|kewajiban)\s+neto)\b",
+    re.IGNORECASE,
+)
+
+
 def _compute_threshold(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
 ) -> FactVerificationResult:
@@ -2004,6 +2014,16 @@ def _compute_threshold(
         return _make_result(
             fact, periods, matched_source, None, fact.unit, value, fact.unit, None, "Inconclusive",
             reasoning="Klaim ambang tanpa nilai ambang yang jelas; tidak dapat dinilai.",
+        )
+    if threshold == 0 and not _SIGN_WORDS.search(fact.context_quote or ""):
+        # PII Tw I-2026: "posisi cadangan devisa yang menurun terutama bersumber dari posisi
+        # cadangan devisa lainnya sebesar 9,1" came back as 'Cadangan Devisa Lainnya' below 0 —
+        # a fall read as a sign, refuted on a level of 126,8. A zero bound needs the sentence to
+        # speak of a sign at all.
+        return _make_result(
+            fact, periods, matched_source, threshold, fact.unit, value, fact.unit, None, "Inconclusive",
+            reasoning="Klaim ambang 0, tetapi kalimatnya tidak menyebut tanda (positif/negatif, "
+                      "ekspansi/kontraksi, surplus/defisit); tidak dapat dinilai.",
         )
     if fact.operation == "above_threshold":
         passes, arah = (lambda v: v > threshold), "di atas"
