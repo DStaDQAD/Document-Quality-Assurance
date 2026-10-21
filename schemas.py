@@ -9,6 +9,21 @@ from pydantic import BaseModel, Field
 # Paired PDF + Excel verification
 # ---------------------------------------------------------------------------
 
+# Why a claim came back Tidak Cukup Data:
+#   di_luar_tabel          the uploaded tables are known not to hold it (absent item, other section)
+#   tidak_ditemukan        no row of the uploaded tables matched it (outside them, or unmapped)
+#   periode                the row exists but not for the period(s) the claim needs
+#   jenis                  the row's unit / kind (level, %, yoy, mtm, index) cannot answer the claim
+#   tabel_gagal_dibaca     the table that would answer it could not be read
+#   klaim_tidak_lengkap    the claim as extracted cannot be judged (no number, no bound, no baseline)
+#   angka_tidak_di_kalimat the claimed number is not printed in the sentence it was found in
+#   ditinjau_ai            the Tinjauan AI moved a code verdict to Tidak Cukup Data
+#   lainnya                none of the above (should stay rare: each one is a missing code)
+ReasonCode = Literal[
+    "di_luar_tabel", "tidak_ditemukan", "periode", "jenis", "tabel_gagal_dibaca",
+    "klaim_tidak_lengkap", "angka_tidak_di_kalimat", "ditinjau_ai", "lainnya",
+]
+
 
 class ClaimRequest(BaseModel):
     claim: str = Field(..., min_length=1, description="The factual claim to verify against the database.")
@@ -116,6 +131,9 @@ class FactVerificationResult(BaseModel):
     # Set when the claim was about a quantified set of groups ("seluruh" = all, "sebagian besar"
     # = majority, "kelompok lainnya" = rest) and was judged on every group of the breakdown.
     group_scope: Optional[Literal["all", "majority", "rest"]] = None
+    # Why a claim is Tidak Cukup Data (None for Sesuai / Tidak Sesuai). The verdict stays
+    # Inconclusive; this says which kind of "cannot tell" it is (paired_verifier.REASON_CODES).
+    reason_code: Optional[ReasonCode] = None
 
 
 class ChartCheck(BaseModel):

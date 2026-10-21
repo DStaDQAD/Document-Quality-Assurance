@@ -312,7 +312,9 @@ def main(argv=None) -> int:
             exported.append(d)
             print(f"{case}/{doc.id}: {len(d['sentences'])} numeric sentences"
                   f"{' (needs vision)' if d['needs_vision'] else ''}")
-    summary = summarize(exported)
+    # The overview covers every exported document, not only the cases of this run.
+    everything = [json.loads(p.read_text(encoding="utf-8")) for p in sorted((out / "data").glob("*.json"))]
+    summary = summarize(everything)
     (out / "overview.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1), encoding="utf-8")
     (out / "overview.md").write_text(overview_markdown(summary), encoding="utf-8")
     print(f"\n{len(exported)} documents -> {out}")

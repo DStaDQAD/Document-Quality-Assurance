@@ -225,7 +225,7 @@ def cmd_replay(args) -> int:
     """
     from paired_verifier import (
         _attach_group_exclusions, _attach_named_members, _attach_rankings, _drop_group_stand_ins,
-        _evaluate_fact_safely,
+        _evaluate_fact_safely, _with_reason_codes,
     )
 
     run_dir, out = Path(args.dir), Path(args.out)
@@ -250,7 +250,7 @@ def cmd_replay(args) -> int:
         _attach_named_members(facts)
         _attach_group_exclusions(facts)
         _attach_rankings(facts)
-        results = [_evaluate_fact_safely(f, sources).model_dump() for f in facts]
+        results = [r.model_dump() for r in _with_reason_codes([_evaluate_fact_safely(f, sources) for f in facts])]
         (out / f"{doc.id}.json").write_text(json.dumps(
             {"results": results, "_replay": {"rebuilt": rebuilt, "skipped": skipped}},
             ensure_ascii=False, indent=1), encoding="utf-8")

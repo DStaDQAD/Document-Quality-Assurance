@@ -839,6 +839,22 @@ def _growth_tolerance(current: float, prior: float) -> float:
     return round(MATCH_TOLERANCE + band, 4)
 
 
+class _Why(str):
+    """A Tidak Cukup Data explanation that also carries its schemas.ReasonCode.
+
+    The text keeps flowing through the engine as a plain string (best_reason, f-strings), and
+    _make_result reads the code off it, so each site states its reason once, next to the words.
+    """
+
+    code: Optional[str] = None
+
+
+def _why(code: str, text: str) -> _Why:
+    why = _Why(text)
+    why.code = code
+    return why
+
+
 def _make_result(
     fact: ExtractedFact,
     periods: List[PeriodResult],
@@ -850,8 +866,14 @@ def _make_result(
     delta: Optional[float],
     verdict: str,
     reasoning: str,
+    reason_code: Optional[str] = None,
 ) -> FactVerificationResult:
+    if verdict == "Inconclusive":
+        reason_code = reason_code or getattr(reasoning, "code", None)
+    else:
+        reason_code = None
     return FactVerificationResult(
+        reason_code=reason_code,
         operation=fact.operation,
         metric_label=fact.display_label,
         matched_excel_source=matched_source,
@@ -1358,7 +1380,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     if other_kind:
         return _make_result(
             fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None,
-            "persen_yoy", None, "Inconclusive",
+            "persen_yoy", None, "Inconclusive", reason_code="jenis",
             reasoning=(
                 f"Excel [{matched_source}] ({matched_label}) berisi pertumbuhan {other_kind} "
                 f"('{src.table.unit}'), bukan yoy — tidak menjawab klaim {fact.claimed_value}% yoy."
@@ -1390,7 +1412,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
             return published
         return _make_result(
             fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None, "persen_yoy", None,
-            "Inconclusive",
+            "Inconclusive", reason_code="periode",
             reasoning=(
                 f"No data found in Excel [{matched_source}] for metric '{matched_label}' "
                 f"at {p.month} {prior_year} (needed for yoy denominator)."
@@ -1399,7 +1421,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     if prior_raw == 0:
         return _make_result(
             fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None, "persen_yoy", None,
-            "Inconclusive",
+            "Inconclusive", reason_code="jenis",
             reasoning=f"Prior-year value for '{matched_label}' at {p.month} {prior_year} is zero; yoy undefined.",
         )
     # A "prior-year level" that IS the claimed growth is the growth cell, read as a level. BI
@@ -1411,7 +1433,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
     if fact.claimed_value is not None and round(prior_raw, 4) == round(fact.claimed_value, 4):
         return _make_result(
             fact, [current_period], matched_source, fact.claimed_value, "persen_yoy", None, "persen_yoy", None,
-            "Inconclusive",
+            "Inconclusive", reason_code="jenis",
             reasoning=(
                 f"Nilai '{matched_label}' pada {p.month} {prior_year} di [{matched_source}] "
                 f"({prior_raw}) sama persis dengan angka pertumbuhan yang diklaim — hampir pasti "
@@ -1517,14 +1539,14 @@ def _compute_ratio(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     ]
     if raw_b == 0:
         return _make_result(
-            fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive", reason_code="jenis",
             reasoning=f"Nilai penyebut '{label_b}' bernilai nol; rasio tidak terdefinisi.",
         )
     if _GDP_SHARE_SUFFIX.search(label_b) and not _gdp_share_row(label_a, label_b):
         # SEKI V.1 prints a (% PDB) row only for the current account; dividing the capital
         # account by it gave -881%. Another account's share of GDP is no denominator.
         return _make_result(
-            fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            fact, periods, matched_source, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive", reason_code="di_luar_tabel",
             reasoning=(
                 f"Baris '{label_b}' adalah rasio terhadap PDB untuk metrik lain, bukan untuk "
                 f"'{label_a}'; tabel tidak memuat rasio '{label_a}' terhadap PDB."
@@ -1793,7 +1815,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
 
     if len(values) < 2:
         return _make_result(
-            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive", reason_code="periode",
             reasoning=(
                 f"Klaim tren '{fact.operation}' hanya menyebut satu periode dan tabel tidak "
                 f"punya periode sebelumnya untuk '{labelled[0][0]}' sebagai pembanding."
@@ -1805,7 +1827,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     if _VOLUME_TREND.search(fact.context_quote or "") and _MONEY_UNIT.search(src.table.unit or "") \
             and not _VOLUME_TREND.search(labelled[-1][0]):
         return _make_result(
-            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive", reason_code="jenis",
             reasoning=(
                 f"Kalimat menyebut tren volume, sedangkan '{labelled[-1][0]}' di "
                 f"[{matched_source}] bernilai uang ('{src.table.unit}') — tidak menjawab klaim ini."
@@ -1815,7 +1837,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     stated = _stated_endpoints_missed(fact.context_quote or "", values, src.table.unit)
     if stated:
         return _make_result(
-            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive", reason_code="tidak_ditemukan",
             reasoning=(
                 f"Kalimat menyebut {stated}, sedangkan '{labelled[-1][0]}' di [{matched_source}] "
                 f"bernilai {round(abs(values[0]), 4)} → {round(abs(values[-1]), 4)} "
@@ -1901,7 +1923,7 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     if not ok and operation == "is_stable" and not level_reason and not publication_level \
             and _says_held_not_unchanged(quote):
         return _make_result(
-            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+            fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
             reasoning=(
                 f"Kalimat menyebut '{fact.display_label}' terjaga, yaitu masih pada tingkat yang "
                 "aman, bukan tidak berubah; tabel tidak memuat batas aman itu untuk dinilai."
@@ -2012,7 +2034,7 @@ def _compute_threshold(
         threshold = 0.0
     if threshold is None:
         return _make_result(
-            fact, periods, matched_source, None, fact.unit, value, fact.unit, None, "Inconclusive",
+            fact, periods, matched_source, None, fact.unit, value, fact.unit, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
             reasoning="Klaim ambang tanpa nilai ambang yang jelas; tidak dapat dinilai.",
         )
     if threshold == 0 and not _SIGN_WORDS.search(fact.context_quote or ""):
@@ -2021,7 +2043,7 @@ def _compute_threshold(
         # a fall read as a sign, refuted on a level of 126,8. A zero bound needs the sentence to
         # speak of a sign at all.
         return _make_result(
-            fact, periods, matched_source, threshold, fact.unit, value, fact.unit, None, "Inconclusive",
+            fact, periods, matched_source, threshold, fact.unit, value, fact.unit, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
             reasoning="Klaim ambang 0, tetapi kalimatnya tidak menyebut tanda (positif/negatif, "
                       "ekspansi/kontraksi, surplus/defisit); tidak dapat dinilai.",
         )
@@ -2399,7 +2421,7 @@ def _compute_operation(
             # nothing to compare, and the subtraction used to crash.
             return _make_result(
                 fact, periods, matched_source, None, fact.unit, computed, src.table.unit, None,
-                "Inconclusive", reasoning="Klaim nilai tanpa angka yang disebut; tidak dapat dinilai.",
+                "Inconclusive", reason_code="klaim_tidak_lengkap", reasoning="Klaim nilai tanpa angka yang disebut; tidak dapat dinilai.",
             )
         delta, verdict, rule = _value_verdict(fact.claimed_value, table_value, fact.context_quote)
         if verdict == "Refuted":
@@ -2410,7 +2432,7 @@ def _compute_operation(
             if elsewhere is not None:
                 return _make_result(
                     fact, periods, matched_source, fact.claimed_value, fact.unit, computed, fact.unit,
-                    None, "Inconclusive",
+                    None, "Inconclusive", reason_code="periode",
                     reasoning=(
                         f"PDF: {fact.claimed_value} {fact.unit} | Excel [{matched_source}] "
                         f"({resolved[0][0]}) {fact.periods[0].month} {fact.periods[0].year}: {computed} | "
@@ -2521,9 +2543,10 @@ def _inconclusive_result(
             else f"{p.metric_label} {p.month} {p.year}"
             for p in best_missing
         )
-        reasoning = f"Data tidak ditemukan di sumber Excel manapun untuk: {missing_str}."
+        reasoning = _why("tidak_ditemukan", f"Data tidak ditemukan di sumber Excel manapun untuk: {missing_str}.")
     else:
-        reasoning = f"Tidak ada sumber Excel yang cocok untuk operasi '{fact.operation}' pada '{fact.display_label}'."
+        reasoning = _why("tidak_ditemukan",
+                         f"Tidak ada sumber Excel yang cocok untuk operasi '{fact.operation}' pada '{fact.display_label}'.")
     return _make_result(
         fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive", reasoning=reasoning,
     )
@@ -3254,7 +3277,7 @@ def _judge_group_scope_members(
                 return _named_rows_result(fact, named, src)
     if best is None:
         return _make_result(
-            fact, [], None, None, None, None, None, None, "Inconclusive",
+            fact, [], None, None, None, None, None, None, "Inconclusive", reason_code="tidak_ditemukan",
             reasoning=(
                 f"Klaim berlaku untuk {_SCOPE_TEXT[fact.group_scope]}, tetapi kelompoknya tidak "
                 "bisa dipastikan dari tabel (perlu minimal dua baris kelompok yang sama)."
@@ -3267,7 +3290,7 @@ def _judge_group_scope_members(
     members = [row for row in family if row not in excluded_rows]
     if not members:
         return _make_result(
-            fact, [], src.label, None, None, None, None, None, "Inconclusive",
+            fact, [], src.label, None, None, None, None, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
             reasoning=f"Tidak ada kelompok '{series}' tersisa setelah kelompok yang disebut terpisah.",
         )
 
@@ -3562,11 +3585,11 @@ def _only_quarterly_reason(missing: List[PeriodPoint], sources: List[_ExcelSourc
             if periods and all(month.startswith("Q") for _, month in periods):
                 year, quarter = max(periods, key=lambda p: (p[0], _period_ordinal(p[1])))
                 row = src.table._resolve_label(point.metric_label)
-                return (
+                return _why("periode", (
                     f"Tabel [{src.label}] memuat '{row}' hanya per triwulan (terakhir {quarter} "
                     f"{year}), sedangkan klaim menyebut {point.month} {point.year}; angka bulanan "
                     "tidak tersedia untuk dibandingkan."
-                )
+                ))
     return None
 
 
@@ -3575,7 +3598,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     # with an explanation instead of scanning sources for data that cannot qualify.
     if fact.operation in _TEMPORAL_ONLY_OPS and any(p.col_label is not None for p in fact.periods):
         return _make_result(
-            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive", reason_code="jenis",
             reasoning=(
                 f"Operasi '{fact.operation}' memerlukan data deret waktu (tahun/bulan), "
                 f"tetapi klaim ini merujuk atribut non-waktu ('{fact.display_label}')."
@@ -3617,7 +3640,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             _quote_names_qualifier(p.metric_label, quote) for p in fact.periods
         ) and not _all_net_rows(fact, sources):
             return _make_result(
-                fact, [], None, None, None, None, None, None, "Inconclusive",
+                fact, [], None, None, None, None, None, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
                 reasoning=(
                     f"Klaim ini hanya berlaku untuk sebagian kelompok/kota tanpa menyebut "
                     f"yang mana, sedangkan '{fact.display_label}' harus diperiksa sebagai satu "
@@ -3648,7 +3671,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             return _named_rows_result(fact, *bundled)
         if len(distinct_metrics) > 1:
             return _make_result(
-                fact, [], None, None, None, None, None, None, "Inconclusive",
+                fact, [], None, None, None, None, None, None, "Inconclusive", reason_code="klaim_tidak_lengkap",
                 reasoning=(
                     f"Klaim tren '{fact.operation}' harus mengikuti satu metrik, tetapi klaim ini "
                     f"mencakup {len(distinct_metrics)} metrik berbeda — seharusnya dipecah menjadi "
@@ -3686,18 +3709,18 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         )
         if other_kind:
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("jenis", (
                     f"Excel [{src.label}] ({resolved[0][0]}) berisi pertumbuhan {other_kind} "
                     f"('{src.table.unit}'), bukan yoy — tidak menjawab klaim yoy ini."
-                )
+                ))
             continue
         if not _can_answer(fact, resolved, src):
             if best_reason is None:
                 point = fact.periods[0]
-                best_reason = (
+                best_reason = _why("periode", (
                     f"No data found in Excel [{src.label}] for metric '{resolved[0][0]}' "
                     f"at {point.month} {point.year - 1} (needed for yoy denominator)."
-                )
+                ))
             dropped_for_lack_of_data.append(resolved[0][0])
             if displaced_source is None:
                 displaced_source = src.label
@@ -3717,10 +3740,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 if row_unit and "/" in row_unit and "/" not in (fact.unit or ""):
                     # A price row ('USD/barel') cannot answer an amount ('0,1 miliar dolar AS').
                     if best_reason is None:
-                        best_reason = (
+                        best_reason = _why("jenis", (
                             f"Baris '{resolved[0][0]}' di [{src.label}] bersatuan '{row_unit}', "
                             f"tidak bisa menjawab klaim dalam '{fact.unit}'."
-                        )
+                        ))
                     continue
                 excel_unit = row_unit or excel_unit
             # A '%, yoy' table cannot answer "berapa triliun Rp". Without this the fallback
@@ -3731,10 +3754,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             # that branch documents).
             if _is_growth_series(excel_unit) and _parse_scale_unit(fact.unit) is not None:
                 if best_reason is None:
-                    best_reason = (
+                    best_reason = _why("jenis", (
                         f"Sumber [{src.label}] bersatuan '{excel_unit}' (pertumbuhan), "
                         f"tidak bisa menjawab klaim nilai dalam '{fact.unit}'."
-                    )
+                    ))
                 continue
             # The mirror case: an index sheet holds LEVELS, so a percent claim ('harga rumah
             # tipe menengah tumbuh 0,40% (qtq)') compared with them reads 0,40 against 114,01.
@@ -3743,10 +3766,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             # a % is turned away.
             if _is_percent_unit(fact.unit) and _is_plain_index(excel_unit):
                 if best_reason is None:
-                    best_reason = (
+                    best_reason = _why("jenis", (
                         f"Sumber [{src.label}] berisi level indeks ('{excel_unit}'); klaim dalam "
                         f"persen (pertumbuhan) tidak bisa dibandingkan langsung dengan level."
-                    )
+                    ))
                 continue
             factor = _unit_factor(fact.unit, excel_unit)
             if factor is None and (not excel_unit or _parse_scale_unit(excel_unit) is None):
@@ -3768,10 +3791,10 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                 unit_comparable = parsed is None
             if factor is None:
                 if best_reason is None:
-                    best_reason = (
+                    best_reason = _why("jenis", (
                         f"Unit conversion from '{fact.unit}' to '{excel_unit}' "
                         f"([{src.label}]) is not supported. Cannot compare."
-                    )
+                    ))
                 continue
 
         # Do NOT stop at the first source that resolves: the fuzzy tiers resolve a
@@ -3789,17 +3812,17 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             continue
         if not _source_is_about_the_sentence(fact, src):
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("tidak_ditemukan", (
                     f"Sumber [{src.label}] membahas pokok lain dari kalimat klaim "
                     f"('{fact.display_label}' saja tidak menyebut pokoknya)."
-                )
+                ))
             continue
         if _answers_one_group_of_it(fact, resolved, src.table):
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("di_luar_tabel", (
                     f"Sumber [{src.label}] hanya memuat rinciannya per kelompok "
                     f"('{resolved[0][0]}'), bukan angka '{fact.display_label}' itu sendiri."
-                )
+                ))
             continue
         # A rate the sentence marks '(mtm)' is not answered by a '%, yoy' cell, and vice versa:
         # SPE Tabel 2 (yoy) answered "terkontraksi sebesar 0,1% (mtm)" with 1,1.
@@ -3808,35 +3831,35 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
             cell_kind = _growth_kind(src.table.unit, resolved[0][0])
             if claim_kind and cell_kind not in (None, "mixed", claim_kind):
                 if best_reason is None:
-                    best_reason = (
+                    best_reason = _why("jenis", (
                         f"Excel [{src.label}] ({resolved[0][0]}) berisi pertumbuhan {cell_kind} "
                         f"('{src.table.unit}'), sedangkan klaim menyebut {claim_kind}."
-                    )
+                    ))
                 continue
         gross = _gross_row_for_a_net_number(fact, resolved)
         if gross:
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("di_luar_tabel", (
                     f"Klaim menyebut posisi neto, sedangkan baris '{gross}' di [{src.label}] "
                     f"hanya memuat satu sisi (aset atau kewajiban) secara bruto."
-                )
+                ))
             continue
         absent = _breakdown_the_table_lacks(fact, resolved, src)
         if absent:
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("di_luar_tabel", (
                     f"Sumber [{src.label}] tidak memuat '{', '.join(absent)}' — "
                     f"rincian '{fact.display_label}' tidak ada di tabel ini."
-                )
+                ))
             continue
         coverage = _coverage_score(fact.periods, resolved, src)
         if coverage <= 0.0:
             # Nothing this source names has anything to do with what the claim asked about —
             # see TableData.query_coverage. Answering anyway is the confident-wrong-number case.
             if best_reason is None:
-                best_reason = (
+                best_reason = _why("tidak_ditemukan", (
                     f"Sumber [{src.label}] tidak membahas '{fact.display_label}'."
-                )
+                ))
             continue
         candidates.append(_Candidate(
             score=_resolution_score(fact.periods, resolved),
@@ -3869,8 +3892,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         named = next(src for src in sources if _is_cited(src, cited))
         return _make_result(
             fact, [], None, fact.claimed_value, fact.unit, None, None, None, "Inconclusive",
-            reasoning=(f"Kalimat merujuk Tabel {cited} ([{named.label}]), tetapi tabel itu tidak "
-                       f"memuat '{fact.display_label}' untuk periode klaim; tabel lain tidak dipakai."),
+            reasoning=_why("periode", (f"Kalimat merujuk Tabel {cited} ([{named.label}]), tetapi tabel itu tidak "
+                       f"memuat '{fact.display_label}' untuk periode klaim; tabel lain tidak dipakai.")),
         )
     candidates = _prefer_growth_source_for_a_growth_trend(fact, candidates)
     # Another uploaded PDF is a fallback, never a rival: the report's own tables and the Excel
@@ -4626,7 +4649,7 @@ def _unnamed_total_guard(fact: ExtractedFact, result: FactVerificationResult) ->
             or not all(BITableData._is_aggregate(p.metric_label) for p in result.periods)):
         return result
     return result.model_copy(update={
-        "verdict": "Inconclusive",
+        "verdict": "Inconclusive", "reason_code": "klaim_tidak_lengkap",
         "reasoning": (
             "Kalimat ini merujuk ke kalimat sebelumnya tanpa menyebut rinciannya, dan angkanya "
             f"tidak sama dengan baris TOTAL — kemungkinan angka ini milik rincian yang dibahas "
@@ -4658,7 +4681,7 @@ def _section_guard(
         for pattern, subject in uncovered.items():
             if re.search(pattern, heading, re.IGNORECASE) and not re.search(pattern, rows, re.IGNORECASE):
                 return result.model_copy(update={
-                    "verdict": "Inconclusive", "computed_value": None, "delta": None,
+                    "verdict": "Inconclusive", "reason_code": "di_luar_tabel", "computed_value": None, "delta": None,
                     "resolved_via": "section_guard",
                     "reasoning": (
                         f"Kalimat ini ada di bagian '{heading}', yang membahas {subject}; "
@@ -4690,7 +4713,7 @@ def _absent_item_guard(
     for pattern, item in absent.items():
         if re.search(pattern, name, re.IGNORECASE) and not re.search(pattern, rows, re.IGNORECASE):
             return result.model_copy(update={
-                "verdict": "Inconclusive", "computed_value": None, "delta": None,
+                "verdict": "Inconclusive", "reason_code": "di_luar_tabel", "computed_value": None, "delta": None,
                 "resolved_via": "absent_item_guard",
                 "reasoning": (
                     f"Klaim ini tentang {item}, yang tidak dirinci di tabel {src.sheet}; baris "
@@ -4731,7 +4754,7 @@ def _number_phrase_guard(
             continue
         said = " ".join(afters[0].split()[:4])
         return result.model_copy(update={
-            "verdict": "Inconclusive", "computed_value": None, "delta": None,
+            "verdict": "Inconclusive", "reason_code": "jenis", "computed_value": None, "delta": None,
             "resolved_via": "number_phrase_guard",
             "reasoning": (
                 f"Angka {fact.claimed_value:g} di kalimat diikuti '{said}…', bukan ukuran baris "
@@ -4831,7 +4854,7 @@ def _months_of_imports_guard(fact: ExtractedFact, result: FactVerificationResult
         return result
     rows = ", ".join(dict.fromkeys(p.metric_label for p in result.periods))
     return result.model_copy(update={
-        "verdict": "Inconclusive", "computed_value": None, "delta": None,
+        "verdict": "Inconclusive", "reason_code": "jenis", "computed_value": None, "delta": None,
         "resolved_via": "months_of_imports_guard",
         "reasoning": (
             f"Angka klaim dinyatakan dalam bulan impor, sedangkan baris '{rows}' bukan ukuran "
@@ -4856,7 +4879,7 @@ def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> F
     except Exception as exc:
         logger.exception("Could not evaluate fact %r (%s)", fact.display_label, fact.operation)
         return _make_result(
-            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive",
+            fact, [], None, fact.claimed_value, fact.unit, None, fact.unit, None, "Inconclusive", reason_code="lainnya",
             reasoning=f"Klaim ini gagal dinilai oleh program ({type(exc).__name__}: {exc}).",
         )
 
@@ -5256,7 +5279,7 @@ def _settle_chart_series(
                     continue
                 matched_at = f"{_MONTH_ID.get(when[1], when[1])} {when[0]}"
                 return result.model_copy(update={
-                    "verdict": "Inconclusive",
+                    "verdict": "Inconclusive", "reason_code": "tidak_ditemukan",
                     "reasoning": (
                         f"Angka grafik {fact.claimed_value} tidak cocok dengan seri yang dibaca "
                         f"model ({own}), tetapi sama dengan seri lain di grafik yang sama: "
@@ -5404,6 +5427,18 @@ def summarize_chart(
         issues=[result for _, result in checks if result.verdict != "Entailed"],
         thumbnail=reading.thumbnail,
     )
+
+
+def _with_reason_codes(results: List[FactVerificationResult]) -> List[FactVerificationResult]:
+    """Every Tidak Cukup Data leaves the engine saying why; a path that forgot is 'lainnya'
+    (and logged, so the missing code can be added where that reason is written)."""
+    out = []
+    for r in results:
+        if r.verdict == "Inconclusive" and r.reason_code is None:
+            logger.warning("Tidak Cukup Data without a reason code: %r — %s", r.metric_label, r.reasoning[:120])
+            r = r.model_copy(update={"reason_code": "lainnya"})
+        out.append(r)
+    return out
 
 
 async def verify_paired(
@@ -5692,6 +5727,7 @@ async def verify_paired(
     results = [
         _publication_guards(fact, result, table_sources) for fact, result in zip(facts, results)
     ] + results[len(facts):]
+    results = _with_reason_codes(results)
 
     entailed = sum(1 for r in results if r.verdict == "Entailed")
     refuted = sum(1 for r in results if r.verdict == "Refuted")

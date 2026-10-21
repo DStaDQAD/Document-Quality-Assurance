@@ -189,6 +189,7 @@ def test_not_in_table_turns_a_refuted_claim_inconclusive():
     assert (outcome, final.verdict, final.resolved_via) == ("to_inconclusive", "Inconclusive", "ai_review")
     assert final.computed_value is None
     assert "tabel tidak memuat data yang dimaksud" in final.reasoning
+    assert final.reason_code == "ditinjau_ai"
 
 
 def test_not_in_table_leaves_an_inconclusive_claim_alone():

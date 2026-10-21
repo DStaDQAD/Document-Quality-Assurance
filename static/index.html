@@ -1729,6 +1729,18 @@ body.auth-locked .app {
 
   // Paired verifier
   const VERDICT_LABEL = { Entailed: "Sesuai", Refuted: "Tidak Sesuai", Inconclusive: "Tidak Cukup Data" };
+  // Why a claim is Tidak Cukup Data (schemas.ReasonCode).
+  const REASON_LABEL = {
+    di_luar_tabel: "Di luar tabel yang diunggah",
+    tidak_ditemukan: "Tidak ditemukan di tabel",
+    periode: "Periode tidak tersedia",
+    jenis: "Jenis data tidak cocok",
+    tabel_gagal_dibaca: "Tabel gagal dibaca",
+    klaim_tidak_lengkap: "Klaim tidak lengkap",
+    angka_tidak_di_kalimat: "Angka tidak ditemukan di kalimat",
+    ditinjau_ai: "Ditinjau AI",
+    lainnya: "Lainnya",
+  };
   const CONFLICT_LABEL = {
     internal: "Tabel internal tidak konsisten",
     cross: "PDF vs Excel berbeda",
@@ -2001,6 +2013,7 @@ body.auth-locked .app {
           return `<div class="fact-card ${verdict}${hidden}${conflict ? " has-conflict" : ""}" data-verdict="${escapeHtml(verdict)}" data-source="${escapeHtml(item.matched_excel_source || "")}" data-page="${item.page_number ?? ""}" data-conflict="${conflict ? 1 : 0}" data-search="${searchText}">
             <div class="fact-card-top">
               <span class="badge ${badgeCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span>
+              ${verdict === "Inconclusive" && item.reason_code ? `<span class="source-badge reason-badge">${escapeHtml(REASON_LABEL[item.reason_code] || item.reason_code)}</span>` : ""}
               ${conflictBadge}
               <span class="source-badge">${escapeHtml(opLabel)}</span>
               <span class="fact-metric">${escapeHtml(item.metric_label)}</span>

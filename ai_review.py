@@ -253,7 +253,7 @@ def judge_review(
         if result.verdict != "Refuted":
             return unchanged
         return result.model_copy(update={
-            "verdict": "Inconclusive", "computed_value": None, "delta": None,
+            "verdict": "Inconclusive", "reason_code": "ditinjau_ai", "computed_value": None, "delta": None,
             "resolved_via": "ai_review",
             "reasoning": (f"{result.reasoning} | Ditinjau AI: tabel tidak memuat data yang dimaksud "
                           f"kalimat ini — {review.explanation}"),

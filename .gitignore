@@ -100,3 +100,6 @@ sample_data/sharepoint/
 
 # Sentence inventory (tools/inventory): sentences from internal drafts and their hand labels
 eval/inventory/
+eval/cases/ub_jun2026/
+eval/cases/cadev_jul2026/
+eval/cases/sulni_agu2026/
