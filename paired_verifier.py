@@ -2084,6 +2084,63 @@ def _reinterpret_diff_as_value(
     return result.model_copy(update={"operation": "value"})
 
 
+_RISE_WORDS = re.compile(r"\b(meningkat|naik|kenaikan|peningkatan|bertambah|penambahan)\b", re.IGNORECASE)
+_FALL_WORDS = re.compile(r"\b(menurun|turun|penurunan|berkurang|pengurangan)\b", re.IGNORECASE)
+
+
+def _reinterpret_value_as_change(
+    fact: ExtractedFact, label: str, factor: float, table_value: float, src: _ExcelSource
+) -> Optional[FactVerificationResult]:
+    """A refuted 'value' whose number is the row's change from the period before, in a sentence
+    about a rise or fall in that direction — re-checked as a 'diff'.
+
+    PII Tw I-2026: "posisi cadangan devisa yang menurun terutama bersumber dari posisi cadangan
+    devisa lainnya sebesar 9,1 miliar dolar AS" — 9,1 is how far 'Cadangan Devisa Lainnya' fell
+    (135,9 -> 126,8), not its level, and was refuted against 126,8. Only consulted after the
+    value check failed; a change in the other direction, or none matching, leaves it Refuted.
+    """
+    point = fact.periods[0] if fact.periods else None
+    quote = fact.context_quote or ""
+    rises, falls = bool(_RISE_WORDS.search(quote)), bool(_FALL_WORDS.search(quote))
+    if (point is None or point.col_label is not None or point.year is None or not point.month
+            or fact.claimed_value is None or not (rises or falls)):
+        return None
+    if point.month in _MONTH_ABBREVS:
+        names = _MONTH_ABBREVS
+    elif re.fullmatch(r"Q[1-4]", point.month):
+        names = ("Q1", "Q2", "Q3", "Q4")
+    else:
+        return None
+    year, index = divmod(point.year * len(names) + names.index(point.month) - 1, len(names))
+    prior_raw = src.table._data.get((label, year, names[index]))
+    if prior_raw is None:
+        return None
+    prior = prior_raw / factor
+    change = round(table_value - prior, 4)
+    if (change < 0 and not falls) or (change > 0 and not rises):
+        return None
+    # Both ends are rounded, so the change carries both roundings: a unit of the last digit the
+    # sentence prints (9,1 -> 0,1; 0,22 -> 0,01).
+    printed = _printed_decimals(fact.claimed_value, quote)
+    tolerance = 10 ** -printed if printed is not None else 2 * MATCH_TOLERANCE
+    delta, verdict = _numeric_verdict(abs(fact.claimed_value), abs(change), tolerance)
+    if verdict != "Entailed":
+        return None
+    prior_point = PeriodResult(metric_label=label, year=year, month=names[index], excel_value=round(prior, 4))
+    current = PeriodResult(metric_label=label, year=point.year, month=point.month, excel_value=round(table_value, 4))
+    result = _make_result(
+        fact, [prior_point, current], src.label, fact.claimed_value, fact.unit, change, fact.unit, delta,
+        "Entailed",
+        reasoning=(
+            f"PDF: {fact.claimed_value} {fact.unit} | Klaim ini ditandai sebagai nilai, tetapi kalimatnya "
+            f"menyebut perubahan dan angkanya cocok dengan perubahan '{label}' dari {names[index]} {year} "
+            f"({round(prior, 4)}) ke {point.month} {point.year} ({round(table_value, 4)}) = {change} "
+            f"{fact.unit} — dinilai sebagai selisih. | Δ = {delta} → within tolerance {tolerance}"
+        ),
+    )
+    return result.model_copy(update={"operation": "diff"})
+
+
 # Words that make a report print the SIZE of a negative balance as a positive number: "defisit
 # 12,5 miliar dolar AS", "kewajiban neto 197,4", "arus keluar neto 2,2", "kontraksi 0,1".
 _NEGATIVE_BALANCE_WORDS = re.compile(
@@ -2381,6 +2438,11 @@ def _compute_operation(
         # prints: both ends are rounded, so the change carries both roundings (8,26 here).
         diff_tolerance = (MATCH_TOLERANCE if _printed_in(fact.claimed_value, fact.context_quote)
                           else 2 * MATCH_TOLERANCE)
+        # "penurunan posisi aset derivatif finansial sebesar 23 juta dolar AS" on 817,1 -> 794,3:
+        # a change printed without decimals is stated to the nearest unit (22,78 is 23).
+        printed = _printed_decimals(fact.claimed_value, fact.context_quote)
+        if printed is not None:
+            diff_tolerance = max(diff_tolerance, 0.5 * 10 ** -printed)
         delta, verdict = _numeric_verdict(fact.claimed_value, computed, diff_tolerance)
         if verdict == "Refuted":
             recovered = _reinterpret_diff_as_value(fact, resolved, converted, computed, src)
@@ -3864,6 +3926,16 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     == (head_cand.src.origin in _FALLBACK_ORIGINS)):
                 head_index = index
                 break
+    # Last, and only for the source that answers: a level no tied table confirms may be the row's
+    # change that the sentence describes. Earlier, it would outrank a tied table that prints the
+    # level itself (SKDU's "SBT 0,22%" is Tabel 4's level, and Tabel 2's capacity rose by 0,20).
+    head_cand, head_result = evaluated[head_index]
+    if head_result.verdict == "Refuted" and fact.operation == "value":
+        label, raw = head_cand.resolved[0]
+        recovered = _reinterpret_value_as_change(fact, label, head_cand.factor, raw / head_cand.factor,
+                                                 head_cand.src)
+        if recovered is not None:
+            evaluated[head_index] = (head_cand, recovered)
     # The loop above stops at the first looser match, and with the fallback group sorted last
     # that can be before any other PDF was looked at. When the own sources reached no verdict,
     # another PDF may still answer — held to the same bar: at least as close a label match as
