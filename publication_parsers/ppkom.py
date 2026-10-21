@@ -57,6 +57,9 @@ _CATEGORY = re.compile(r"^(?P<city>[^>]+?) > (?:Jual|Sewa) > (?P<segment>.+)$")
 
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_generic_reader(data, sheet_name)
+    # The Indonesian title only: the reader joins it with its English mirror, and Tabel 5's came
+    # back as the pair repeated forty times (2.498 characters) — in every extraction prompt.
+    table.title = re.split(r"\s+(?=Tab(?:el|le)\s*\d+\s*\.)", (table.title or "").strip())[0]
     number = int(re.search(r"\d+", sheet_name).group())
     table.unit = "%, qtq" if number in _QTQ else "%, yoy" if number in _YOY else "Indeks"
     _name_cities(table)

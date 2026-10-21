@@ -70,3 +70,10 @@ def test_a_chart_caption_in_the_sentence_does_not_pick_the_growth_table():
                _ExcelSource(table=growth, filename="p.xlsx", sheet="Tabel 17")]
     result = _evaluate_fact(fact, sources)
     assert result.verdict == "Entailed" and result.matched_excel_source.endswith("Tabel 13")
+
+
+def test_the_title_is_the_indonesian_one_once():
+    table = TableData(title="Tabel 5. Pertumbuhan Tahunan Indeks Harga Total Tabel 5. Annual Growth Total "
+                            "Tabel 5. Annual Growth Total", unit="", row_labels=[])
+    with mock.patch.object(ppkom, "parse_with_generic_reader", return_value=table):
+        assert ppkom.parse(b"", "Tabel 5").title == "Tabel 5. Pertumbuhan Tahunan Indeks Harga Total"
