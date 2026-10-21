@@ -36,9 +36,24 @@ TERM_ALIASES = {
 }
 
 
+# Rows that are already a net position, and the gross rows that stand for them. The memorandum
+# nets direct investment by direction ('Ke luar negeri' − 'Di Indonesia (PMA)'); reserve assets
+# have no liability side. Tw II-2026: "investasi langsung mencatat kewajiban neto sebesar 149,1"
+# came back once as 'Di Indonesia (PMA)' (294,1), and "cadangan devisa mencatat aset neto" as
+# 'Cadangan Devisa' itself.
+DIRECTIONAL_NET = "Investasi langsung berdasarkan arah investasi"
+NET_ALIASES = {
+    "ke luar negeri": DIRECTIONAL_NET,
+    "di indonesia (pma)": DIRECTIONAL_NET,
+    DIRECTIONAL_NET.lower(): DIRECTIONAL_NET,
+    "cadangan devisa": "Cadangan Devisa",
+}
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)
     _add_net_rows(table)
+    table.net_rows.update({key: row for key, row in NET_ALIASES.items() if row in table.row_labels})
     if _add_sum_row(table, ULN_ROW, ULN_PARTS):
         table.term_aliases = dict(TERM_ALIASES)
     return table

@@ -1019,6 +1019,7 @@ _NET_POSITION = re.compile(r"\b(kewajiban|aset)\s+(neto|bersih)\b", re.IGNORECAS
 _GROSS_SIDE = re.compile(r"\b(KFLN|AFLN|finansial\s+luar\s+negeri|bruto)\b", re.IGNORECASE)
 _QUOTE_NUMBER = re.compile(r"\d[\d.]*(?:,\d+)?")
 _BALANCE_SIDES = ("aset", "kewajiban", "afln", "kfln")
+_SPLIT_DIGITS = re.compile(r"(?<=\d) (?=\d)|(?<=\d,) (?=\d)")
 
 
 def _is_a_net_figure(fact: ExtractedFact) -> bool:
@@ -1030,7 +1031,8 @@ def _is_a_net_figure(fact: ExtractedFact) -> bool:
     """
     if fact.claimed_value is None:
         return False
-    quote = fact.context_quote or ""
+    # A PDF text layer splits numbers ("kewajiban neto sebesar 1 49,1", "turun 19, 8").
+    quote = _SPLIT_DIGITS.sub("", fact.context_quote or "")
     for m in _QUOTE_NUMBER.finditer(quote):
         try:
             if abs(_id_number(m.group(0).rstrip(".")) - abs(fact.claimed_value)) > 1e-9:
@@ -1061,6 +1063,20 @@ def _gross_row_for_a_net_number(fact: ExtractedFact, resolved: List[Tuple[str, f
     return None
 
 
+def _net_row_for(label: str, table: BITableData) -> Optional[str]:
+    """The net row (TableData.net_rows) a gross row stands for: the component under an 'Aset' /
+    'Kewajiban' side, or a row the parser maps directly (PII's 'Di Indonesia (PMA)', one side of
+    the directional memorandum, whose net row is 'Investasi langsung berdasarkan arah investasi')."""
+    if not table.net_rows:
+        return None
+    side, _, component = label.partition(QUAL_SEP)
+    if component and side.strip().lower() in _BALANCE_SIDES:
+        net = table.net_rows.get(component.strip().lower())
+        if net:
+            return net
+    return table.net_rows.get(label.strip().lower())
+
+
 def _net_row_instead(
     fact: ExtractedFact, resolved: List[Tuple[str, float]], src: _ExcelSource
 ) -> Optional[List[Tuple[str, float]]]:
@@ -1076,9 +1092,8 @@ def _net_row_instead(
         return None
     out = []
     for point, (label, _value) in zip(fact.periods, resolved):
-        side, _, component = label.partition(QUAL_SEP)
-        net = src.table.net_rows.get(component.strip().lower())
-        if side.strip().lower() not in _BALANCE_SIDES or net is None:
+        net = _net_row_for(label, src.table)
+        if net is None:
             return None
         value = src.table._data.get((net, point.year, point.month))
         if value is None:
@@ -1087,17 +1102,29 @@ def _net_row_instead(
     return out
 
 
+def _all_net_rows(fact: ExtractedFact, sources: List[_ExcelSource]) -> bool:
+    """Every row of the claim is a net row (TableData.net_rows) — put there by
+    _net_position_threshold, which requires the sentence to name each one."""
+    nets = {row for src in sources for row in src.table.net_rows.values()}
+    return bool(nets) and all(p.metric_label in nets for p in fact.periods)
+
+
 def _net_position_threshold(
     fact: ExtractedFact, sources: List[_ExcelSource]
 ) -> Optional[ExtractedFact]:
-    """A sign claim on a net position, asked of the component's net row.
+    """A sign claim on a net position, asked of the component's net row, on the sentence's side.
 
     PII Tw II-2026: "posisi investasi portofolio mencatat kewajiban neto sebesar 229,6" also came
     back as 'Investasi Portofolio' below 0. Read as a group claim it was judged on the sentence's
     'kewajiban' — 'Kewajiban > Investasi Portofolio', 273,1 > 0 — and reported Tidak Sesuai. What
-    is below 0 is Aset − Kewajiban (TableData.net_rows). Only a threshold at 0 whose sentence
-    states the net side before naming any gross one (KFLN/AFLN/bruto), and only a claim that
-    resolves to one side of a component with a net row; the label becomes that row's exact key.
+    is below 0 is Aset − Kewajiban (TableData.net_rows). And "sebagian besar komponen … mencatat
+    kewajiban neto, kecuali investasi lainnya dan cadangan devisa mencatat aset neto" came back as
+    those two below 0, a majority claim: the net phrase after the claim's own names ("aset neto")
+    says which side, and the named rows are judged on it, not as a majority.
+
+    Only a threshold at 0 whose sentence states a net side before naming any gross one
+    (KFLN/AFLN/bruto), and only a claim whose every row has a net row; the labels become those
+    rows' exact keys and any group_scope is dropped (the sentence names the rows itself).
     """
     if fact.operation not in _THRESHOLD_OPS or (fact.claimed_value or 0) != 0:
         return None
@@ -1108,21 +1135,29 @@ def _net_position_threshold(
     sentence_start = max((m.end() for m in re.finditer(r"[.;]\s", quote[:net.start()])), default=0)
     if _GROSS_SIDE.search(quote[sentence_start:net.end()]):
         return None
+    lowered = quote.lower()
+    named_at = [lowered.find(p.metric_label.split(QUAL_SEP)[-1].strip().lower()) for p in fact.periods]
+    if not all(at >= 0 for at in named_at):
+        return None  # a row the extractor picked for an unnamed "sebagian besar komponen"
+    after = _NET_POSITION.search(quote, max(named_at))
+    if after is not None and not re.search(r"[.;]\s", quote[max(named_at):after.start()]):
+        net = after
+    operation = "above_threshold" if net.group(1).lower() == "aset" else "below_threshold"
     for src in sources:
         if not src.table.net_rows:
             continue
         labels = []
         for point in fact.periods:
             label, _value = src.table.lookup_fuzzy(point.metric_label, point.year, point.month)
-            side, _, component = (label or "").partition(QUAL_SEP)
-            row = src.table.net_rows.get(component.strip().lower())
-            if side.strip().lower() not in _BALANCE_SIDES or row is None or \
-                    src.table._data.get((row, point.year, point.month)) is None:
+            row = _net_row_for(label or "", src.table)
+            if row is None or src.table._data.get((row, point.year, point.month)) is None:
                 break
             labels.append(row)
         else:
             moved = copy.copy(fact)
             moved.periods = [PeriodPoint(row, p.year, p.month) for p, row in zip(fact.periods, labels)]
+            moved.operation = operation
+            moved.group_scope = None
             return moved
     return None
 
@@ -3488,7 +3523,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # A quantified group claim ("seluruh", "sebagian besar", "lainnya") the extractor marked as
     # such is judged on every group of its breakdown — see _judge_group_scope.
-    fact = _majority_the_sentence_states(fact) or fact
+    fact = _net_position_threshold(fact, sources) or _majority_the_sentence_states(fact) or fact
     if fact.group_scope and fact.operation in _TREND_OPS | _THRESHOLD_OPS:
         return _judge_group_scope(fact, sources)
 
@@ -3502,7 +3537,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         quote = fact.context_quote or ""
         if _SUBSET_PHRASE_RE.search(_without_own_names(quote, fact)) and not any(
             _quote_names_qualifier(p.metric_label, quote) for p in fact.periods
-        ):
+        ) and not _all_net_rows(fact, sources):
             return _make_result(
                 fact, [], None, None, None, None, None, None, "Inconclusive",
                 reasoning=(
@@ -3512,8 +3547,6 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
                     "diklaim."
                 ),
             )
-
-    fact = _net_position_threshold(fact, sources) or fact
 
     # A trend or threshold the sentence states for named groups is checked on THOSE groups,
     # whatever name the extractor gave it — see _groups_the_sentence_names.

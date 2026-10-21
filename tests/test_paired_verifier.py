@@ -2972,6 +2972,52 @@ def test_a_gross_figure_never_reaches_the_net_row():
     assert result.periods[0].metric_label == "Aset > Investasi Portofolio"
 
 
+def _pii_components():
+    table = _make_table(title="Posisi Investasi Internasional Indonesia", unit="miliar USD", data={
+        ("Aset > Investasi Lainnya", 2026, "Q2"): 233.63, ("Kewajiban > Investasi Lainnya", 2026, "Q2"): 196.60,
+        ("Cadangan Devisa", 2026, "Q2"): 145.59,
+        ("Investasi langsung berdasarkan arah investasi", 2026, "Q1"): -168.84,
+        ("Investasi langsung berdasarkan arah investasi", 2026, "Q2"): -149.08,
+        ("Di Indonesia (PMA)", 2026, "Q1"): 310.78, ("Di Indonesia (PMA)", 2026, "Q2"): 294.11,
+    })
+    table._data[("Investasi Lainnya (neto)", 2026, "Q2")] = 233.63 - 196.60
+    table.net_rows = {"investasi lainnya": "Investasi Lainnya (neto)", "cadangan devisa": "Cadangan Devisa",
+                      "di indonesia (pma)": "Investasi langsung berdasarkan arah investasi"}
+    return [_make_source(table)]
+
+
+def test_the_named_exceptions_are_judged_on_their_own_net_side():
+    # PII Tw II-2026: "Sebagian besar komponen … mencatat kewajiban neto, kecuali investasi lainnya
+    # dan cadangan devisa mencatat aset neto" came back as those two below 0, a majority claim,
+    # and was refuted on the gross asset rows.
+    fact = _make_fact(
+        operation="below_threshold", claimed_value=0.0, unit=None, group_scope="majority",
+        context_quote=("Sebagian besar komponen PII pada akhir triwulan II 2026 mencatat kewajiban neto, "
+                       "kecuali investasi lainnya dan cadangan devisa mencatat aset neto."),
+        periods=[_make_period(metric_label="Investasi Lainnya", month="Q2"),
+                 _make_period(metric_label="Cadangan Devisa", month="Q2")],
+    )
+
+    assert _evaluate_fact_safely(fact, _pii_components()).verdict == "Entailed"
+
+
+@pytest.mark.parametrize("operation, claimed, year_month", [
+    ("value", 149.1, [(2026, "Q2")]),
+    ("diff", -19.8, [(2026, "Q1"), (2026, "Q2")]),
+])
+def test_a_net_figure_split_by_the_pdf_reaches_the_directional_net_row(operation, claimed, year_month):
+    # The same report printed "kewajiban neto sebesar 1 49,1 … turun 19, 8" and the extractor
+    # named the memorandum's 'Di Indonesia (PMA)' (294,1).
+    fact = _make_fact(
+        operation=operation, claimed_value=claimed, unit="miliar USD",
+        context_quote=("Posisi investasi langsung pada akhir triwulan II 202 6 mencatat kewajiban neto "
+                       "sebesar 1 49,1 miliar dolar AS, turun 19, 8 miliar dolar AS dari 168,8 miliar dolar AS"),
+        periods=[_make_period(metric_label="Di Indonesia (PMA)", year=y, month=m) for y, m in year_month],
+    )
+
+    assert _evaluate_fact_safely(fact, _pii_components()).verdict == "Entailed"
+
+
 def test_net_liabilities_as_a_sign_claim_are_checked_on_the_net_row():
     # The same sentence also came back as 'Investasi Portofolio' below 0, which was judged on the
     # sentence's 'kewajiban' — the gross 273,1 — and reported Tidak Sesuai.
