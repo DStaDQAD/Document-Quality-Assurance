@@ -304,6 +304,8 @@ select { cursor: pointer; }
   margin: 14px 0 0; padding: 14px 0 0; min-width: 0;
 }
 .rules legend { float: left; width: 100%; padding: 0; margin-bottom: 10px; }
+/* Jenis publikasi sits first in the card, above the uploads it decides: rule below, not above. */
+#publication-types { border-top: none; margin: 0 0 14px; padding: 0 0 14px; border-bottom: 1px solid var(--border); }
 .rules-grid { clear: both; display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; }
 @media (max-width: 560px) { .rules-grid { grid-template-columns: 1fr; } }
 .rule-check {
@@ -1022,6 +1024,15 @@ body.auth-locked .app {
         <div class="paired-form-area">
           <div class="card" style="margin-bottom:0">
             <div class="card-header">
+              <!-- Jenis publikasi comes first and picks the upload columns below it: a Siaran Pers (unless the
+                   publication has none, press: false), plus a Laporan when it has one. The options are built from
+                   PUBLICATIONS in the script; nothing is chosen on load. -->
+              <fieldset class="rules" id="publication-types">
+                <legend class="upload-label">Jenis publikasi</legend>
+                <select id="publication-select" aria-label="Jenis publikasi">
+                  <option value="" disabled selected>Pilih jenis publikasi…</option>
+                </select>
+              </fieldset>
               <div class="upload-row" id="upload-row">
                 <div class="upload-field" id="press-upload-field">
                   <span class="upload-label">Siaran Pers</span>
@@ -1039,15 +1050,6 @@ body.auth-locked .app {
                   </button>
                 </div>
               </div>
-              <!-- Jenis publikasi picks the upload columns above it: a Siaran Pers (unless the
-                   publication has none, press: false), plus a Laporan when it has one. The options are built from
-                   PUBLICATIONS in the script; nothing is chosen on load. -->
-              <fieldset class="rules" id="publication-types">
-                <legend class="upload-label">Jenis publikasi</legend>
-                <select id="publication-select" aria-label="Jenis publikasi">
-                  <option value="" disabled selected>Pilih jenis publikasi…</option>
-                </select>
-              </fieldset>
               <!-- Aturan pemeriksaan starts folded; the summary line opens it. -->
               <details class="rules-details" id="rules-details">
                 <summary class="upload-label" id="check-rules-legend">Aturan pemeriksaan</summary>
