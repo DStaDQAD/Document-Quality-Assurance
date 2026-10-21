@@ -385,6 +385,11 @@ class TableData:
     # whose rows do end so), but every Tabel 4 row is a balance and none carries that level. Set by
     # the publication parser; dropped from the query in _normalise_query.
     measure_levels: frozenset = field(default_factory=frozenset, repr=False)
+    # (compiled pattern, replacement) pairs applied to a claim's metric before any other
+    # normalisation, when a publication needs a condition measure_levels cannot express: PPKom drops
+    # the index's name only in front of a city ("Indeks Harga … > hotel > Jakarta"), not before a
+    # national row ("Indeks Harga … > Jual"). Set by the publication parser.
+    query_rewrites: tuple = field(default_factory=tuple, repr=False)
     # A component's net position, which the sheet prints only as its two gross sides, as
     # {component lower-cased: row in _data}: PII's "investasi portofolio mencatat kewajiban neto
     # sebesar 229,6" is 'Aset > Investasi Portofolio' − 'Kewajiban > Investasi Portofolio'. The rows
@@ -888,6 +893,8 @@ class TableData:
         whole = self.label_aliases.get(" ".join(query.split()).lower())
         if whole is not None:
             return whole
+        for pattern, replacement in self.query_rewrites:
+            query = pattern.sub(replacement, query)
         query = _expand_report_terms(query)
         query = self._apply_aliases(query)
         if self.measure_levels and QUAL_SEP.strip() in query:

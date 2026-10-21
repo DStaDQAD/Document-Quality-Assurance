@@ -4000,7 +4000,8 @@ def _title_words_in_sentence(fact: ExtractedFact, src: "_ExcelSource") -> int:
     claim's sentence uses (see _Candidate.sentence_title)."""
     title = _sig_words(src.table.title or "") | _sig_words(" ".join(src.table.subject_words))
     words = {w for w in title - _TITLE_FILLER if w.isalpha()}
-    return len(words & _sig_words(fact.context_quote or ""))
+    # A chart caption run into the sentence names ITS series, not the claim's (see _CAPTION_RE).
+    return len(words & _sig_words(_without_captions(fact.context_quote or "")))
 
 
 def _units_comparable(a: Optional[str], b: Optional[str]) -> bool:
@@ -4115,6 +4116,18 @@ _GROWTH_TAG_RE = re.compile(r"\b(yoy|mtm|qtq)\b", re.IGNORECASE)
 _YOY_IN_QUOTE_RE = re.compile(r"\byoy\b", re.IGNORECASE)
 
 
+# A chart or table caption the PDF text layer ran into the sentence: "Grafik 1 Pertumbuhan Tahunan
+# Indeks Permintaan Properti Komersial Kategori Jual (%, yoy)". Its 'pertumbuhan' and '(%, yoy)'
+# are the chart's, and made PPKom Tw I-2026's "penurunan permintaan pada segmen convention hall
+# di Jakarta" (index 85,1 -> 70,2) a claim about the growth rate (-26,0 -> -2,7, "rising").
+_CAPTION_RE = re.compile(r"(?<!\()\b(?:Grafik|Tabel)\s+\d+[a-z]?\s+[^.()]*?\((?:%|Indeks|persen)[^)]*\)",
+                         re.IGNORECASE)
+
+
+def _without_captions(quote: str) -> str:
+    return _CAPTION_RE.sub(" ", quote)
+
+
 def _is_about_a_growth_rate(fact: ExtractedFact) -> bool:
     """Whether a trend claim is about how fast something grew rather than how big it is.
 
@@ -4130,7 +4143,7 @@ def _is_about_a_growth_rate(fact: ExtractedFact) -> bool:
     """
     if any(_GROWTH_METRIC_RE.search(p.metric_label or "") for p in fact.periods):
         return True
-    quote = fact.context_quote or ""
+    quote = _without_captions(fact.context_quote or "")
     if _RATE_MOVE_RE.search(quote) and _GROWTH_TAG_RE.search(quote):
         return True
     return bool(_GROWTH_METRIC_RE.search(quote) and _YOY_IN_QUOTE_RE.search(quote))
@@ -4156,7 +4169,7 @@ def _prefer_growth_source_for_a_growth_trend(
         return candidates
     # The kind the sentence tags its figures with picks among growth tables: SPE has a yoy and
     # an mtm table of the same cities, and "… melambat, … 0,6% (mtm)" is the mtm one.
-    kinds = {k.lower() for k in _GROWTH_TAG_RE.findall(fact.context_quote or "")}
+    kinds = {k.lower() for k in _GROWTH_TAG_RE.findall(_without_captions(fact.context_quote or ""))}
     tagged = [c for c in candidates
               if len(kinds) == 1 and _growth_kind(c.src.table.unit, "") in kinds]
     growth = tagged or [c for c in candidates if _is_growth_series(c.src.table.unit)]
