@@ -2644,6 +2644,80 @@ def test_a_wrong_share_of_gdp_is_still_refuted():
     assert result.verdict == "Refuted"
 
 
+def _accounts_table():
+    return _make_table(
+        title="Neraca Pembayaran Indonesia", unit="Juta USD",
+        data={("Transaksi Modal", 2025, "Q4"): 172.52, ("Transaksi Finansial", 2025, "Q4"): 8794.82,
+              ("Transaksi Finansial > Investasi Lainnya > Kewajiban", 2025, "Q4"): 1896.46,
+              ("Transaksi Finansial > Investasi Lainnya > Kewajiban", 2026, "Q1"): -1054.07},
+    )
+
+
+@pytest.mark.parametrize("quote, verdict", [
+    # NPI Tw I-2026: the extractor kept only 'Transaksi Finansial' (8,79); the sentence names both.
+    ("transaksi modal dan finansial pada triwulan I 2026 mencatat defisit 4,9 miliar dolar AS, "
+     "setelah pada triwulan sebelumnya mencatat surplus 9,0 miliar dolar AS.", "Entailed"),
+    # Each its own figure: not a total.
+    ("transaksi modal dan finansial masing-masing sebesar 0,2 dan 9,0 miliar dolar AS", "Refuted"),
+])
+def test_a_label_the_sentence_joins_to_another_row_is_their_sum(quote, verdict):
+    fact = _make_fact(claimed_value=9.0, unit="miliar USD", context_quote=quote,
+                      periods=[_make_period(metric_label="Transaksi Finansial", year=2025, month="Q4")])
+
+    assert _evaluate_fact(fact, [_make_source(_accounts_table())]).verdict == verdict
+
+
+def test_a_net_outflow_after_a_net_inflow_has_grown():
+    # NPI Tw I-2026: "net outflow pada sisi kewajiban setelah pada triwulan sebelumnya mencatatkan
+    # net inflow" — +1.896 -> -1.054, refuted as a fall.
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        context_quote=("disertai dengan net outflow pada sisi kewajiban setelah pada triwulan "
+                       "sebelumnya mencatatkan net inflow"),
+        periods=[_make_period(metric_label="net outflow kewajiban investasi lainnya", year=2025, month="Q4"),
+                 _make_period(metric_label="net outflow kewajiban investasi lainnya", year=2026, month="Q1")],
+    )
+    table = _accounts_table()
+    table.term_aliases = {"net outflow kewajiban investasi lainnya":
+                          "Transaksi Finansial > Investasi Lainnya > Kewajiban"}
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_flow_is_not_answered_by_the_income_on_it():
+    # NPI Tw I-2026: "investasi langsung … surplus 2,0" reached 'Pendapatan investasi langsung'.
+    table = _make_table(title="Neraca Pembayaran Indonesia", unit="Juta USD", data={
+        ("Pendapatan investasi langsung", 2026, "Q1"): -5681.84,
+        ("INVESTASI LANGSUNG > Investasi Langsung", 2026, "Q1"): 2019.62,
+    })
+
+    assert table.lookup_fuzzy("Investasi Langsung", 2026, "Q1") == (
+        "INVESTASI LANGSUNG > Investasi Langsung", 2019.62)
+
+
+def test_most_groups_rising_is_a_majority_claim_even_unmarked():
+    # SK Agustus 2026: "meningkat pada sebagian besar kelompok pengeluaran" with all five groups
+    # and no group_scope was refuted by the one group that fell.
+    rows = {"IKK > Pengeluaran Rp1 - 2 juta": (106.8, 108.2), "IKK > Pengeluaran Rp2,1 - 3 juta": (110.4, 111.3),
+            "IKK > Pengeluaran Rp3,1 - 4 juta": (112.2, 117.5), "IKK > Pengeluaran Rp4,1 - 5 juta": (120.4, 118.9),
+            "IKK > Pengeluaran >Rp5 juta": (121.2, 123.9)}
+    data = {}
+    for row, (jul, aug) in rows.items():
+        data[(row, 2026, "Jul")], data[(row, 2026, "Aug")] = jul, aug
+    table = _make_table(title="Tabel 2. Indeks Keyakinan Konsumen", unit="Indeks", data=data)
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        context_quote=("keyakinan konsumen pada Agustus 2026 meningkat pada sebagian besar kelompok "
+                       "pengeluaran, dengan IKK tertinggi pada responden kelompok >Rp5 juta sebesar 123,9"),
+        periods=[_make_period(metric_label=row, month="Aug") for row in rows],
+    )
+
+    result = _evaluate_fact_safely(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert "4 dari 5" in result.reasoning
+
+
 def test_a_negative_share_needs_a_deficit_word_to_match_a_positive_claim():
     result = _gdp_share_case(1.0, "transaksi berjalan sebesar 3,3 miliar dolar AS (1,0% dari PDB)")
 

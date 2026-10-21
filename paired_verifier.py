@@ -1556,8 +1556,10 @@ _DEFICIT_TREND_NOUN_FIRST = re.compile(
     + _DEFICIT_NOUNS + r"\b",
     re.IGNORECASE,
 )
-# A claim whose metric name starts with the deficit: "defisit neraca perdagangan migas".
-_DEFICIT_CLAIM_NAME = re.compile(r"\s*defisit\b", re.IGNORECASE)
+# A claim whose metric name starts with the deficit: "defisit neraca perdagangan migas", or with
+# a net outflow: "net outflow kewajiban investasi lainnya".
+_DEFICIT_CLAIM_NAME = re.compile(
+    r"\s*(defisit|net\s+outflow|arus\s+keluar\s+neto|aliran\s+keluar\s+neto)\b", re.IGNORECASE)
 
 # Words that say which way a value moved. "Ekspansi"/"kontraksi" are not among them: they name a
 # level (PMI index above/below 50), and "perbaikan meskipun masih berada pada fase kontraksi" is
@@ -1800,7 +1802,11 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     # dengan defisit neraca perdagangan migas." came back is_increasing on −5.087 → −10.180, and
     # the signed reading refuted a deficit that had doubled).
     named_deficit = _DEFICIT_CLAIM_NAME.match(fact.display_label or "")
-    if all(v < 0 for v in values) and (deficit or named_deficit):
+    # A balance that turned from surplus/inflow to deficit/outflow grew as a deficit: NPI Tw I-2026
+    # "net outflow pada sisi kewajiban setelah … net inflow" is +1.896 -> -1.054. Only for a claim
+    # named after the deficit, whose subject is unambiguous.
+    turned = bool(named_deficit) and len(values) > 1 and values[0] >= 0 > values[-1]
+    if (all(v < 0 for v in values) and (deficit or named_deficit)) or turned:
         values = [-v for v in values]
         size_note = " (dinilai pada besarnya defisit/kewajiban neto)"
         # The extractor reads "defisit … melebar" as the balance falling in one run and the
@@ -2114,6 +2120,22 @@ def _row_leaf(label: str) -> str:
     return " ".join(label.split(QUAL_SEP.strip())[-1].split()).casefold()
 
 
+def _joined_in_sentence(label: str, quote: str) -> Optional[List[str]]:
+    """['Transaksi Modal', 'Transaksi Finansial'] when the sentence writes the label's last word
+    joined to another under the same head ("transaksi modal dan finansial"); else None. Not when
+    the sentence gives each its own figure ("ekspor barang dan jasa masing-masing sebesar …")."""
+    words = label.split()
+    if len(words) < 2 or QUAL_SEP.strip() in label or re.search(r"\bmasing", quote, re.IGNORECASE):
+        return None
+    head, tail = words[:-1], words[-1]
+    pattern = (r"\b" + r"\s+".join(map(re.escape, head)) + r"\s+(\w+)\s+dan\s+"
+               + re.escape(tail) + r"\b")
+    match = re.search(pattern, quote, re.IGNORECASE)
+    if not match:
+        return None
+    return [" ".join(head + [match.group(1)]), " ".join(words)]
+
+
 def _joined_rows_as_sum(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
     """A level claimed for 'X dan Y' where the table has rows X and Y but none for both: their sum.
 
@@ -2141,13 +2163,20 @@ def _joined_rows_as_sum(fact: ExtractedFact, sources: List[_ExcelSource]) -> Opt
         return None
     point = fact.periods[0]
     match = _JOINED_LABEL.fullmatch(" ".join(point.metric_label.split()))
-    if not match:
-        return None
-    left, right = match.group("left").split(), match.group("right").split()
-    if len(right) < len(left):
-        right = left[: len(left) - len(right)] + right
-    halves = [" ".join(left), " ".join(right)]
-    whole = " ".join(point.metric_label.split()).casefold()
+    if match:
+        left, right = match.group("left").split(), match.group("right").split()
+        if len(right) < len(left):
+            right = left[: len(left) - len(right)] + right
+        halves = [" ".join(left), " ".join(right)]
+        whole = " ".join(point.metric_label.split()).casefold()
+    else:
+        # NPI Tw I-2026: "transaksi modal dan finansial … setelah pada triwulan sebelumnya
+        # mencatat surplus 9,0" came back as 'Transaksi Finansial' alone (8,79); the sentence
+        # still names both rows (0,17 + 8,79 = 9,0).
+        halves = _joined_in_sentence(point.metric_label, fact.context_quote or "")
+        if halves is None:
+            return None
+        whole = f"{halves[0]} dan {halves[1].split()[-1]}".casefold()
     for src in sources:
         table = src.table
         if table.axis_type != "temporal" or "%" in (table.unit or ""):
@@ -3012,6 +3041,33 @@ def _group_level_index(family: List[str]) -> int:
     return len(split[0]) - 1
 
 
+# "meningkat pada sebagian besar kelompok pengeluaran", "mayoritas kota": a majority of a breakdown.
+_MAJORITY_OF_GROUPS_RE = re.compile(
+    r"\b(?:sebagian\s+besar|mayoritas)\s+(?:\w+\s+){0,2}?"
+    r"(?:kelompok|kota|daerah|wilayah|provinsi|komponen|sektor|responden|sub-?LU|LU|lapangan\s+usaha)\b",
+    re.IGNORECASE,
+)
+
+
+def _majority_the_sentence_states(fact: ExtractedFact) -> Optional[ExtractedFact]:
+    """A claim on several groups that its sentence says holds for MOST of them, marked as such.
+
+    SK Agustus 2026: "keyakinan konsumen … meningkat pada sebagian besar kelompok pengeluaran"
+    came back with all five expenditure groups as one rising claim and no group_scope, so the one
+    group that fell (Rp4,1-5 juta, 120,4 -> 118,9) refuted it, although four of five rose. The
+    extractor is told to mark it 'majority' (structured_extractor rule 9); this is the backstop.
+    """
+    if fact.group_scope or fact.operation not in _TREND_OPS | _THRESHOLD_OPS:
+        return None
+    if len({(p.metric_label or "").strip().lower() for p in fact.periods}) < 2:
+        return None
+    if not _MAJORITY_OF_GROUPS_RE.search(fact.context_quote or ""):
+        return None
+    marked = copy.copy(fact)
+    marked.group_scope = "majority"
+    return marked
+
+
 def _judge_group_scope(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     return _judge_group_scope_members(fact, sources).model_copy(update={"group_scope": fact.group_scope})
 
@@ -3432,6 +3488,7 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
 
     # A quantified group claim ("seluruh", "sebagian besar", "lainnya") the extractor marked as
     # such is judged on every group of its breakdown — see _judge_group_scope.
+    fact = _majority_the_sentence_states(fact) or fact
     if fact.group_scope and fact.operation in _TREND_OPS | _THRESHOLD_OPS:
         return _judge_group_scope(fact, sources)
 

@@ -60,3 +60,15 @@ def test_external_debt_is_the_liabilities_debt_instruments_and_the_report_finds_
 
     assert label == pii.ULN_ROW
     assert value == pytest.approx(453368.54)
+
+
+def test_npi_reads_still_in_surplus_as_a_level():
+    # NPI Tw I-2026: "Investasi langsung tetap mencatatkan surplus" came back as a rise on
+    # 3,15 -> 2,02 — still a surplus, a smaller one.
+    import re
+    from publication_parsers import npi
+
+    sentence = "Investasi langsung tetap mencatatkan surplus sebagai cerminan dari persepsi positif investor"
+    matched = [side for pattern, side in npi.LEVEL_PHRASES.items() if re.search(pattern, sentence, re.I)]
+    assert matched == [("above", 0.0)]
+    assert "transaksi finansial" in npi.LAYOUT_LEVELS

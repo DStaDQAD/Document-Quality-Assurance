@@ -145,6 +145,20 @@ def _add_parents(table: TableData) -> None:
     table.row_units = {renamed.get(label, label): unit for label, unit in table.row_units.items()}
 
 
+# "Investasi langsung tetap mencatatkan surplus" states a level (> 0), not a rise: NPI Tw I-2026
+# came back is_increasing on 3,15 -> 2,02 (still a surplus, a smaller one). A sentence that also
+# gives a direction ("…, meskipun lebih rendah …") is judged on that direction instead.
+LEVEL_PHRASES = {
+    r"\btetap\s+(mencatat|mencatatkan|membukukan)\s+surplus\b": ("above", 0.0),
+    r"\btetap\s+(mencatat|mencatatkan|membukukan)\s+defisit\b": ("below", 0.0),
+}
+
+# The financial account's items sit under 'Transaksi Finansial' as well as under their own section
+# rows ('INVESTASI PORTOFOLIO > Investasi Portofolio'); the head is the account, not a group, so
+# "investasi portofolio … surplus 0,7" is that item, not "one group of it".
+LAYOUT_LEVELS = frozenset({"transaksi finansial"})
+
+
 def parse(data: bytes, sheet_name: str) -> TableData:
     table = parse_with_specs(data, sheet_name, SPECS)
     _add_parents(table)
@@ -153,4 +167,6 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     table.absent_items = dict(ABSENT_ITEMS)
     table.child_keywords = dict(CHILD_KEYWORDS)
     table.number_phrases = dict(NUMBER_PHRASES)
+    table.level_phrases = dict(LEVEL_PHRASES)
+    table.layout_levels = LAYOUT_LEVELS
     return table

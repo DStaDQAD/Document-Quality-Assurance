@@ -760,8 +760,10 @@ class TableData:
     # Words that say WHICH quantity of a thing is meant. Left over by a row, they mean the row
     # holds another quantity: "harga ekspor minyak mentah" (USD per barrel) is not the
     # 'Minyak > Ekspor' row (USD million), although that row covers half the claim's words.
+    # 'pendapatan': NPI Tw I-2026 "investasi langsung … mencatat arus masuk neto (surplus) sebesar
+    # 2,0" reached 'Pendapatan investasi langsung' (the income on it, -5,7), not the flow (2,0).
     _QUANTITY_KIND_WORDS: ClassVar[frozenset] = frozenset(
-        {"harga", "volume", "rasio", "pangsa", "produksi"}
+        {"harga", "volume", "rasio", "pangsa", "produksi", "pendapatan"}
     )
 
     # A claim often carries the period it is about into the metric name ("pertumbuhan giro
