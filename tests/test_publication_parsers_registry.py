@@ -143,7 +143,9 @@ def test_every_publication_in_the_ui_has_its_own_parser():
     import check_history
     from publication_parsers import PARSERS
 
-    assert sorted(PARSERS) == sorted(check_history.PUBLICATIONS)
+    # A parser may come before its publication is offered in the UI (PPKom, checked from the
+    # regression runner while the upload card has no report-only layout yet).
+    assert set(check_history.PUBLICATIONS) <= set(PARSERS)
 
 
 def test_pmi_tables_say_their_index_is_read_in_percent(monkeypatch):

@@ -72,3 +72,18 @@ def test_npi_reads_still_in_surplus_as_a_level():
     matched = [side for pattern, side in npi.LEVEL_PHRASES.items() if re.search(pattern, sentence, re.I)]
     assert matched == [("above", 0.0)]
     assert "transaksi finansial" in npi.LAYOUT_LEVELS
+
+
+def test_ppkom_names_each_city_row_and_its_property_types():
+    # PPKom's city tables put the city's number in column 1 and the city's own figures on its row;
+    # the reader filed the property types under the number ('6 > Sewa').
+    from publication_parsers import ppkom
+
+    table = TableData(title="Tabel 2. Perkembangan Indeks Harga Properti Komersial", unit="",
+                      row_labels=["6 > MEDAN", "6 > Sewa", "7 > SEMARANG", "7 > Sewa"])
+    for label, value in zip(table.row_labels, (98.48, 108.63, 134.68, 118.02)):
+        table._data[(label, 2026, "Q2")] = value
+    ppkom._name_cities(table)
+
+    assert table.row_labels == ["MEDAN", "MEDAN > Sewa", "SEMARANG", "SEMARANG > Sewa"]
+    assert table._data[("SEMARANG > Sewa", 2026, "Q2")] == 118.02
