@@ -845,6 +845,9 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   scrollbar-width: thin;
   scrollbar-color: var(--border-dark) transparent;
 }
+/* A result opened from Riwayat is only for reading: no form column, the result takes the width. */
+.paired-container.from-history .paired-form-area { display: none; }
+.paired-container.has-results.from-history { grid-template-columns: 1fr; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar { width: 5px; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar-track { background: transparent; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 2px; }
@@ -1192,20 +1195,26 @@ body.auth-locked .app {
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
   function showTab(tab) {
-    document.querySelectorAll(".nav-item[data-tab]").forEach((n) => {
-      const active = n.dataset.tab === tab;
-      n.classList.toggle("active-nav", active);
-      n.classList.toggle("inactive-nav", !active);
-    });
+    highlightNav(tab);
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     document.getElementById(`panel-${tab}`).classList.add("active");
-    document.getElementById("header-title").textContent = PANEL_TITLES[tab] || tab;
     if (tab === "data" && !tableListLoaded) {
       tableListLoaded = true;
       loadTableList();
     }
     // Reloaded on every visit, so a check finished a moment ago is already listed.
     if (tab === "history") loadHistory(true);
+  }
+
+  // The nav item and header title; an entry opened from Riwayat shows on the Verifikasi panel
+  // but keeps Riwayat lit.
+  function highlightNav(tab) {
+    document.querySelectorAll(".nav-item[data-tab]").forEach((n) => {
+      const active = n.dataset.tab === tab;
+      n.classList.toggle("active-nav", active);
+      n.classList.toggle("inactive-nav", !active);
+    });
+    document.getElementById("header-title").textContent = PANEL_TITLES[tab] || tab;
   }
 
   document.querySelectorAll(".nav-item[data-tab]").forEach((item) => {
@@ -1581,7 +1590,7 @@ body.auth-locked .app {
     publicationSelect.value = "";
     applyPublication();
     document.getElementById("paired-result").replaceChildren();
-    document.getElementById("paired-container").classList.remove("has-results");
+    document.getElementById("paired-container").classList.remove("has-results", "from-history");
     document.getElementById("panel-paired").classList.remove("has-results");
     if (/^#riwayat\//i.test(window.location.hash)) clearHistoryHash();
   }
@@ -2373,6 +2382,9 @@ body.auth-locked .app {
       return;
     }
     showTab("paired");
+    highlightNav("history");
+    // Hidden until the Verifikasi nav item resets the form (resetPairedForm).
+    document.getElementById("paired-container").classList.add("from-history");
     const resultEl = document.getElementById("paired-result");
     resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
     let entry;
