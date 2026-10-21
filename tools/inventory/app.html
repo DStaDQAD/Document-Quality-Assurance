@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inventaris Kalimat</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1d2433; --muted: #667085; --line: #e3e6ec;
+    --accent: #2f5bd3; --ok: #1f8a4c; --ok-bg: #e7f6ed; --bad: #c2362f; --bad-bg: #fdecea;
+    --warn: #9a6700; --warn-bg: #fff6dc; --chip: #eef1f6; --num: #fff2b3;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+  header { position: sticky; top: 0; z-index: 2; background: var(--card); border-bottom: 1px solid var(--line);
+           display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 10px 16px; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  select, input, textarea, button { font: inherit; max-width: 100%; }
+  select, input[type=text], textarea { border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; background: #fff; color: var(--ink); }
+  button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 6px 12px; cursor: pointer; }
+  button:hover { border-color: #b9c0cc; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button.ok { background: var(--ok); color: #fff; border-color: var(--ok); }
+  button.bad { background: var(--bad); color: #fff; border-color: var(--bad); }
+  button.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .progress { color: var(--muted); font-size: 14px; }
+  .saved { font-size: 13px; color: var(--muted); margin-left: auto; }
+  main { max-width: 980px; margin: 18px auto; padding: 0 16px 80px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+  .badge { background: var(--chip); border-radius: 999px; padding: 2px 10px; font-size: 12.5px; color: var(--muted); }
+  .badge.warn { background: var(--warn-bg); color: var(--warn); }
+  .badge.bad { background: var(--bad-bg); color: var(--bad); }
+  .badge.ok { background: var(--ok-bg); color: var(--ok); }
+  .sentence { font-size: 19px; line-height: 1.65; }
+  .sentence .n { background: var(--num); border-radius: 3px; padding: 0 2px; font-weight: 600; }
+  .sentence .n.minor { background: none; font-weight: 400; color: var(--muted); }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  .label-k { font-size: 13px; color: var(--muted); min-width: 120px; }
+  h3 { font-size: 14px; margin: 16px 0 8px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .claim { border: 1px solid var(--line); border-left: 4px solid #c9cfd9; border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+  .claim.accepted { border-left-color: var(--ok); }
+  .claim.corrected { border-left-color: var(--warn); }
+  .claim.rejected { border-left-color: var(--bad); opacity: .75; }
+  .claim .sys { font-size: 14px; }
+  .claim .sys b { font-weight: 600; }
+  .verdict-Entailed { color: var(--ok); font-weight: 600; }
+  .verdict-Refuted { color: var(--bad); font-weight: 600; }
+  .verdict-Inconclusive { color: var(--warn); font-weight: 600; }
+  details { margin-top: 6px; } summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  details pre { white-space: pre-wrap; font-size: 12.5px; background: var(--bg); padding: 8px; border-radius: 6px; margin: 6px 0 0; }
+  .form { display: grid; grid-template-columns: 150px 1fr; gap: 6px 10px; align-items: center; margin-top: 10px; }
+  .form label { font-size: 13px; color: var(--muted); }
+  .form input[type=text], .form select { width: 100%; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--chip); border: 1px dashed #b9c0cc; border-radius: 999px; padding: 2px 10px; font-size: 13px; cursor: pointer; }
+  textarea { width: 100%; min-height: 60px; }
+  footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
+           display: flex; gap: 8px; justify-content: center; padding: 10px; flex-wrap: wrap; }
+  .kbd { font-size: 11px; color: var(--muted); margin-left: 4px; }
+  .help { font-size: 13px; color: var(--muted); }
+  .empty { text-align: center; color: var(--muted); padding: 40px; }
+  @media (max-width: 640px) { .form { grid-template-columns: 1fr; } .sentence { font-size: 17px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Inventaris Kalimat</h1>
+  <select id="doc" title="Dokumen"></select>
+  <select id="filter" title="Saring">
+    <option value="all">Semua kalimat</option>
+    <option value="todo">Belum dilabel</option>
+    <option value="deferred">Ditunda</option>
+    <option value="missed">Tidak diekstrak sistem</option>
+    <option value="filtered">Disaring sebelum LLM</option>
+  </select>
+  <input id="jump" type="text" placeholder="Ke s001" size="6" title="Lompat ke kalimat">
+  <span class="progress" id="progress"></span>
+  <span class="saved" id="saved"></span>
+</header>
+<main id="main"><div class="empty">Memuat…</div></main>
+<footer>
+  <button id="prev">◀ Sebelumnya<span class="kbd">←</span></button>
+  <button id="defer">Tunda<span class="kbd">D</span></button>
+  <button id="undo">Batalkan<span class="kbd">U</span></button>
+  <button id="done" class="primary">Selesai &amp; lanjut<span class="kbd">Ctrl+Enter</span></button>
+  <button id="next">Berikutnya ▶<span class="kbd">→</span></button>
+</footer>
+<script>
+"use strict";
+// Label format v1 (do not change after wave 1 without telling the owner). Per sentence:
+// { status: "done"|"deferred", sentence_kind: "data"|"not_data"|"repeat", repeat_of: sid|null,
+//   claims: [ { number, from_system, system_correct, metric_text, maps_to, measure, period,
+//               compared_to, direction, expected_verdict, tcd_reason } ], note }
+const LABEL_FORMAT = 1;
+const MEASURES = [
+  ["level", "Nilai/posisi (level)"], ["growth_yoy", "Pertumbuhan yoy"], ["growth_mtm", "Pertumbuhan mtm"],
+  ["growth_qtq", "Pertumbuhan qtq"], ["growth_ytd", "Pertumbuhan ytd"], ["change", "Selisih/perubahan (diff)"],
+  ["share", "Pangsa/rasio"], ["sum", "Jumlah"], ["average", "Rata-rata"], ["direction", "Arah saja (naik/turun/stabil)"],
+  ["threshold", "Ambang (di atas/bawah X)"], ["ranking", "Peringkat/terbesar"], ["other", "Lainnya"],
+];
+const DIRECTIONS = [["none", "—"], ["up", "Naik"], ["down", "Turun"], ["stable", "Stabil"]];
+const VERDICTS = [["", "— pilih —"], ["Sesuai", "Sesuai"], ["Tidak Sesuai", "Tidak Sesuai"], ["Tidak Cukup Data", "Tidak Cukup Data"]];
+const TCD_REASONS = [["", "— alasan —"], ["di_luar_tabel", "Di luar tabel yang diunggah"], ["periode", "Periode tidak tersedia"],
+  ["jenis", "Jenis tidak cocok"], ["tabel_gagal", "Tabel gagal dibaca"], ["lainnya", "Lainnya (tulis di catatan)"]];
+const SYS_VERDICT = { Entailed: "Sesuai", Refuted: "Tidak Sesuai", Inconclusive: "Tidak Cukup Data" };
+const OP_MEASURE = { value: "level", yoy_growth: "growth_yoy", diff: "change", ratio: "share", sum: "sum", average: "average",
+  is_increasing: "direction", is_decreasing: "direction", is_stable: "direction",
+  above_threshold: "threshold", below_threshold: "threshold" };
+const OP_DIRECTION = { is_increasing: "up", is_decreasing: "down", is_stable: "stable" };
+
+let docs = [], docId = null, data = null, labels = {}, order = [], pos = 0, history = [], saveTimer = null;
+
+function el(tag, attrs, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === "class") e.className = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== null && v !== undefined && v !== false) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const kid of kids.flat()) if (kid !== null && kid !== undefined) e.append(kid.nodeType ? kid : document.createTextNode(String(kid)));
+  return e;
+}
+const api = (path, opts) => fetch(path, opts).then(r => { if (!r.ok) throw new Error(r.status); return r.json(); });
+const clone = o => JSON.parse(JSON.stringify(o));
+const toFloat = t => parseFloat(t.replace(/^[−-]/, "-").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", "."));
+
+function printedToken(sentence, value) {
+  if (value === null || value === undefined) return null;
+  const hit = sentence.numbers.find(n => !n.year_like && !n.reference && Math.abs(Math.abs(toFloat(n.text)) - Math.abs(value)) < 1e-9);
+  return hit ? hit.text : null;
+}
+
+async function loadDocs() {
+  docs = await api("/api/docs");
+  const sel = document.getElementById("doc");
+  sel.replaceChildren();
+  for (const w of [1, 2, 3]) {
+    const g = el("optgroup", { label: `Gelombang ${w}` });
+    for (const d of docs.filter(x => x.wave === w))
+      g.append(el("option", { value: d.id }, `${d.publication} · ${d.case} · ${d.doc_id} (${d.done}/${d.sentences})${d.needs_vision ? " — perlu vision" : ""}`));
+    if (g.children.length) sel.append(g);
+  }
+  const want = new URLSearchParams(location.hash.slice(1)).get("doc") || localStorageGet("doc") || (docs[0] && docs[0].id);
+  if (want && docs.some(d => d.id === want)) sel.value = want;
+  await openDoc(sel.value);
+}
+function localStorageGet(k) { try { return localStorage.getItem("inv." + k); } catch { return null; } }
+function localStorageSet(k, v) { try { localStorage.setItem("inv." + k, v); } catch {} }
+
+async function openDoc(id) {
+  if (!id) { document.getElementById("main").replaceChildren(el("div", { class: "empty" }, "Belum ada data. Jalankan tools/inventory/export.py.")); return; }
+  const body = await api("/api/doc?id=" + encodeURIComponent(id));
+  docId = id; data = body.data; labels = body.labels.labels || {}; history = [];
+  localStorageSet("doc", id);
+  buildOrder(); pos = 0;
+  const first = order.findIndex(i => !labels[data.sentences[i].sid]);
+  if (first >= 0) pos = first;
+  render();
+}
+
+function buildOrder() {
+  const f = document.getElementById("filter").value;
+  order = data.sentences.map((s, i) => i).filter(i => {
+    const s = data.sentences[i], l = labels[s.sid];
+    if (f === "todo") return !l || l.status === "draft";
+    if (f === "deferred") return l && l.status === "deferred";
+    if (f === "missed") return s.has_number && !s.system_claims.length;
+    if (f === "filtered") return !s.reaches_extractor;
+    return true;
+  });
+  if (pos >= order.length) pos = Math.max(0, order.length - 1);
+}
+
+function current() { return order.length ? data.sentences[order[pos]] : null; }
+function labelFor(s) { return labels[s.sid] ? clone(labels[s.sid]) : null; }
+
+function setLabel(s, label, { remember = true } = {}) {
+  if (remember) history.push({ sid: s.sid, before: labels[s.sid] ? clone(labels[s.sid]) : null });
+  if (label) { label.format_version = LABEL_FORMAT; labels[s.sid] = label; } else delete labels[s.sid];
+  scheduleSave(s.sid);
+}
+function scheduleSave(sid) {
+  document.getElementById("saved").textContent = "menyimpan…";
+  clearTimeout(saveTimer);
+  const doc = docId, label = labels[sid] || null;
+  saveTimer = setTimeout(async () => {
+    try {
+      await api("/api/label", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ doc, sid, label }) });
+      document.getElementById("saved").textContent = "tersimpan ✓";
+    } catch (e) { document.getElementById("saved").textContent = "GAGAL menyimpan — " + e.message; }
+  }, 250);
+}
+
+function draftLabel(s) {
+  return labelFor(s) || { status: "draft", sentence_kind: null, repeat_of: null, claims: [], note: "" };
+}
+
+function claimFromSystem(s, i, accepted) {
+  const c = s.system_claims[i];
+  const verdict = SYS_VERDICT[c.verdict] || "";
+  const row = c.periods && c.periods[0] ? c.periods[0].metric_label : null;
+  const p = c.periods && c.periods[0] ? c.periods[0] : {};
+  return {
+    number: printedToken(s, c.claimed_value), from_system: i, system_correct: accepted,
+    metric_text: c.metric_label || "",
+    maps_to: c.matched_source ? { kind: "row", source: c.matched_source, row } : { kind: "unsure" },
+    measure: OP_MEASURE[c.operation] || "other",
+    period: [p.month, p.year].filter(Boolean).join(" ") || "",
+    compared_to: "", direction: OP_DIRECTION[c.operation] || "none",
+    expected_verdict: accepted ? verdict : "", tcd_reason: "",
+  };
+}
+
+function render() {
+  const main = document.getElementById("main");
+  const s = current();
+  const done = Object.values(labels).filter(l => l.status === "done").length;
+  const deferred = Object.values(labels).filter(l => l.status === "deferred").length;
+  const total = data ? data.sentences.length : 0;
+  document.getElementById("progress").textContent =
+    `${s ? `kalimat ${pos + 1} dari ${order.length} (filter)` : ""} · selesai ${done}/${total} · sisa ${total - done} · ditunda ${deferred}`;
+  if (!s) { main.replaceChildren(el("div", { class: "empty" }, data && data.needs_vision ? "Dokumen ini tidak punya lapisan teks: perlu vision (berbayar)." : "Tidak ada kalimat untuk filter ini.")); return; }
+  location.hash = `doc=${encodeURIComponent(docId)}&s=${s.sid}`;
+  const label = draftLabel(s);
+
+  const badges = el("div", { class: "badges" },
+    el("span", { class: "badge" }, s.sid), s.page ? el("span", { class: "badge" }, `hal. ${s.page}`) : null,
+    el("span", { class: "badge" }, data.publication),
+    s.reaches_extractor ? el("span", { class: "badge ok" }, "sampai ke LLM") : el("span", { class: "badge bad" }, "disaring sebelum LLM"),
+    s.system_claims.length ? el("span", { class: "badge" }, `sistem: ${s.system_claims.length} klaim`)
+      : el("span", { class: "badge warn" }, s.has_number ? "tidak diekstrak sistem" : "tanpa angka"),
+    s.same_numbers_as ? el("span", { class: "badge warn" }, `angka sama dengan ${s.same_numbers_as}`) : null,
+    labels[s.sid] ? el("span", { class: "badge " + (labels[s.sid].status === "done" ? "ok" : "warn") },
+      { done: "selesai", deferred: "ditunda", draft: "draf" }[labels[s.sid].status] || labels[s.sid].status) : null,
+  );
+
+  const sent = el("div", { class: "sentence" });
+  let at = 0;
+  for (const n of s.numbers) {
+    sent.append(s.text.slice(at, n.start));
+    sent.append(el("span", { class: "n" + (n.year_like || n.reference ? " minor" : "") }, n.text));
+    at = n.start + n.text.length;
+  }
+  sent.append(s.text.slice(at));
+
+  const kindRow = el("div", { class: "row" }, el("span", { class: "label-k" }, "Kalimat ini:"),
+    ...[["data", "Berisi klaim data"], ["not_data", "Bukan klaim data (definisi, metodologi, judul)"], ["repeat", "Pengulangan kalimat lain"]]
+      .map(([k, t]) => el("button", { class: label.sentence_kind === k ? "sel" : "", onclick: () => {
+        const l = draftLabel(s); l.sentence_kind = k;
+        if (k === "repeat") l.repeat_of = l.repeat_of || s.same_numbers_as || "";
+        if (k === "data" && !l.claims.length) l.claims = [];
+        setLabel(s, l); render();
+      } }, t)));
+  const parts = [badges, sent, kindRow];
+
+  if (label.sentence_kind === "repeat") {
+    parts.push(el("div", { class: "row" }, el("span", { class: "label-k" }, "Sama dengan:"),
+      el("input", { type: "text", value: label.repeat_of || "", size: 6, onchange: e => { const l = draftLabel(s); l.repeat_of = e.target.value.trim(); setLabel(s, l); } })));
+  }
+  // The system's claims are visible from the start (as unconfirmed suggestions); choosing
+  // "bukan klaim" or "pengulangan" hides them.
+  if (label.sentence_kind === "data" || (!label.sentence_kind && (s.system_claims.length || s.has_number)))
+    parts.push(renderClaims(s, label));
+  parts.push(el("h3", {}, "Catatan"), el("textarea", { oninput: e => { const l = draftLabel(s); l.note = e.target.value; setLabel(s, l, { remember: false }); } }, label.note || ""));
+  main.replaceChildren(el("div", { class: "card" }, ...parts));
+}
+
+function renderClaims(s, label) {
+  const box = el("div", {});
+  box.append(el("h3", {}, "Klaim sistem (saran — konfirmasi satu per satu)"));
+  if (!s.system_claims.length) box.append(el("div", { class: "help" }, "Sistem tidak membuat klaim dari kalimat ini."));
+  s.system_claims.forEach((c, i) => {
+    const mine = label.claims.find(x => x.from_system === i);
+    const state = !mine ? "" : mine.rejected ? "rejected" : mine.system_correct ? "accepted" : "corrected";
+    const sys = el("div", { class: "sys" },
+      el("b", {}, printedToken(s, c.claimed_value) ?? c.claimed_value ?? "(tanpa angka)"), ` · ${c.operation} · `, el("b", {}, c.metric_label || "?"),
+      ` · ${(c.periods || []).map(p => [p.month, p.year].filter(Boolean).join(" ")).join(" → ")} · `,
+      c.matched_source ? `${c.matched_source} › ${(c.periods[0] || {}).metric_label || ""}` : "tidak ada sumber",
+      " → ", el("span", { class: "verdict-" + c.verdict }, SYS_VERDICT[c.verdict] || c.verdict),
+      c.resolved_via ? ` (via ${c.resolved_via})` : "");
+    const card = el("div", { class: "claim " + state }, sys,
+      el("details", {}, el("summary", {}, "alasan sistem"), el("pre", {}, c.reasoning || "")),
+      el("div", { class: "row" },
+        el("button", { class: state === "accepted" ? "ok" : "", onclick: () => putClaim(s, i, claimFromSystem(s, i, true)) }, "✓ Benar"),
+        el("button", { class: state === "corrected" ? "sel" : "", onclick: () => putClaim(s, i, claimFromSystem(s, i, false)) }, "✎ Koreksi"),
+        el("button", { class: state === "rejected" ? "bad" : "", onclick: () => putClaim(s, i, { from_system: i, rejected: true, system_correct: false }) }, "✗ Bukan klaim")));
+    if (mine && !mine.rejected) card.append(claimForm(s, label.claims.indexOf(mine)));
+    box.append(card);
+  });
+  const manual = label.claims.map((c, k) => [c, k]).filter(([c]) => c.from_system === null);
+  box.append(el("h3", {}, "Klaim yang terlewat sistem"));
+  manual.forEach(([c, k]) => box.append(el("div", { class: "claim corrected" }, claimForm(s, k),
+    el("div", { class: "row" }, el("button", { onclick: () => { const l = draftLabel(s); l.claims.splice(k, 1); setLabel(s, l); render(); } }, "Hapus klaim ini")))));
+  const used = new Set(label.claims.map(c => c.number).filter(Boolean));
+  const chips = el("div", { class: "chips" },
+    ...s.numbers.filter(n => !n.year_like && !n.reference && !used.has(n.text))
+      .map(n => el("span", { class: "chip", onclick: () => addManual(s, n.text) }, `+ ${n.text}`)),
+    el("span", { class: "chip", onclick: () => addManual(s, null) }, "+ klaim tanpa angka"));
+  box.append(chips);
+  return box;
+}
+
+function putClaim(s, i, claim) {
+  const l = draftLabel(s);
+  l.sentence_kind = "data";
+  const k = l.claims.findIndex(x => x.from_system === i);
+  if (k >= 0) l.claims[k] = claim; else l.claims.push(claim);
+  setLabel(s, l); render();
+}
+function addManual(s, number) {
+  const l = draftLabel(s);
+  l.sentence_kind = "data";
+  l.claims.push({ number, from_system: null, system_correct: null, metric_text: "", maps_to: { kind: "unsure" },
+    measure: "level", period: "", compared_to: "", direction: "none", expected_verdict: "", tcd_reason: "" });
+  setLabel(s, l); render();
+}
+
+function claimForm(s, k) {
+  const l = draftLabel(s), c = l.claims[k];
+  // Changing what the system said (number, row, measure, period, direction, verdict) after "Benar"
+  // turns the claim into a correction; notes like the metric wording or the TCD reason do not.
+  const update = (fn, corrects = true) => {
+    const l2 = draftLabel(s), x = l2.claims[k];
+    fn(x);
+    if (corrects && x.from_system !== null && x.system_correct) { x.system_correct = false; setLabel(s, l2, { remember: false }); render(); return; }
+    setLabel(s, l2, { remember: false });
+  };
+  const opt = (pairs, val) => pairs.map(([v, t]) => el("option", { value: v, selected: v === val }, t));
+  const rowList = "rows-" + s.sid;
+  const choices = el("datalist", { id: rowList }, ...data.row_choices.flatMap(src =>
+    src.rows.map(r => el("option", { value: `${src.file} / ${src.sheet} › ${r}` }))));
+  const mapsKind = c.maps_to ? c.maps_to.kind : "unsure";
+  const mapsText = c.maps_to && c.maps_to.kind === "row" ? `${c.maps_to.source || ""} › ${c.maps_to.row || ""}` : "";
+  const form = el("div", { class: "form" },
+    el("label", {}, "Angka"), el("select", { onchange: e => update(x => x.number = e.target.value || null) },
+      el("option", { value: "" }, "(tanpa angka)"),
+      ...s.numbers.filter(n => !n.year_like && !n.reference).map(n => el("option", { value: n.text, selected: n.text === c.number }, n.text))),
+    el("label", {}, "Nama metrik di kalimat"), el("input", { type: "text", value: c.metric_text || "", placeholder: "mis. giro valas",
+      onchange: e => update(x => x.metric_text = e.target.value, false) }),
+    el("label", {}, "Dipetakan ke"), el("select", { onchange: e => { update(x => x.maps_to = e.target.value === "row" ? { kind: "row", source: "", row: "" } : { kind: e.target.value }); render(); } },
+      ...opt([["row", "Baris tabel"], ["outside_uploaded", "Di luar tabel yang diunggah"], ["unsure", "Tidak yakin (tanya)"]], mapsKind)),
+    ...(mapsKind === "row" ? [el("label", {}, "Baris"), el("input", { type: "text", list: rowList, value: mapsText, placeholder: "ketik untuk mencari baris",
+      onchange: e => update(x => { const [src, row] = e.target.value.split(" › "); x.maps_to = { kind: "row", source: (src || "").trim(), row: (row || "").trim() }; }) })] : []),
+    el("label", {}, "Jenis ukuran"), el("select", { onchange: e => update(x => x.measure = e.target.value) }, ...opt(MEASURES, c.measure)),
+    el("label", {}, "Periode"), el("input", { type: "text", value: c.period || "", placeholder: "mis. Agustus 2026", onchange: e => update(x => x.period = e.target.value) }),
+    el("label", {}, "Dibandingkan dengan"), el("input", { type: "text", value: c.compared_to || "", placeholder: "mis. Juli 2026 (kosong bila tidak ada)", onchange: e => update(x => x.compared_to = e.target.value, false) }),
+    el("label", {}, "Arah"), el("select", { onchange: e => update(x => x.direction = e.target.value) }, ...opt(DIRECTIONS, c.direction)),
+    el("label", {}, "Vonis yang benar"), el("select", { onchange: e => { update(x => x.expected_verdict = e.target.value); render(); } }, ...opt(VERDICTS, c.expected_verdict)),
+    ...(c.expected_verdict === "Tidak Cukup Data" ? [el("label", {}, "Alasan TCD"), el("select", { onchange: e => update(x => x.tcd_reason = e.target.value, false) }, ...opt(TCD_REASONS, c.tcd_reason))] : []),
+  );
+  return el("div", {}, choices, form);
+}
+
+function finish(status) {
+  const s = current(); if (!s) return;
+  const l = draftLabel(s);
+  if (status === "done") {
+    if (!l.sentence_kind) { alertBar("Pilih dulu jenis kalimat (klaim data / bukan / pengulangan)."); return; }
+    if (l.sentence_kind === "data") {
+      const pending = s.system_claims.findIndex((_, i) => !l.claims.some(x => x.from_system === i));
+      if (pending >= 0) { alertBar(`Klaim sistem #${pending + 1} belum dikonfirmasi.`); return; }
+      const noVerdict = l.claims.findIndex(c => !c.rejected && !c.expected_verdict);
+      if (noVerdict >= 0) { alertBar("Isi 'Vonis yang benar' untuk setiap klaim."); return; }
+    }
+  }
+  l.status = status;
+  setLabel(s, l);
+  move(1);
+}
+function alertBar(msg) { document.getElementById("saved").textContent = "⚠ " + msg; }
+function move(d) { if (!order.length) return; pos = Math.min(order.length - 1, Math.max(0, pos + d)); render(); }
+function undo() {
+  const h = history.pop(); if (!h) return;
+  const s = data.sentences.find(x => x.sid === h.sid);
+  setLabel(s, h.before, { remember: false });
+  pos = Math.max(0, order.indexOf(data.sentences.indexOf(s))); render();
+}
+
+document.getElementById("doc").addEventListener("change", e => openDoc(e.target.value));
+document.getElementById("filter").addEventListener("change", () => { buildOrder(); pos = 0; render(); });
+document.getElementById("jump").addEventListener("change", e => {
+  const idx = data.sentences.findIndex(s => s.sid === e.target.value.trim());
+  if (idx >= 0) { document.getElementById("filter").value = "all"; buildOrder(); pos = order.indexOf(idx); render(); }
+  e.target.value = "";
+});
+document.getElementById("prev").onclick = () => move(-1);
+document.getElementById("next").onclick = () => move(1);
+document.getElementById("defer").onclick = () => finish("deferred");
+document.getElementById("done").onclick = () => finish("done");
+document.getElementById("undo").onclick = undo;
+document.addEventListener("keydown", e => {
+  const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); finish("done"); return; }
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); const s = current(); if (s && labels[s.sid]) scheduleSave(s.sid); return; }
+  if (typing) return;
+  if (e.key === "ArrowRight") move(1);
+  else if (e.key === "ArrowLeft") move(-1);
+  else if (e.key.toLowerCase() === "d") finish("deferred");
+  else if (e.key.toLowerCase() === "u") undo();
+  else if (e.key === "1" || e.key === "2") {   // 1 = Benar, 2 = Koreksi on the next unconfirmed system claim
+    const s = current(); if (!s) return;
+    const l = draftLabel(s);
+    const i = s.system_claims.findIndex((_, k) => !l.claims.some(x => x.from_system === k));
+    if (i >= 0) putClaim(s, i, claimFromSystem(s, i, e.key === "1"));
+  }
+});
+loadDocs().catch(e => document.getElementById("main").replaceChildren(el("div", { class: "empty" }, "Gagal memuat: " + e.message)));
+</script>
+</body>
+</html>

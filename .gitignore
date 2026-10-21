@@ -97,3 +97,6 @@ eval/cases/ppkom_tw1_2026/
 
 # BI files downloaded from the DSTA SharePoint for manual checks — never committed
 sample_data/sharepoint/
+
+# Sentence inventory (tools/inventory): sentences from internal drafts and their hand labels
+eval/inventory/
