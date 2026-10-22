@@ -68,6 +68,10 @@ def cmd_run(args) -> int:
     os.environ["APP_USERNAME"] = ""
     os.environ["HISTORY_DATABASE_URL"] = ""
     os.environ["AI_REVIEW"] = "" if args.no_ai_review else "1"
+    os.environ["PUBLICATION_NOTES"] = "1" if args.publication_notes else ""
+    os.environ["AI_REVIEW_SECOND_LOOK"] = "1" if args.second_look else ""
+    if args.thinking is not None:   # llm_provider reads it at import, so before main is imported
+        os.environ["GEMINI_THINKING_BUDGET"] = str(args.thinking)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     data_root = Path(args.data_root) if args.data_root else REPO_ROOT
@@ -95,6 +99,15 @@ def cmd_run(args) -> int:
         return captured["facts"]
 
     paired_verifier._deduplicate_facts = _capture
+    # Keep the narrative text the run read too: on an image PDF it came from a paid vision call,
+    # and the sentence inventory (tools/inventory) can label such a report only from this copy.
+    read_narrative = main.extract_narrative_text
+
+    async def _capture_narrative(*a, **kw):
+        captured["narrative"] = await read_narrative(*a, **kw)
+        return captured["narrative"]
+
+    main.extract_narrative_text = _capture_narrative
     for doc in docs:
         target = out / f"{doc.id}.json"
         if target.exists():
@@ -120,6 +133,9 @@ def cmd_run(args) -> int:
         body["_regression"] = {"seconds": round(time.time() - started), "sheets": len(sheets)}
         body["_facts"] = [fact_to_dict(f) for f in captured.pop("facts", [])]
         target.write_text(json.dumps(body, ensure_ascii=False, indent=1), encoding="utf-8")
+        narrative = captured.pop("narrative", None)
+        if narrative is not None:
+            (out / f"{doc.id}.narrative.txt").write_text(narrative, encoding="utf-8")
         print(f"[{doc.id}] {time.time() - started:.0f}s · {body.get('total_facts')} klaim · "
               f"{body.get('entailed_count')}/{body.get('refuted_count')}/{body.get('inconclusive_count')}")
     return 0
@@ -293,6 +309,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--only")
     p.add_argument("--data-root")
     p.add_argument("--no-ai-review", action="store_true")
+    p.add_argument("--publication-notes", action="store_true",
+                   help="show the publication's notes to the extractor (PUBLICATION_NOTES=1)")
+    p.add_argument("--second-look", action="store_true",
+                   help="Tinjauan AI's prior and sign rule (AI_REVIEW_SECOND_LOOK=1)")
+    p.add_argument("--thinking", type=int, default=None,
+                   help="thinking token cap for extraction and the other get_llm calls (GEMINI_THINKING_BUDGET)")
     p = sub.add_parser("diff")
     p.add_argument("base")
     p.add_argument("new")

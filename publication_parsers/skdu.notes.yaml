@@ -1,0 +1,19 @@
+publication: skdu
+title: Survei Kegiatan Dunia Usaha (SKDU)
+conventions:
+  - 'Angka SKDU di T1, T4, T5, T7 adalah saldo bersih tertimbang (SBT, %): level, bukan pertumbuhan. "SBT sebesar 0,07%" atau "(SBT 0,48%)" adalah operation value dengan unit persen, bukan yoy_growth.'
+  - '"tetap tumbuh", "tercatat tumbuh", "tumbuh positif", "terjaga", "tetap kuat", "masih dalam kondisi baik", "tetap mudah" pada SBT/SB berarti saldonya di atas 0 → above_threshold dengan ambang 0, bukan is_increasing atau is_stable.'
+  - 'Kalimat "meningkat bersumber dari LU A (SBT a%), LU B (SBT b%)": tiap LU yang disebut adalah fakta value (a%) dan saldonya di atas 0; "meningkat" pada total adalah pertumbuhan positif (SBT total > 0), kecuali kalimat membandingkan dengan triwulan lain.'
+  - '"seluruh LU ..." atau "sebagian besar LU ..." adalah klaim kelompok (group_scope all/majority) atas sektor-sektor tabel yang sama.'
+  - 'Pada T3 (keuangan dan akses kredit) dan T8, baris "Baik/Normal/Buruk", "Mudah/Sulit", "Naik/Tetap/Turun" adalah pangsa jawaban responden. "likuiditas membaik", "akses kredit tetap mudah" adalah tentang baris "Saldo Bersih (...)" kelompok itu.'
+  - 'Kalimat "Hal ini tecermin dari SBT ... sebesar x%" yang tidak menyebut sektor memakai sektor dari kalimat sebelumnya; tulis sektor itu di metric_label, jangan TOTAL.'
+phrases:
+  - '"kegiatan usaha", "kinerja usaha" → T1 Kegiatan Usaha; "penggunaan tenaga kerja", "jumlah tenaga kerja" → T4; "harga jual" → T5; "kapasitas produksi terpakai" → T2 (persen, bukan SBT); "prakiraan inflasi" → T6; "investasi" → T7/T7b; "upah" → T8/T9; "margin usaha" → T10.'
+  - 'Kata topik di depan sektor ("SBT harga jual Perdagangan", "SBT investasi Industri Pengolahan") menentukan tabelnya; sektor yang sama ada di beberapa tabel.'
+  - '"LU X" berarti baris sektor X (huruf kapital di tabel), "sub-LU" berarti baris di bawah sektornya.'
+periods:
+  - '"semester I/II <tahun>" → month S1/S2, bukan Q1/Q2. T7b, T8, T9, T10 hanya punya semester.'
+  - '"lebih tinggi dibandingkan triwulan III 2025" atau "semester I 2026": periode pembanding adalah yang disebut kalimat, tulis kedua titik periodenya.'
+  - '"diprakirakan" pada triwulan berikutnya merujuk kolom prakiraan (bertanda *) di tabel.'
+units_signs:
+  - 'SBT dan SB dalam persen poin, bisa negatif; "turun"/"kontraksi" pada SBT berarti nilainya negatif atau lebih rendah, tulis tandanya sesuai kalimat.'

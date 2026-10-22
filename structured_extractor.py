@@ -402,8 +402,11 @@ IMPORTANT RULES:
    the named ones per rule 8 and skip only the unnamed remainder.
 """
 
+# {publication_block} is the chosen publication's notes (publication_parsers.notes_for), or "" —
+# then the prompt is exactly what it was before the notes existed. It sits in the human message so
+# the system prompt stays the same for every publication (Gemini's implicit prompt cache).
 _HUMAN_TEMPLATE = """\
-REFERENCE METRIC LIST (row labels from the Excel source(s) below — use as metric_label when a clear \
+{publication_block}REFERENCE METRIC LIST (row labels from the Excel source(s) below — use as metric_label when a clear \
 match exists; otherwise use the metric name from the narrative):
 {row_labels_block}
 
@@ -414,7 +417,7 @@ NARRATIVE TEXT:
 _EXTRACTION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", _SYSTEM_PROMPT),
     ("human", _HUMAN_TEMPLATE),
-])
+]).partial(publication_block="")
 
 
 # ---------------------------------------------------------------------------
@@ -1514,6 +1517,7 @@ def extract_structured_facts(
     max_chars_per_chunk: int = EXTRACTION_CHUNK_CHARS,
     fallback_llm: Optional[BaseChatModel] = None,
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
+    publication_notes: str = "",
 ) -> List[ExtractedFact]:
     """Extract (operation, periods, claimed value) facts from PDF narrative text.
 
@@ -1550,7 +1554,8 @@ def extract_structured_facts(
     for i, chunk in enumerate(chunks, 1):
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
         row_labels_block = _build_row_labels_block(row_labels, _labels_for_chunk(source_labels, chunk))
-        payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
+        payload = {"row_labels_block": row_labels_block, "narrative_text": chunk,
+                   "publication_block": publication_notes}
         try:
             all_raw_facts.extend(_invoke_extraction(chain, payload, fallback_llm).facts)
         except Exception as exc:
@@ -1569,6 +1574,7 @@ async def extract_structured_facts_async(
     source_labels: Optional[List[Tuple[str, List[str]]]] = None,
     on_progress: Optional[Callable[[int, int], None]] = None,
     on_chunk_failed: Optional[Callable[[List[int], Exception], None]] = None,
+    publication_notes: str = "",
 ) -> List[ExtractedFact]:
     """Parallel version of extract_structured_facts — all chunks are processed concurrently.
 
@@ -1586,6 +1592,8 @@ async def extract_structured_facts_async(
                        pipeline's wall-clock time, so it is the only one worth
                        reporting at sub-step granularity. Called on the event loop
                        thread; keep it non-blocking (it must not do I/O or await).
+        publication_notes: The chosen publication's notes (publication_parsers.notes_for), shown
+                       in every chunk's prompt; "" leaves the prompt as it was.
         on_chunk_failed: Optional callback invoked as (pages, error) for each chunk whose LLM
                        call failed even after the fallback — the pages its claims were never
                        read from. Same threading contract as on_progress.
@@ -1613,7 +1621,8 @@ async def extract_structured_facts_async(
         nonlocal completed
         logger.info("Chunk %d/%d: %d chars", i, len(chunks), len(chunk))
         row_labels_block = _build_row_labels_block(row_labels, _labels_for_chunk(source_labels, chunk))
-        payload = {"row_labels_block": row_labels_block, "narrative_text": chunk}
+        payload = {"row_labels_block": row_labels_block, "narrative_text": chunk,
+                   "publication_block": publication_notes}
         try:
             facts = (await _ainvoke_extraction(chain, payload, fallback_llm)).facts
         except Exception as exc:

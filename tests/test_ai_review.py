@@ -457,3 +457,50 @@ def test_a_value_answer_for_a_claim_without_a_number_does_not_crash():
     final, outcome = judge_review(result, review, {"S1": _source(_DPK, sheet="Tabel3")})
 
     assert outcome == "unchanged"
+
+
+# AI_REVIEW_SECOND_LOOK: reports are usually right, so a Tidak Sesuai earns a search for another
+# reasonable reading first; and the engine accepts the sign the sentence states ("turun 4,1%").
+_SPE = _table(title="Pertumbuhan Indeks Penjualan Riil", unit="%, mtm",
+              data={("INDEKS TOTAL", 2025, "Jul"): -4.1, ("INDEKS TOTAL", 2026, "Jul"): 0.7})
+_SPE_QUOTE = "Meski demikian, kinerja penjualan pada Juli 2026 tersebut lebih baik dibandingkan Juli 2025 yang turun 4,1% (mtm)."
+
+
+def _spe_claim(quote=_SPE_QUOTE):
+    return _result(verdict="Refuted", claimed_value=4.1, unit="persen", quote=quote, label="penjualan")
+
+
+def _spe_review(quote=_SPE_QUOTE):
+    return _review(first_words=" ".join(quote.split()[:5]), subject="kinerja penjualan",
+                   word_check="penjualan: ada (judul)",
+                   cells=[CitedCell(sheet="S1", row="INDEKS TOTAL", period="Jul 2025", value=-4.1)])
+
+
+def test_second_look_accepts_the_sign_the_sentence_states(monkeypatch):
+    # SPE Juni 2026: the review cited Juli 2025's -4,1 and said sesuai; the engine, rebuilding the
+    # claim as +4,1, could not reproduce it and the false Tidak Sesuai stood.
+    codes = {"S1": _source(_SPE)}
+    monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", "")
+    assert judge_review(_spe_claim(), _spe_review(), codes)[1] == "unchanged"
+
+    monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", "1")
+    final, outcome = judge_review(_spe_claim(), _spe_review(), codes)
+    assert outcome == "to_entailed" and final.verdict == "Entailed"
+
+
+def test_second_look_leaves_the_sign_alone_when_the_sentence_says_a_rise(monkeypatch):
+    monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", "1")
+    quote = "Meski demikian, kinerja penjualan pada Juli 2025 naik 4,1% (mtm)."
+    final, outcome = judge_review(_spe_claim(quote), _spe_review(quote), {"S1": _source(_SPE)})
+    assert outcome == "unchanged" and final.verdict == "Refuted"
+
+
+def test_second_look_tells_the_model_reports_are_usually_right(monkeypatch):
+    results = [_result(verdict="Refuted")]
+    for flag, expected in (("", False), ("1", True)):
+        monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", flag)
+        calls = []
+        llm = _llm_answering(lambda n: ReviewBatch(reviews=[_review(claim_no=1)]), calls)
+        asyncio.run(review_claims(results, [_source(_KREDIT)], llm))
+        assert ("hampir selalu benar" in calls[0]) is expected
+        assert ("hasil program: Tidak Sesuai" in calls[0]) is expected

@@ -1,0 +1,13 @@
+publication: sulni
+title: Statistik Utang Luar Negeri Indonesia (SULNI)
+conventions:
+  - '"ULN Indonesia" → TOTAL di TabI.1; "ULN pemerintah" → Pemerintah; "ULN swasta" → Swasta; "ULN publik" → Pemerintah dan Bank Sentral.'
+  - '"pangsa sektor A, B dan C mencapai X% dari total ULN swasta" adalah pangsa gabungan: satu titik pembilang per sektor, lalu penyebutnya (ratio).'
+  - 'Rincian sektor ULN swasta ada di tabel swasta (Tbl III.x), rincian ULN pemerintah di tabel pemerintah (Tbl II.x); pilih tabel sesuai kata "swasta"/"pemerintah" di kalimat.'
+  - '"struktur ULN tetap sehat" adalah penilaian, bukan klaim angka.'
+phrases:
+  - '"rasio ULN terhadap PDB" → baris rasio di TabI.7 (triwulanan); "ULN jangka panjang" → Utang Jangka Panjang.'
+periods:
+  - 'Tabel utama bulanan; rasio terhadap PDB hanya triwulanan.'
+units_signs:
+  - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS. "kontraksi X% (yoy)" berarti pertumbuhan −X.'

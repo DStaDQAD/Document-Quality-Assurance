@@ -1,0 +1,15 @@
+publication: uang-beredar
+title: Uang Beredar (M2)
+conventions:
+  - 'Tabel acuan adalah SEKI I.1A (komponen M2). Kredit, DPK, suku bunga dan M0 tidak ada di tabel ini; tetap ekstrak klaimnya dengan nama yang ditulis kalimat.'
+  - 'Jangan pakai nama agregat telanjang ("Total", "Jumlah"); tulis apa yang dijumlahkan: "Uang Beredar Luas (M2)", "Penyaluran kredit", "DPK".'
+  - '"Simpanan Berjangka", "Giro", "Tabungan" ada sebagai komponen uang kuasi M2 dan juga sebagai jenis DPK. Di paragraf M2/uang kuasi pakai baris I.1A; di bagian "PERKEMBANGAN DANA PIHAK KETIGA (DPK)" itu DPK, bukan I.1A.'
+  - 'Pertumbuhan dibandingkan bulan sebelumnya ("meningkat dibandingkan pertumbuhan bulan sebelumnya 8,4% (yoy)") adalah dua fakta yoy_growth, bukan tren level.'
+phrases:
+  - '"M2", "likuiditas perekonomian", "uang beredar luas" → Uang Beredar Luas (M2); "M1", "uang beredar sempit" → Uang Beredar Sempit (M1).'
+  - '"uang kartal" → Uang Kartal di Luar Bank Umum dan BPR; "uang kuasi" → Uang Kuasi; "surat berharga selain saham" → Surat Berharga.'
+periods:
+  - 'Bulanan. "posisi Agustus 2026" = kolom Aug 2026; yoy dibandingkan bulan yang sama tahun sebelumnya.'
+units_signs:
+  - 'Tabel dalam Miliar Rp; laporan dalam triliun Rp (1 triliun = 1.000 miliar).'
+  - '"kontraksi X% (yoy)" berarti pertumbuhan −X.'

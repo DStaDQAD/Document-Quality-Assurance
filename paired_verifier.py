@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+import yaml
 from langchain_core.language_models import BaseChatModel
 
 from cell_pointer import (
@@ -42,7 +43,7 @@ from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _expand_report_terms, _same_root, _sig_words, label_match_score
 from publication_parsers import load_grid as _load_grid
-from publication_parsers import parse_for_publication, skipped_sections
+from publication_parsers import notes_enabled, notes_for, parse_for_publication, skipped_sections
 from table_parser_generic import (
     _MONTH_ABBREVS,
     parse_generic_grid,
@@ -4912,6 +4913,18 @@ def _months_of_imports_guard(fact: ExtractedFact, result: FactVerificationResult
     })
 
 
+def _publication_notes(publication: str) -> str:
+    """The chosen publication's conventions for the extractor when PUBLICATION_NOTES is on, else "".
+    Guidance only: a notes file that does not load is logged and the check runs without it."""
+    if not notes_enabled():
+        return ""
+    try:
+        return notes_for(publication)
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        logger.warning("Publication notes for '%s' not used: %s", publication, exc)
+        return ""
+
+
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
     """_evaluate_fact, with any failure contained to the one claim that caused it.
 
@@ -5699,6 +5712,7 @@ async def verify_paired(
         source_labels=source_labels_for_extractor,
         on_progress=_on_chunk_progress,
         on_chunk_failed=on_extract_gap,
+        publication_notes=_publication_notes(publication),
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))

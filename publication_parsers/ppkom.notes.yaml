@@ -1,0 +1,14 @@
+publication: ppkom
+title: Survei Properti Komersial (PPKom)
+conventions:
+  - 'Tiga ukuran: harga (Tabel 1-6), pasokan/supply (Tabel 7-12), permintaan/demand (Tabel 13-18); masing-masing dalam indeks, %qtq dan %yoy.'
+  - 'Tabel ganjil = nasional dan kota Jakarta, Bodebek, Banten, Bandung, Makassar; tabel genap = Medan, Semarang, Surabaya, Balikpapan, Denpasar, Palembang.'
+  - 'Segmen: perkantoran, ritel, apartemen, hotel, lahan industri, dsb., masing-masing kategori Sewa atau Jual. "perkantoran jual di Jakarta" → baris kota Jakarta, kategori Jual, segmen Perkantoran.'
+  - '"secara triwulanan" → tabel %qtq; "secara tahunan" → tabel %yoy; tanpa keterangan dan menyebut level → tabel indeks.'
+  - 'Judul grafik yang menempel di kalimat ("Grafik 1 Pertumbuhan Tahunan ... (%, yoy)") bukan bagian klaim.'
+phrases:
+  - '"Indeks Pasokan" → Indeks Supply; "Indeks Permintaan" → Indeks Demand.'
+periods:
+  - 'Kolom triwulan Q1-Q4.'
+units_signs:
+  - 'Indeks tanpa satuan; pertumbuhan dalam persen; "terkontraksi X%" berarti −X.'

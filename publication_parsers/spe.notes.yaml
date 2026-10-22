@@ -1,0 +1,19 @@
+publication: spe
+title: Survei Penjualan Eceran (SPE)
+conventions:
+  - 'Indeks Penjualan Riil (IPR) total dan per kelompok/kota. "(yoy)" atau "secara tahunan" → Tabel 2/6 (atau yoy dari indeks); "(mtm)" atau "secara bulanan" → Tabel 3/7, operation value unit persen.'
+  - '"terkontraksi X%" atau "turun X%" berarti −X, untuk mtm maupun yoy.'
+  - '"tetap tumbuh meski melambat ... 0,6% (mtm)" adalah tentang laju pertumbuhan (mtm/yoy), bukan level indeks.'
+  - '"peningkatan penjualan secara tahunan pada Kelompok X" dibandingkan bulan yang sama tahun lalu.'
+  - '"sebagian besar/mayoritas kota/kelompok" adalah klaim mayoritas; "beberapa kota" tanpa nama tidak bisa diperiksa.'
+  - 'Nama kelompok "Barang Lainnya" dan "Perlengkapan Rumah Tangga Lainnya" adalah nama baris, bukan "kelompok lainnya".'
+phrases:
+  - '"IPR", "penjualan eceran", "kinerja penjualan" → INDEKS TOTAL.'
+  - '"Indeks Ekspektasi Penjualan (IEP)" → Ekspektasi Penjualan; "Indeks Ekspektasi Harga Umum (IEH)" → Ekspektasi Harga Umum (Tabel 9).'
+  - '"Sandang" → o/w Sandang; "Makanan, Minuman, dan Tembakau" → Makanan, Minuman, & Tembakau.'
+periods:
+  - 'Laporan "Juni" berisi realisasi Juni dan prakiraan bulan berikutnya (bertanda *).'
+  - 'IEP/IEH dicatat per bulan target (3 dan 6 bulan ke depan): "IEH November 2026 dan Februari 2027 ... 149,9 dan 177,9" → dua titik pada bulan target masing-masing; "periode sebelumnya" adalah nilai bulan target sebelumnya.'
+  - 'Tabel 4 dan 8 berisi pertumbuhan triwulanan (yoy).'
+units_signs:
+  - 'Indeks tanpa satuan; pertumbuhan dalam persen.'

@@ -1,0 +1,21 @@
+publication: npi
+title: Neraca Pembayaran Indonesia (NPI)
+conventions:
+  - 'Tabel NPI memakai BPM6: sisi debit (Impor, Pembayaran) dan saldo defisit dicatat NEGATIF. Laporan menulis besarnya tanpa tanda: "defisit transaksi berjalan 12,5 miliar dolar AS" adalah value 12,5 atas saldo yang negatif; tulis angkanya tanpa tanda minus.'
+  - '"defisit ... meningkat/melebar" berarti besarnya defisit membesar; "menyempit/menurun" berarti mengecil. "impor ... meningkat" berarti besarnya impor naik.'
+  - '"tetap mencatat surplus" adalah level di atas 0 (above_threshold 0); "mencatat defisit" adalah di bawah 0.'
+  - '"transaksi modal dan finansial" dengan satu angka adalah jumlah dua baris (Transaksi Modal + Transaksi Finansial) → operation sum.'
+  - '"rasio defisit transaksi berjalan ... tetap terjaga" berarti masih pada tingkat aman, bukan tidak berubah; jangan jadikan is_stable kecuali kalimat bilang "stabil".'
+  - '"setara 5,6 bulan impor atau 5,4 bulan impor dan pembayaran utang luar negeri pemerintah": dua angka untuk dua baris berbeda.'
+phrases:
+  - '"neraca perdagangan barang" → Barang Dagangan Umum; "neraca jasa" → Jasa-jasa; "pendapatan primer/sekunder" → baris Pendapatan Primer/Sekunder di Transaksi Berjalan.'
+  - '"investasi langsung", "investasi portofolio", "investasi lainnya" → baris di Transaksi Finansial; "sisi kewajiban/aset" memilih Kewajiban atau Aset di bawahnya; "pasar surat utang" → anak baris Surat utang.'
+  - '"aliran masuk/keluar modal asing" adalah sisi kewajiban; "arus masuk/keluar neto" adalah baris neto komponen itu.'
+  - '"(% PDB)" → baris rasio terhadap PDB (hanya ada untuk transaksi berjalan).'
+  - '"cadangan devisa ... bulan impor" → baris Dalam Bulan Impor (dan Pembayaran ULN Pemerintah).'
+periods:
+  - 'Kolom triwulan Q1-Q4. "posisi pada akhir Juni" pada baris triwulanan = Q2.'
+units_signs:
+  - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS (1 miliar = 1.000 juta).'
+  - '"pembelian neto"/"penjualan neto" menunjukkan tanda arus, bukan rincian baris.'
+  - 'Harga minyak (USD/barel) dan volume (juta barel, MMBTU) bukan baris nilai USD.'

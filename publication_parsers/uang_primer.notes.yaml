@@ -1,0 +1,12 @@
+publication: uang-primer-m0
+title: Uang Primer (M0) Adjusted
+conventions:
+  - '"Uang Primer (M0) Adjusted" adalah baris Uang Primer Adjusted, bukan Uang Primer biasa; "giro bank umum di Bank Indonesia adjusted" adalah Giro Bank Umum di BI Adjusted.'
+  - 'Pertumbuhan bulan ini dibandingkan bulan sebelumnya ("17,1% (yoy), lebih tinggi dibandingkan pertumbuhan Juni sebesar 13,8% (yoy)") adalah dua fakta yoy_growth, masing-masing pada bulannya.'
+  - 'Judul siaran pers mengulang angka kalimat pertama; ekstrak klaim dari kalimat isinya.'
+phrases:
+  - '"uang kartal yang diedarkan" → Uang Kartal Yang Diedarkan; "M0" → Uang Primer.'
+periods:
+  - 'Bulanan; yoy dibandingkan bulan yang sama tahun sebelumnya.'
+units_signs:
+  - 'Tabel SEKI I.2 dalam Miliar Rp; laporan dalam triliun Rp.'

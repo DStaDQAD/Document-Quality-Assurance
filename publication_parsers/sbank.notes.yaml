@@ -1,0 +1,15 @@
+publication: sbank
+title: Survei Perbankan (SBank)
+conventions:
+  - 'Angka Tabel1 dan Tabel3 adalah saldo bersih tertimbang (SBT, %): level. "SBT kredit baru sebesar 84,65%" adalah operation value, unit persen.'
+  - '"tetap tumbuh", "tumbuh positif", "positif", "menunjukkan pertumbuhan" pada SBT berarti saldo di atas 0 → above_threshold ambang 0, bukan is_increasing.'
+  - '"meningkat"/"lebih tinggi" tanpa periode pembanding pada laporan triwulan berarti dibandingkan triwulan sebelumnya; dengan "dibandingkan triwulan III 2025" pembandingnya periode itu.'
+  - 'Bagian METODOLOGI (mis. "SBT > 0 berarti lebih ketat") bukan klaim data.'
+  - 'Tabel2 berisi peringkat (rangking faktor/prioritas), bukan persen.'
+phrases:
+  - '"penyaluran kredit baru" → baris total kredit baru di Tabel1; "KMK, KI, KK" → Kredit Modal Kerja, Kredit Investasi, Kredit Konsumsi; "KPR" → KPR/KPA.'
+  - '"standar penyaluran kredit (lending standard)" → Tabel3; "prakiraan ... per triwulan > Gabungan > Deposito" berarti deposito seluruh bank, bukan satu kelompok bank.'
+periods:
+  - 'Kolom triwulan Q1-Q4; "prakiraan triwulan IV" merujuk kolom prakiraan; "selama setahun" merujuk blok prakiraan tahunan di Tabel1.'
+units_signs:
+  - 'SBT dalam persen, bisa negatif; tulis tanda sesuai kalimat.'

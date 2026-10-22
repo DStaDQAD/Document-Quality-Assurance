@@ -14,8 +14,9 @@ For each document in eval/cases/<case>/manifest*.yaml (seeded manifests skipped)
 and <out>/overview.md + overview.json: numeric sentences per document and publication, and
 the share the system turned into at least one claim.
 
-Nothing here calls an LLM or the network. A PDF without a usable text layer is listed with
-needs_vision=true and no sentences: reading it would need a paid vision call.
+Nothing here calls an LLM or the network. A PDF without a usable text layer is read from the
+text its newest run saved (<run>/<doc_id>.narrative.txt, written by eval.run_regression run);
+without that file it is listed with needs_vision=true and no sentences.
 """
 
 import argparse
@@ -116,14 +117,22 @@ def _read_document(path: Path) -> Dict:
         from word_extraction import read_word_document
         text = read_word_document(data).narrative_text
         return {"pages": [(None, text)], "extractor_text": _filter_narrative(text), "needs_vision": False}
-    from pdf_extraction import (MIN_PAGE_CHARS, MIN_USEFUL_CHARS, PAGE_MARKER_RE,
-                                _strip_tabular_content, extract_text_from_pdf)
+    from pdf_extraction import extract_text_from_pdf
     text = extract_text_from_pdf(data)
+    return _read_pdf_text(text)
+
+
+def _read_pdf_text(text: str, vision: bool = False) -> Dict:
+    """Pages of a PDF's narrative text: the text layer, or (vision=True) the text a paid run read
+    with the vision model and saved as <run>/<doc_id>.narrative.txt (eval.run_regression)."""
+    from structured_extractor import _filter_narrative
+    from pdf_extraction import MIN_PAGE_CHARS, MIN_USEFUL_CHARS, PAGE_MARKER_RE, _strip_tabular_content
     content = PAGE_MARKER_RE.sub("", text).strip()
     parts = _PAGE_MARKER.split(text)
     pages = [(int(parts[i]), parts[i + 1]) for i in range(1, len(parts) - 1, 2)]
     with_text = sum(1 for _, body in pages if len(body.strip()) >= MIN_PAGE_CHARS)
-    needs_vision = len(content) < MIN_USEFUL_CHARS or (pages and with_text / max(1, len(pages)) < 0.5)
+    needs_vision = not vision and (
+        len(content) < MIN_USEFUL_CHARS or bool(pages and with_text / max(1, len(pages)) < 0.5))
     return {"pages": pages, "extractor_text": _filter_narrative(_strip_tabular_content(text)),
             "needs_vision": bool(needs_vision)}
 
@@ -189,6 +198,12 @@ def _row_choices(doc, data_root: Path) -> List[Dict]:
 
 def export_document(case: str, doc, data_root: Path) -> Dict:
     read = _read_document(data_root / doc.doc)
+    run_path = _newest_run(data_root / "eval" / "cases" / case, doc.id)
+    vision_text = run_path.with_name(f"{doc.id}.narrative.txt") if run_path else None
+    read_from = "document"
+    if read["needs_vision"] and vision_text and vision_text.exists():
+        read = _read_pdf_text(vision_text.read_text(encoding="utf-8"), vision=True)
+        read_from = "vision text of the run"
     in_extractor = _squash(read["extractor_text"])
     candidates = []
     for page, body in read["pages"]:
@@ -205,7 +220,6 @@ def export_document(case: str, doc, data_root: Path) -> Dict:
                     "reaches_extractor": _squash(text) in in_extractor,
                     "system_claims": [],
                 })
-    run_path = _newest_run(data_root / "eval" / "cases" / case, doc.id)
     results = json.loads(run_path.read_text(encoding="utf-8"))["results"] if run_path else []
     unplaced = attach_claims(candidates, results)
     # Every numeric sentence, plus any sentence the system made a claim from (trend claims such
@@ -222,6 +236,7 @@ def export_document(case: str, doc, data_root: Path) -> Dict:
         "doc": doc.doc,
         "sources": [s.file for s in doc.sources],
         "needs_vision": read["needs_vision"],
+        "read_from": read_from,
         "system_run": str(run_path.relative_to(data_root)).replace("\\", "/") if run_path else None,
         "row_choices": _row_choices(doc, data_root),
         "sentences": sentences,

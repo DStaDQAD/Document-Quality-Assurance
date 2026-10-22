@@ -1,0 +1,16 @@
+publication: sk
+title: Survei Konsumen (SK)
+conventions:
+  - 'Indeks SK (IKK, IKE, IEK dan komponennya) berbatas 100: "optimis" = di atas 100 (above_threshold 100), "pesimis" = di bawah 100. "tetap optimis" adalah level, bukan tidak berubah.'
+  - 'Klaim tentang kelompok (pengeluaran, usia, pendidikan, kota, jenis kelamin) adalah tentang baris kelompok itu, bukan indeks nasional. Tulis "<indeks> > <kelompok>".'
+  - 'Kelompok bisa disebut lewat rentang: "pengeluaran di atas Rp3,1 juta" = semua kelompok di atas batas itu; "usia 20-40 tahun" = kelompok usia di dalam rentang.'
+  - '"relatif stabil" adalah is_stable; "meningkat"/"menurun" dibandingkan bulan sebelumnya.'
+  - '"beberapa kota" atau "sejumlah kelompok" tanpa nama tidak bisa diperiksa; ekstrak hanya kota/kelompok yang disebut.'
+phrases:
+  - '"persepsi/keyakinan konsumen terhadap kondisi ekonomi saat ini" → IKE; "ekspektasi konsumen terhadap kondisi ekonomi (6 bulan ke depan)" → IEK; "keyakinan konsumen" → IKK.'
+  - '"penghasilan saat ini" → IPSI; "ketersediaan lapangan kerja saat ini" → IKLK; "pembelian barang tahan lama" → IPDG; "ekspektasi penghasilan" → IEP; "ekspektasi ketersediaan lapangan kerja" → IEKLK; "ekspektasi kegiatan usaha" → IEKU.'
+  - '"average propensity to consume ratio", "proporsi konsumsi terhadap pendapatan" → Tabel 5 Konsumsi; "debt installment to income ratio" → Cicilan pinjaman; "saving to income ratio" → Tabungan.'
+periods:
+  - 'Bulanan; perbandingan biasanya dengan bulan sebelumnya.'
+units_signs:
+  - 'Indeks tanpa satuan; Tabel 5 dan 8 dalam persen.'

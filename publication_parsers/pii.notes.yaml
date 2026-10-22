@@ -1,0 +1,17 @@
+publication: pii
+title: Posisi Investasi Internasional Indonesia (PII)
+conventions:
+  - '"kewajiban neto" atau "aset neto" sebuah komponen (investasi langsung, portofolio, derivatif, investasi lainnya) adalah selisih Aset − Kewajiban komponen itu: kewajiban neto = nilai negatif. Tulis besarnya tanpa tanda, metric_label "<komponen> neto".'
+  - '"PII mencatat kewajiban neto sebesar X" → baris Posisi Investasi Internasional, bersih (nilainya negatif).'
+  - 'AFLN = Aset, KFLN = Kewajiban (sisi bruto). "posisi AFLN naik sebesar X" adalah selisih (diff) sisi Aset, bukan level.'
+  - '"mencatat kewajiban neto" tanpa angka = posisi neto di bawah 0; "mencatat aset neto" = di atas 0.'
+  - '"kewajiban neto ... menurun sebesar X" berarti besarnya kewajiban neto mengecil sebesar X.'
+  - '"sebesar X" setelah kata menurun/meningkat di kalimat tentang perubahan biasanya adalah perubahannya (diff), bukan level.'
+phrases:
+  - '"Posisi AFLN Indonesia" → Aset; "Posisi KFLN" → Kewajiban; "PII" → Posisi Investasi Internasional, bersih.'
+  - '"investasi langsung asing (PMA)" → sisi Kewajiban investasi langsung; "cadangan devisa" → baris Cadangan Devisa di Aset.'
+periods:
+  - 'Kolom triwulan Q1-Q4; "dibandingkan triwulan sebelumnya" adalah triwulan sebelum triwulan laporan.'
+units_signs:
+  - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS (1 miliar = 1.000 juta).'
+  - 'Rasio terhadap PDB tidak ada di tabel V.39.'

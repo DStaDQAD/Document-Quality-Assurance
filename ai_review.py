@@ -19,6 +19,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -237,6 +238,29 @@ def _evaluate_on_cells(
     return _evaluate_fact_safely(fact, [patched])
 
 
+def second_look_enabled() -> bool:
+    """AI_REVIEW_SECOND_LOOK=1/on/true/yes: the model is told reports are usually right and looks
+    for another reasonable reading before agreeing with a Tidak Sesuai, and the engine accepts
+    the sign the sentence states. Off unless set."""
+    return os.getenv("AI_REVIEW_SECOND_LOOK", "").strip().lower() in ("1", "on", "true", "yes")
+
+
+# A fall word shortly before the claimed number: "turun 4,1%", "terkontraksi sebesar 0,1%".
+_FALL_BEFORE = re.compile(
+    r"\b(turun|menurun|penurunan|terkontraksi|kontraksi|minus|negatif)\b[^.;\d]{0,30}$", re.IGNORECASE)
+
+
+def _said_negative(result: FactVerificationResult) -> bool:
+    """The sentence prints the claimed (positive) number right after a word that makes it negative."""
+    value = result.claimed_value
+    if value is None or value <= 0:
+        return False
+    text = f"{value:.4f}".rstrip("0").rstrip(".").replace(".", ",")
+    quote = result.context_quote or ""
+    return any(_FALL_BEFORE.search(quote[:m.start()])
+               for m in re.finditer(r"(?<![\d,.])" + re.escape(text) + r"(?!\d)", quote))
+
+
 def judge_review(
     result: FactVerificationResult,
     review: ClaimReview,
@@ -268,6 +292,13 @@ def judge_review(
     if len(keyed) != _EXACT_CELLS.get(operation, len(keyed)):
         return unchanged
     engine = _evaluate_on_cells(result, operation, src, keyed)
+    if (engine.verdict == "Refuted" and review.verdict == "sesuai" and second_look_enabled()
+            and _said_negative(result)):
+        # "Juli 2025 yang turun 4,1% (mtm)": the sentence signs the number, the extractor did not.
+        signed = _evaluate_on_cells(result.model_copy(update={"claimed_value": -result.claimed_value}),
+                                    operation, src, keyed)
+        if signed.verdict == "Entailed":
+            engine = signed
     if engine.verdict == "Inconclusive" or (engine.verdict == "Entailed") != (review.verdict == "sesuai"):
         return unchanged
     cells = _cells_note(src, keyed)
@@ -352,6 +383,31 @@ PROMPT = ChatPromptTemplate.from_messages([
     ("human", "TABEL:\n{tables}\n\nKLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor."),
 ])
 
+# AI_REVIEW_SECOND_LOOK (second_look_enabled): the owner's prior — a BI report is nearly always
+# right — so a program Tidak Sesuai earns a search for another reasonable reading first. The engine
+# still judges every cited cell, so a real error stays Tidak Sesuai.
+SECOND_LOOK = """
+
+Latar penting: laporan Bank Indonesia hampir selalu benar — biasanya 0 sampai 2 angka keliru per
+dokumen. Untuk klaim yang hasil programnya Tidak Sesuai, jangan langsung setuju. Cari dulu bacaan
+lain yang wajar dari kalimat itu:
+- periode lain yang dimaksud kalimat: triwulan sebelumnya, setahun penuh ("sepanjang 2025",
+  dibandingkan akhir tahun lalu), bulan yang sama tahun lalu, bulan target ekspektasi;
+- tanda: "turun 4,1%" atau "terkontraksi 0,1%" berarti −4,1 / −0,1;
+- laju pertumbuhan versus level ("kontraksi pertumbuhan yang lebih rendah" bicara tentang laju);
+- baris lain yang lebih tepat: sisi neto versus bruto, kelompok yang disebut kalimat sebelumnya,
+  tabel lain dengan nama baris yang sama.
+Jika ada bacaan wajar dengan sel yang cocok, jawab "sesuai" dengan sel-sel itu. Jawab
+"tidak_sesuai" hanya bila tidak ada bacaan wajar yang cocok — kesalahan sungguhan memang ada dan
+harus tetap dilaporkan."""
+
+PROMPT_SECOND_LOOK = ChatPromptTemplate.from_messages([
+    ("system", SYSTEM + SECOND_LOOK),
+    ("human", "TABEL:\n{tables}\n\nKLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor."),
+])
+
+_VERDICT_ID = {"Refuted": "Tidak Sesuai", "Inconclusive": "Tidak Cukup Data", "Entailed": "Sesuai"}
+
 
 def review_candidates(results: List[FactVerificationResult]) -> List[int]:
     """Narrative claims the code did not confirm. Chart labels are left to the chart checks.
@@ -376,8 +432,11 @@ _GUARDED = ("section_guard", "absent_item_guard", "number_phrase_guard")
 def _claim_line(n: int, r: FactVerificationResult) -> str:
     quote = " ".join((r.context_quote or "").split())[:400]
     value = "-" if r.claimed_value is None else f"{r.claimed_value} {r.claimed_unit or ''}".strip()
-    return (f'{n}. Kalimat: "{quote}" | metrik menurut ekstraktor: {r.metric_label} | '
+    line = (f'{n}. Kalimat: "{quote}" | metrik menurut ekstraktor: {r.metric_label} | '
             f"angka diperiksa: {value} | operasi ekstraktor: {r.operation}")
+    if second_look_enabled():
+        line += f" | hasil program: {_VERDICT_ID.get(r.verdict, r.verdict)}"
+    return line
 
 
 async def ask_reviews(
@@ -389,7 +448,7 @@ async def ask_reviews(
 ) -> Dict[int, ClaimReview]:
     """The model's answer per claim index. A batch that fails is logged and left unanswered."""
     tables = "\n\n".join(table_markdown(code, src) for code, src in codes.items())
-    chain = PROMPT | llm.with_structured_output(ReviewBatch)
+    chain = (PROMPT_SECOND_LOOK if second_look_enabled() else PROMPT) | llm.with_structured_output(ReviewBatch)
     # Batches are independent, so they are asked together: one after another, NPI's nine took
     # 216 s on 2026-10-12. The cap keeps a long report from bursting the provider's rate limit.
     limit = asyncio.Semaphore(MAX_PARALLEL_BATCHES)

@@ -1,0 +1,16 @@
+publication: pmi
+title: Prompt Manufacturing Index Bank Indonesia (PMI-BI)
+conventions:
+  - 'PMI-BI dan komponennya adalah indeks difusi dengan batas 50: "fase ekspansi" = di atas 50 (above_threshold 50), "fase kontraksi" = di bawah 50 (below_threshold 50). Ini level, BUKAN arah naik/turun.'
+  - '"perbaikan meskipun masih berada pada fase kontraksi" berarti indeks naik (is_increasing) DAN masih di bawah 50 (below_threshold 50) — dua fakta.'
+  - '"PMI-BI sebesar 51,43%, berada pada fase ekspansi" → fakta value 51,43 DAN fakta above_threshold 50.'
+  - '"tetap berada pada fase ekspansi" adalah level di atas 50, bukan perubahan.'
+  - '"sebagian besar Sub-LU berada pada fase ekspansi" adalah klaim mayoritas atas 14 sub-LU di T2; sub-LU yang disebut sesudah "kecuali" adalah pengecualian.'
+phrases:
+  - '"PMI-BI", "indeks PMI", "kinerja industri pengolahan" → baris PMI - BI di T1.'
+  - 'Komponen: Volume Produksi, Volume Total Pesanan, Kecepatan Penerimaan Barang Input, Volume Persediaan Barang Jadi, Jumlah Tenaga Kerja (T1).'
+  - '"Sub-LU Industri ..." → baris sub-lapangan usaha di T2.'
+periods:
+  - 'Kolom triwulan Q1-Q4; kolom terakhir (bertanda *) adalah prakiraan triwulan berikutnya: "diprakirakan" pada triwulan berikutnya merujuk kolom itu.'
+units_signs:
+  - 'Indeks dicetak dalam persen ("52,03%"); unit persen, bukan persen_yoy.'
