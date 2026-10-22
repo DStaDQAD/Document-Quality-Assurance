@@ -29,8 +29,12 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel, Field
 
+from cell_formula import FormulaError, evaluate
 from excel_parser_bi import BITableData
-from paired_verifier import _evaluate_fact_safely, _ExcelSource, _period_ordinal
+from paired_verifier import (
+    _evaluate_fact_safely, _ExcelSource, _group_family, _period_ordinal, _printed_in, _unit_factor,
+    _value_verdict,
+)
 from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint
 from table_model import TableData, _label_words, _same_root, _sig_words
@@ -142,7 +146,27 @@ _GENERIC_SUBJECT_WORDS = TableData._TITLE_STOP_WORDS | frozenset({
     "penurunan", "bulan", "triwulan", "tahun", "periode", "sebelumnya", "level", "indeks",
     "januari", "februari", "maret", "april", "mei", "juni", "juli", "agustus", "september",
     "oktober", "november", "desember",
+    # Net or gross is in the arithmetic the engine reproduces, not in a row name: "kewajiban neto
+    # investasi portofolio" is the Aset and Kewajiban rows of the component.
+    "neto", "bersih", "posisi",
 })
+
+
+def _alias_names(table: TableData, rows: List[str]) -> str:
+    """The publication's own names for the cited rows (TableData.term_aliases / label_aliases):
+    "AFLN Indonesia" for 'Aset'. They count as the row's words in subject_is_covered."""
+    levels = {level.strip().lower() for row in rows for level in row.split(">")} | {r.lower() for r in rows}
+    aliases = {**getattr(table, "term_aliases", {}), **getattr(table, "label_aliases", {})}
+    return " ".join(phrase for phrase, row in aliases.items() if row.strip().lower() in levels)
+
+
+def alias_lines(codes: Dict[str, _ExcelSource]) -> str:
+    """Every source's report names for its rows, for the prompt: '- "afln indonesia" = baris 'Aset' (S1)'."""
+    lines = []
+    for code, src in codes.items():
+        aliases = {**getattr(src.table, "term_aliases", {}), **getattr(src.table, "label_aliases", {})}
+        lines += [f'- "{phrase}" = baris \'{row}\' ({code})' for phrase, row in aliases.items()]
+    return "\n".join(lines) or "(tidak ada)"
 
 
 def subject_is_covered(subject: str, quote: str, rows: List[str], src: _ExcelSource) -> bool:
@@ -160,7 +184,8 @@ def subject_is_covered(subject: str, quote: str, rows: List[str], src: _ExcelSou
     if not subject.strip() or _norm(subject) not in _norm(quote):
         return False
     words = [w for w in _sig_words(subject) if w not in _GENERIC_SUBJECT_WORDS and not w.isdigit()]
-    known = _label_words(" ".join(rows) + " " + src.table.title + " " + src.sheet)
+    known = _label_words(" ".join(rows) + " " + src.table.title + " " + src.sheet + " "
+                         + _alias_names(src.table, rows))
     return all(any(_same_root(w, k) for k in known) for w in words)
 
 
@@ -185,6 +210,15 @@ class ClaimReview(BaseModel):
         default_factory=list,
         description="Sel yang dipakai; yoy_growth: [tahun lalu, sekarang]; diff/tren: urut waktu; ratio: [pembilang, penyebut]",
     )
+    formula: Optional[str] = Field(
+        None,
+        description=("Hanya bila klaim perlu hitungan lebih dari satu operasi: rumus atas sel c1..cn "
+                     "(urutan cells), mis. '(c4-c3)-(c2-c1)', '(c1+c2+c3)/c4*100', '(c2<c1)+(c4<c3)'"),
+    )
+    formula_unit: Optional[Literal["tabel", "persen", "jumlah"]] = Field(
+        None, description="Satuan hasil rumus: 'tabel' (satuan tabel), 'persen', atau 'jumlah' (hitungan)")
+    claim_number: Optional[float] = Field(
+        None, description="Angka di kalimat yang harus sama dengan hasil rumus, mis. 12 untuk '12 kota'")
     explanation: str = Field(description="Alasan singkat, Bahasa Indonesia, maks 2 kalimat")
 
 
@@ -273,6 +307,28 @@ def judge_review(
     unchanged = (result, "unchanged")
     if not _same_claim(review, result.context_quote):
         return unchanged
+    read = read_cells(review.cells, codes) if review.cells else None
+    # The answer's substance before its form: cells that exist, rows the sentence names (the
+    # publication's aliases counted), and arithmetic that reproduces the claim. The labels the model
+    # puts on its answer (match, verdict) no longer decide alone. Run ctrl_1022: "Posisi AFLN
+    # Indonesia meningkat" came back 'tidak_ada_di_tabel' with the right 'Aset' cells and "AFLN
+    # adalah padanan untuk 'Aset'" in the explanation — the word rule made the model refuse.
+    if read is not None and review.formula:
+        judged = _judge_formula(result, review, *read)
+        if judged is not None:
+            return judged
+    if read is not None and (review.verdict == "tidak_ada_di_tabel" or review.match != "persis"):
+        src, keyed = read
+        operation = review.operation or result.operation
+        rows = [label for label, _s, _v in keyed]
+        if (len(keyed) == _EXACT_CELLS.get(operation, len(keyed))
+                and subject_is_covered(review.subject, result.context_quote, rows, src)):
+            engine = _evaluate_on_cells(result, operation, src, keyed)
+            if engine.verdict == "Entailed":
+                return engine.model_copy(update={
+                    "resolved_via": "ai_review",
+                    "reasoning": f"{engine.reasoning} | Ditinjau AI: sel {_cells_note(src, keyed)} — {review.explanation}",
+                }), "to_entailed"
     if review.verdict == "tidak_ada_di_tabel":
         if result.verdict != "Refuted":
             return unchanged
@@ -282,10 +338,7 @@ def judge_review(
             "reasoning": (f"{result.reasoning} | Ditinjau AI: tabel tidak memuat data yang dimaksud "
                           f"kalimat ini — {review.explanation}"),
         }), "to_inconclusive"
-    if review.match != "persis":
-        return unchanged
-    read = read_cells(review.cells, codes)
-    if read is None:
+    if review.match != "persis" or read is None:
         return unchanged
     src, keyed = read
     operation = review.operation or result.operation
@@ -325,6 +378,60 @@ def judge_review(
     }), "flag"
 
 
+def _judge_formula(
+    result: FactVerificationResult, review: ClaimReview, src: _ExcelSource,
+    keyed: List[Tuple[str, Tuple, float]],
+) -> Optional[Tuple[FactVerificationResult, str]]:
+    """The model's own formula over the cited cells, computed by code (cell_formula).
+
+    For the claims one engine operation cannot say: a component's net change ((Kewajiban − Aset)
+    at the end minus at the start), a share of several rows, a count of cities, "kontraksi … yang
+    lebih rendah". Accepted as Sesuai when the result reproduces the claim's number (rounded as
+    printed) or the condition holds, the cited rows are the sentence's subject, and a formula over
+    the members of one breakdown cites every member — "12 dari 18 kota" cannot be proved on the
+    twelve that slowed. A formula that fails changes nothing on a Tidak Sesuai and only flags a
+    Tidak Cukup Data, as any new mismatch here does. None when the formula cannot be used."""
+    rows = list(dict.fromkeys(label for label, _s, _v in keyed))
+    if not subject_is_covered(review.subject, result.context_quote, rows, src):
+        return None
+    if len(rows) >= 3:
+        family = _group_family(rows, src)
+        if family is not None and not set(family[0]) <= set(rows):
+            # Not a fall-through to the plain check either: the cited members would pass there.
+            return result, "unchanged"
+    try:
+        value = evaluate(review.formula, [v for _l, _s, v in keyed])
+    except FormulaError:
+        return None
+    cells = _cells_note(src, keyed)
+    if isinstance(value, bool):
+        holds, shown = value, "benar" if value else "salah"
+    else:
+        target = review.claim_number if review.claim_number is not None else result.claimed_value
+        if target is None or not _printed_in(target, result.context_quote):
+            return None
+        if review.formula_unit == "tabel":
+            factor = _unit_factor(result.claimed_unit, src.table.unit) or 1.0
+            value = value / factor
+        # Signed: the model writes the formula the way the sentence reads ("meningkatnya kewajiban
+        # neto" = Kewajiban − Aset growing), so a change the other way does not pass on its size.
+        _delta, verdict, _rule = _value_verdict(target, value, result.context_quote)
+        holds, shown = verdict == "Entailed", f"{round(value, 4)} (klaim {target})"
+    note = f"Ditinjau AI: rumus {review.formula} atas sel {cells} = {shown} — {review.explanation}"
+    if holds:
+        return result.model_copy(update={
+            "verdict": "Entailed", "reason_code": None, "resolved_via": "ai_review",
+            "computed_value": None if isinstance(value, bool) else round(value, 4),
+            "reasoning": f"{result.reasoning} | {note}",
+        }), "to_entailed"
+    if result.verdict == "Refuted":
+        return result, "unchanged"
+    return result.model_copy(update={
+        "resolved_via": "ai_review_flag",
+        "reasoning": f"{result.reasoning} | {note}; kemungkinan tidak sesuai, perlu ditinjau",
+    }), "flag"
+
+
 class ReviewBatch(BaseModel):
     reviews: List[ClaimReview]
 
@@ -341,7 +448,8 @@ Untuk SETIAP klaim, isi kolom berurutan:
    Contoh: "impor: ada; minyak: tidak ada; mentah: tidak ada".
 3. match:
    - persis: baris itu mengukur hal yang sama dengan subject (semua kata penting ada, atau
-     singkatan resminya, mis. KPR = Kredit Pemilikan Rumah).
+     singkatan resminya, mis. KPR = Kredit Pemilikan Rumah, atau namanya di daftar PADANAN NAMA:
+     "AFLN Indonesia" = baris 'Aset'). Kata yang ada lewat padanan dihitung "ada".
    - total_atau_induk: baris itu total atau induk dari yang dimaksud. Contoh: klaim "impor
      minyak", baris "Migas > Impor"; klaim "remitansi pekerja migran", baris "Pendapatan Sekunder".
    - mirip: topik serupa tapi ukurannya lain. Contoh: sisi aset saja untuk posisi neto; tabel
@@ -355,7 +463,25 @@ Untuk SETIAP klaim, isi kolom berurutan:
    sum · average · ratio = pembilang lalu penyebut (persen) · is_increasing / is_decreasing /
    is_stable = sel urut waktu · above_threshold / below_threshold = sel yang dibandingkan dengan
    angka ambang di klaim.
-6. explanation: alasan singkat, maksimal 2 kalimat.
+   Walaupun match bukan persis, tetap sebutkan sel yang kamu temukan; program yang menilai.
+6. formula (hanya bila satu operasi di atas tidak cukup): tulis hitungannya atas sel yang kamu
+   sebut, dengan nama c1, c2, ... sesuai urutan cells. Program membaca sel itu sendiri dan
+   menghitungnya; kamu tidak perlu menghitung. Boleh: angka, c1..cn, + - * /, perbandingan
+   (< > <= >= ==, bernilai 1 bila benar), and, or, not, abs(), sum(), min(), max(). Isi juga
+   formula_unit ('tabel' bila hasilnya dalam satuan tabel, 'persen', atau 'jumlah' untuk hitungan)
+   dan claim_number (angka di kalimat yang harus sama dengan hasilnya; kosongkan untuk syarat
+   benar/salah). Tulis rumus searah kalimat: "kewajiban neto naik" berarti hasilnya positif.
+   Contoh:
+   - "meningkatnya kewajiban neto investasi portofolio sebesar 12,1": cells Aset Q3, Aset Q4,
+     Kewajiban Q3, Kewajiban Q4 → formula "(c4-c3)-(c2-c1)", formula_unit "tabel", claim_number 12.1
+   - "instrumen utang dengan pangsa 78,2% dari total AFLN": cells tiga baris utang lalu Aset →
+     "(c1+c2+c3)/c4*100", "persen", 78.2
+   - "dari 18 kota, 12 kota mengalami perlambatan": cells SEMUA 18 kota, periode lalu dan sekarang
+     berpasangan → "(c2<c1)+(c4<c3)+...", "jumlah", 12
+   - "kontraksi pertumbuhan ULN swasta yang lebih rendah": cells Swasta Jun 2025, Mar 2025,
+     Mar 2026, Jun 2026 → "c4/c1-1 < 0 and abs(c4/c1-1) < abs(c3/c2-1)", tanpa claim_number
+   Hitungan atas anggota satu kelompok (kota, sektor) harus menyebut SEMUA anggotanya.
+7. explanation: alasan singkat, maksimal 2 kalimat.
 
 Catatan tentang tabel:
 - Laporan menulis besarnya defisit atau kewajiban neto sebagai angka positif; tabel menyimpannya
@@ -378,9 +504,12 @@ Catatan tentang tabel:
 - Laporan membulatkan ke 1-2 desimal; selisih karena pembulatan dianggap sesuai.
 - claim_no sama dengan nomor klaim, dan first_words adalah 5 kata pertama kalimatnya."""
 
+HUMAN = ("TABEL:\n{tables}\n\nPADANAN NAMA (nama di laporan = baris tabel):\n{aliases}\n\n"
+         "KLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor.")
+
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", SYSTEM),
-    ("human", "TABEL:\n{tables}\n\nKLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor."),
+    ("human", HUMAN),
 ])
 
 # AI_REVIEW_SECOND_LOOK (second_look_enabled): the owner's prior — a BI report is nearly always
@@ -403,7 +532,7 @@ harus tetap dilaporkan."""
 
 PROMPT_SECOND_LOOK = ChatPromptTemplate.from_messages([
     ("system", SYSTEM + SECOND_LOOK),
-    ("human", "TABEL:\n{tables}\n\nKLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor."),
+    ("human", HUMAN),
 ])
 
 _VERDICT_ID = {"Refuted": "Tidak Sesuai", "Inconclusive": "Tidak Cukup Data", "Entailed": "Sesuai"}
@@ -448,6 +577,7 @@ async def ask_reviews(
 ) -> Dict[int, ClaimReview]:
     """The model's answer per claim index. A batch that fails is logged and left unanswered."""
     tables = "\n\n".join(table_markdown(code, src) for code, src in codes.items())
+    aliases = alias_lines(codes)
     chain = (PROMPT_SECOND_LOOK if second_look_enabled() else PROMPT) | llm.with_structured_output(ReviewBatch)
     # Batches are independent, so they are asked together: one after another, NPI's nine took
     # 216 s on 2026-10-12. The cap keeps a long report from bursting the provider's rate limit.
@@ -457,7 +587,7 @@ async def ask_reviews(
         claims = "\n".join(_claim_line(n, results[i]) for n, i in enumerate(batch, 1))
         async with limit:
             try:
-                return batch, await chain.ainvoke({"tables": tables, "claims": claims})
+                return batch, await chain.ainvoke({"tables": tables, "aliases": aliases, "claims": claims})
             except Exception:
                 logger.warning("Tinjauan AI: batch %d gagal; klaimnya tetap dengan vonis kode",
                                batch_no, exc_info=True)

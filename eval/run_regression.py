@@ -247,6 +247,16 @@ def cmd_replay(args) -> int:
     run_dir, out = Path(args.dir), Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     data_root = Path(args.data_root) if args.data_root else REPO_ROOT
+    # --ai-review (PAID): the saved facts are judged again for free, then only the Tinjauan AI is
+    # asked — no extraction, no vision. The cheap way to measure a change to the review itself.
+    review_llm = usage = None
+    if getattr(args, "ai_review", False):
+        from dotenv import load_dotenv
+        load_dotenv(data_root / ".env")
+        from langchain_core.callbacks import UsageMetadataCallbackHandler
+        import llm_provider
+        usage = UsageMetadataCallbackHandler()
+        review_llm = llm_provider.get_review_llm(callbacks=[usage])
     for doc in load_manifest(args.manifest):
         path = run_dir / f"{doc.id}.json"
         if not path.exists():
@@ -266,10 +276,31 @@ def cmd_replay(args) -> int:
         _attach_named_members(facts)
         _attach_group_exclusions(facts)
         _attach_rankings(facts)
-        results = [r.model_dump() for r in _with_reason_codes([_evaluate_fact_safely(f, sources) for f in facts])]
+        judged = [_evaluate_fact_safely(f, sources) for f in facts]
+        reviewed = None
+        if review_llm is not None:
+            import asyncio
+            from ai_review import review_claims
+            from paired_verifier import _publication_guards
+            raw_log = out / f"{doc.id}.ai_review_raw.jsonl"
+            raw_log.unlink(missing_ok=True)
+            os.environ["AI_REVIEW_RAW_LOG"] = str(raw_log)
+            before = {k: dict(v) for k, v in usage.usage_metadata.items()}
+            judged, stats = asyncio.run(review_claims(judged, sources, review_llm))
+            judged = [_publication_guards(f, r, sources) for f, r in zip(facts, judged)]
+            spent = {k: (v.get("input_tokens", 0) - before.get(k, {}).get("input_tokens", 0),
+                         v.get("output_tokens", 0) - before.get(k, {}).get("output_tokens", 0))
+                     for k, v in usage.usage_metadata.items()}
+            reviewed = {"candidates": stats.candidates, "outcomes": stats.outcomes,
+                        "tokens_in": sum(i for i, _o in spent.values()),
+                        "tokens_out": sum(o for _i, o in spent.values())}
+        results = [r.model_dump() for r in _with_reason_codes(judged)]
         (out / f"{doc.id}.json").write_text(json.dumps(
-            {"results": results, "_replay": {"rebuilt": rebuilt, "skipped": skipped}},
+            {"results": results, "_replay": {"rebuilt": rebuilt, "skipped": skipped, "ai_review": reviewed}},
             ensure_ascii=False, indent=1), encoding="utf-8")
+        if reviewed:
+            print(f"[{doc.id}] tinjauan AI: {reviewed['candidates']} klaim, {reviewed['outcomes']}, "
+                  f"in={reviewed['tokens_in']} out={reviewed['tokens_out']}")
         print(f"[{doc.id}] {len(results)} klaim dinilai ulang"
               + (f", {skipped} tidak bisa dibangun ulang" if skipped else "")
               + (" (dari hasil, bukan fakta tersimpan)" if rebuilt else ""))
@@ -324,6 +355,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--manifest", type=Path, action="append", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--data-root")
+    p.add_argument("--ai-review", action="store_true",
+                   help="PAID: also run the Tinjauan AI on the replayed verdicts (no extraction, no vision)")
     p = sub.add_parser("score")
     p.add_argument("dir")
     p.add_argument("--manifest", type=Path, action="append", required=True)

@@ -198,10 +198,147 @@ def test_not_in_table_leaves_an_inconclusive_claim_alone():
     assert judge_review(original, review, _CODES) == (original, "unchanged")
 
 
-def test_only_a_persis_match_may_change_a_verdict():
+def test_a_match_label_does_not_decide_alone_the_cells_do():
+    # Substance before form: cells that reproduce the number on the sentence's own row are proof
+    # whatever match kind the model wrote. A row the subject does not name is still refused.
     original = _result(verdict="Refuted")
     for match in ("total_atau_induk", "mirip"):
-        assert judge_review(original, _review(match=match), _CODES) == (original, "unchanged")
+        assert judge_review(original, _review(match=match), _CODES)[1] == "to_entailed"
+    other_row = _review(match="mirip", subject="Kredit modal kerja",
+                        cells=[CitedCell(sheet="S1", row="Kredit Konsumsi", period="Jun 2026", value=55.0)])
+    konsumsi = _result(verdict="Refuted", claimed_value=0.055)
+    assert judge_review(konsumsi, other_row, _CODES) == (konsumsi, "unchanged")
+
+
+_PII = _table(title="Posisi Investasi Internasional Indonesia", unit="Juta USD", data={
+    ("Aset", 2025, "Q3"): 545541.73, ("Aset", 2025, "Q4"): 558496.49,
+    ("Aset > Investasi Portofolio", 2024, "Q4"): 37763.42, ("Aset > Investasi Portofolio", 2025, "Q4"): 40571.18,
+    ("Kewajiban > Investasi Portofolio", 2024, "Q4"): 278576.70,
+    ("Kewajiban > Investasi Portofolio", 2025, "Q4"): 293454.72,
+})
+_PII.label_aliases = {"afln indonesia": "Aset"}
+
+
+def test_the_right_cells_under_a_not_in_table_label_are_accepted_through_an_alias():
+    # ctrl_1022 PII sp: "Posisi AFLN Indonesia meningkat" — the model cited Aset Q3 -> Q4 and wrote
+    # "AFLN adalah padanan untuk 'Aset'", but answered tidak_ada_di_tabel ("AFLN: tidak ada").
+    quote = "Posisi AFLN Indonesia meningkat terutama didorong oleh kenaikan cadangan devisa."
+    result = _result(operation="is_increasing", claimed_value=None, unit=None, quote=quote, label="AFLN Indonesia")
+    review = _review(first_words="Posisi AFLN Indonesia meningkat terutama", subject="AFLN Indonesia",
+                     match="total_atau_induk", verdict="tidak_ada_di_tabel", operation="is_increasing",
+                     cells=[CitedCell(sheet="S1", row="Aset", period="Q3 2025", value=545541.73),
+                            CitedCell(sheet="S1", row="Aset", period="Q4 2025", value=558496.49)])
+    codes = {"S1": _source(_PII, sheet="5.39")}
+
+    assert judge_review(result, review, codes)[1] == "to_entailed"
+    no_alias = _table(title="Posisi Investasi Internasional Indonesia", unit="Juta USD", data={
+        ("Aset", 2025, "Q3"): 545541.73, ("Aset", 2025, "Q4"): 558496.49})
+    assert judge_review(result, review, {"S1": _source(no_alias, sheet="5.39")}) == (result, "unchanged")
+
+
+def _net_change_review(formula="(c4-c3)-(c2-c1)", claim_number=12.1):
+    return _review(
+        first_words="Perkembangan ini terutama dikontribusikan oleh", subject="kewajiban neto investasi portofolio",
+        match="persis", verdict="sesuai", operation="diff", formula=formula, formula_unit="tabel",
+        claim_number=claim_number,
+        cells=[CitedCell(sheet="S1", row="Aset > Investasi Portofolio", period="Q4 2024", value=37763.42),
+               CitedCell(sheet="S1", row="Aset > Investasi Portofolio", period="Q4 2025", value=40571.18),
+               CitedCell(sheet="S1", row="Kewajiban > Investasi Portofolio", period="Q4 2024", value=278576.70),
+               CitedCell(sheet="S1", row="Kewajiban > Investasi Portofolio", period="Q4 2025", value=293454.72)])
+
+
+_NET_QUOTE = ("Perkembangan ini terutama dikontribusikan oleh meningkatnya kewajiban neto investasi "
+              "portofolio sebesar 12,1 miliar dolar AS.")
+
+
+def test_a_formula_over_four_cells_proves_a_change_in_net_liabilities():
+    # (293.454,72 − 40.571,18) − (278.576,70 − 37.763,42) = 12.070,3 juta = 12,1 miliar.
+    result = _result(verdict="Inconclusive", operation="diff", claimed_value=12.1, unit="miliar USD",
+                     quote=_NET_QUOTE, label="kewajiban neto investasi portofolio")
+    final, outcome = judge_review(result, _net_change_review(), {"S1": _source(_PII, sheet="5.39")})
+    assert (outcome, final.verdict, final.computed_value) == ("to_entailed", "Entailed", 12.0703)
+    assert "rumus (c4-c3)-(c2-c1)" in final.reasoning
+
+
+def test_a_formula_the_other_way_round_does_not_pass_on_its_size():
+    result = _result(verdict="Refuted", operation="diff", claimed_value=12.1, unit="miliar USD",
+                     quote=_NET_QUOTE, label="kewajiban neto investasi portofolio")
+    review = _net_change_review(formula="(c2-c1)-(c4-c3)")
+    assert judge_review(result, review, {"S1": _source(_PII, sheet="5.39")}) == (result, "unchanged")
+
+
+def test_a_formula_that_misses_the_number_flags_a_tidak_cukup_data():
+    result = _result(verdict="Inconclusive", operation="diff", claimed_value=15.0, unit="miliar USD",
+                     quote=_NET_QUOTE.replace("12,1", "15,0"), label="kewajiban neto investasi portofolio")
+    final, outcome = judge_review(result, _net_change_review(claim_number=15.0),
+                                  {"S1": _source(_PII, sheet="5.39")})
+    assert (outcome, final.verdict) == ("flag", "Inconclusive")
+
+
+def test_a_formula_that_is_not_allowed_is_ignored():
+    result = _result(verdict="Inconclusive", operation="diff", claimed_value=12.1, unit="miliar USD",
+                     quote=_NET_QUOTE, label="kewajiban neto investasi portofolio")
+    review = _net_change_review(formula="__import__('os').getcwd()")
+    assert judge_review(result, review, {"S1": _source(_PII, sheet="5.39")})[1] != "to_entailed"
+
+
+_CITIES = ("BANDUNG", "MEDAN", "PADANG", "SURABAYA")
+_SHPR = _table(title="Pertumbuhan IHPR per Kota", unit="%", data={
+    **{(f"TAHUNAN (YOY) > {c} > TOTAL", 2025, "Q3"): q3 for c, q3 in zip(_CITIES, (2.0, 1.5, 1.0, 0.5))},
+    **{(f"TAHUNAN (YOY) > {c} > TOTAL", 2025, "Q4"): q4 for c, q4 in zip(_CITIES, (1.8, 1.2, 0.7, 0.9))},
+})
+_COUNT_QUOTE = "Secara spasial, dari 4 kota yang disurvei, 3 kota diantaranya mengalami perlambatan pertumbuhan IHPR."
+
+
+def _count_review(cities):
+    cells = []
+    for c in cities:
+        for q, v in (("Q3 2025", _SHPR._data[(f"TAHUNAN (YOY) > {c} > TOTAL", 2025, "Q3")]),
+                     ("Q4 2025", _SHPR._data[(f"TAHUNAN (YOY) > {c} > TOTAL", 2025, "Q4")])):
+            cells.append(CitedCell(sheet="S1", row=f"TAHUNAN (YOY) > {c} > TOTAL", period=q, value=v))
+    formula = "+".join(f"(c{2 * i + 2}<c{2 * i + 1})" for i in range(len(cities)))
+    return _review(first_words="Secara spasial, dari 4 kota", subject="pertumbuhan IHPR", match="persis",
+                   verdict="sesuai", operation="is_decreasing", formula=formula, formula_unit="jumlah",
+                   claim_number=3, cells=cells)
+
+
+def test_a_count_over_every_city_is_proved_by_its_formula():
+    # SHPR Tw IV-2025: "dari 18 kota yang disurvei, 12 kota diantaranya mengalami perlambatan
+    # pertumbuhan" came back is_decreasing on the national index and was refuted.
+    result = _result(verdict="Refuted", operation="is_decreasing", claimed_value=None, unit=None,
+                     quote=_COUNT_QUOTE, label="IHPR")
+    final, outcome = judge_review(result, _count_review(_CITIES), {"S1": _source(_SHPR, sheet="TABEL 3")})
+    assert (outcome, final.verdict) == ("to_entailed", "Entailed")
+
+
+def test_a_count_that_leaves_out_a_city_is_not_used():
+    # Three slowed of the three cited proves nothing about the fourth.
+    result = _result(verdict="Refuted", operation="is_decreasing", claimed_value=None, unit=None,
+                     quote=_COUNT_QUOTE, label="IHPR")
+    review = _count_review(("BANDUNG", "MEDAN", "PADANG"))
+    assert judge_review(result, review, {"S1": _source(_SHPR, sheet="TABEL 3")}) == (result, "unchanged")
+
+
+def test_a_condition_formula_proves_an_eased_contraction():
+    uln = _table(title="Posisi Utang Luar Negeri (ULN) Indonesia", unit="Juta USD", data={
+        ("Swasta", 2025, "Mar"): 195160.0, ("Swasta", 2025, "Jun"): 195733.6,
+        ("Swasta", 2026, "Mar"): 192525.57, ("Swasta", 2026, "Jun"): 194616.52})
+    quote = "Perkembangan tersebut disebabkan oleh peningkatan ULN publik, di tengah kontraksi pertumbuhan ULN swasta yang lebih rendah."
+    result = _result(verdict="Refuted", operation="is_decreasing", claimed_value=None, unit=None,
+                     quote=quote, label="ULN swasta")
+    review = _review(first_words="Perkembangan tersebut disebabkan oleh peningkatan", subject="ULN swasta",
+                     operation="is_decreasing", formula="c4/c1-1 < 0 and abs(c4/c1-1) < abs(c3/c2-1)",
+                     cells=[CitedCell(sheet="S1", row="Swasta", period="Jun 2025", value=195733.6),
+                            CitedCell(sheet="S1", row="Swasta", period="Mar 2025", value=195160.0),
+                            CitedCell(sheet="S1", row="Swasta", period="Mar 2026", value=192525.57),
+                            CitedCell(sheet="S1", row="Swasta", period="Jun 2026", value=194616.52)])
+    final, outcome = judge_review(result, review, {"S1": _source(uln, sheet="TabI.1")})
+    assert (outcome, final.verdict) == ("to_entailed", "Entailed")
+
+
+def test_the_prompt_lists_the_publications_names_for_rows():
+    lines = ai_review.alias_lines({"S1": _source(_PII, sheet="5.39")})
+    assert "\"afln indonesia\" = baris 'Aset' (S1)" in lines
 
 
 def test_a_number_the_engine_cannot_reproduce_keeps_the_verdict():
