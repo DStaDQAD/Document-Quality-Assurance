@@ -2,7 +2,7 @@ publication: cadangan-devisa
 title: Cadangan Devisa
 conventions:
   - '"posisi cadangan devisa" → baris Cadangan Devisa (total) di V.9.'
-  - '"setara dengan pembiayaan X bulan impor" dan "standar kecukupan internasional sekitar 3 bulan impor" adalah ukuran bulan impor, bukan nilai dolar; V.9 tidak memuat baris bulan impor.'
+  - '"setara dengan pembiayaan X bulan impor" dan "standar kecukupan internasional sekitar 3 bulan impor" adalah ukuran dalam bulan impor (rasio), bukan nilai dolar.'
   - '"meningkat/menurun dibandingkan akhir bulan sebelumnya" adalah tren posisi bulanan.'
 periods:
   - '"pada akhir September 2026" = kolom Sep 2026.'

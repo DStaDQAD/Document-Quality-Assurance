@@ -5,7 +5,7 @@ conventions:
   - 'Klaim tentang kelompok (pengeluaran, usia, pendidikan, kota, jenis kelamin) adalah tentang baris kelompok itu, bukan indeks nasional. Tulis "<indeks> > <kelompok>".'
   - 'Kelompok bisa disebut lewat rentang: "pengeluaran di atas Rp3,1 juta" = semua kelompok di atas batas itu; "usia 20-40 tahun" = kelompok usia di dalam rentang.'
   - '"relatif stabil" adalah is_stable; "meningkat"/"menurun" dibandingkan bulan sebelumnya.'
-  - '"beberapa kota" atau "sejumlah kelompok" tanpa nama tidak bisa diperiksa; ekstrak hanya kota/kelompok yang disebut.'
+  - '"beberapa kota, antara lain A, B, dan C" → satu klaim per kota/kelompok yang disebut.'
 phrases:
   - '"persepsi/keyakinan konsumen terhadap kondisi ekonomi saat ini" → IKE; "ekspektasi konsumen terhadap kondisi ekonomi (6 bulan ke depan)" → IEK; "keyakinan konsumen" → IKK.'
   - '"penghasilan saat ini" → IPSI; "ketersediaan lapangan kerja saat ini" → IKLK; "pembelian barang tahan lama" → IPDG; "ekspektasi penghasilan" → IEP; "ekspektasi ketersediaan lapangan kerja" → IEKLK; "ekspektasi kegiatan usaha" → IEKU.'

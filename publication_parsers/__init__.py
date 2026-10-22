@@ -105,8 +105,10 @@ def notes_for(publication: str) -> str:
             f"yang boleh: publication, title, {', '.join(sorted(known))}."
         )
     lines = [f"PUBLIKASI: {data.get('title') or publication} — catatan analis tentang arti kata-kata "
-             "yang biasa dipakai publikasi ini. Pakai sebagai petunjuk saat membaca klaim; tetap ekstrak "
-             "setiap klaim, juga yang tidak disebut di sini."]
+             "yang biasa dipakai publikasi ini. Pakai hanya sebagai petunjuk membaca kalimat, tidak pernah "
+             "sebagai alasan melewatkan klaim. Tetap ekstrak setiap klaim seperti biasa: juga kalimat tren "
+             "tanpa angka (naik/turun/stabil), angka yang mungkin tidak ada di tabel, dan klaim yang tidak "
+             "disebut di sini."]
     module = PARSERS[publication]
     for key, heading in NOTES_SECTIONS:
         entries = [str(entry) for entry in data.get(key) or []]

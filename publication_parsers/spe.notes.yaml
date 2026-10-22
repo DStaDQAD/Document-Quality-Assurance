@@ -2,10 +2,10 @@ publication: spe
 title: Survei Penjualan Eceran (SPE)
 conventions:
   - 'Indeks Penjualan Riil (IPR) total dan per kelompok/kota. "(yoy)" atau "secara tahunan" → Tabel 2/6 (atau yoy dari indeks); "(mtm)" atau "secara bulanan" → Tabel 3/7, operation value unit persen.'
-  - '"terkontraksi X%" atau "turun X%" berarti −X, untuk mtm maupun yoy.'
+  - '"terkontraksi X%" atau "turun X%" berarti −X, untuk mtm maupun yoy: tulis claimed_value_raw dengan tanda minus, juga di anak kalimat ("dibandingkan Juli 2025 yang turun 4,1% (mtm)" → −4,1).'
   - '"tetap tumbuh meski melambat ... 0,6% (mtm)" adalah tentang laju pertumbuhan (mtm/yoy), bukan level indeks.'
   - '"peningkatan penjualan secara tahunan pada Kelompok X" dibandingkan bulan yang sama tahun lalu.'
-  - '"sebagian besar/mayoritas kota/kelompok" adalah klaim mayoritas; "beberapa kota" tanpa nama tidak bisa diperiksa.'
+  - '"sebagian besar/mayoritas kota/kelompok" adalah klaim mayoritas; "beberapa kota terutama A, B, dan C" → satu klaim per kota yang disebut.'
   - 'Nama kelompok "Barang Lainnya" dan "Perlengkapan Rumah Tangga Lainnya" adalah nama baris, bukan "kelompok lainnya".'
 phrases:
   - '"IPR", "penjualan eceran", "kinerja penjualan" → INDEKS TOTAL.'

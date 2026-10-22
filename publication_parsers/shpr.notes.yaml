@@ -4,7 +4,7 @@ conventions:
   - 'Indeks Harga Properti Residensial (IHPR) di pasar primer. TABEL 1 = nasional per tipe rumah (KECIL, MENENGAH, BESAR, TOTAL); TABEL 2 = indeks per kota; TABEL 3 = pertumbuhan per kota dengan dua blok: TRIWULANAN (QTQ) dan TAHUNAN (YOY).'
   - '"tumbuh X% (qtq)" atau "secara triwulanan" → blok TRIWULANAN (QTQ); "(yoy)" atau "secara tahunan" → blok TAHUNAN (YOY). Keduanya operation value unit persen.'
   - '"terkontraksi X%" berarti −X.'
-  - 'Penjualan properti, KPR dan pembiayaan tidak ada di workbook harga; tetap ekstrak dengan nama yang ditulis kalimat.'
+  - 'Klaim penjualan properti, KPR dan pembiayaan ditulis dengan nama yang dipakai kalimat.'
 phrases:
   - '"IHPR", "harga properti residensial" → TOTAL; "rumah tipe kecil/menengah/besar" → KECIL/MENENGAH/BESAR.'
 periods:

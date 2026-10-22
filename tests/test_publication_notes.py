@@ -83,6 +83,10 @@ def test_every_publication_has_valid_notes(publication):
     assert entries and all(isinstance(entry, str) and entry.strip() for entry in entries)
     words = sum(len(entry.split()) for entry in entries)
     assert words <= publication_parsers.NOTES_MAX_WORDS, f"{publication}: {words} words"
+    # Run notes_1022: "V.9 tidak memuat baris bulan impor" made the extractor drop those claims
+    # instead of letting them come back Tidak Cukup Data. What the table lacks, the program finds.
+    absent = re.compile(r"tidak (ada di|memuat)|bisa diperiksa|belum dipetakan", re.I)
+    assert not [entry for entry in entries if absent.search(entry)]
 
 
 def test_a_broken_notes_file_says_so_in_indonesian(tmp_path, monkeypatch):
