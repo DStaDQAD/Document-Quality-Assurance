@@ -45,6 +45,14 @@ LABEL_ALIASES = {
                                  "aset finansial luar negeri (afln)")},
     **{name: "Kewajiban" for name in ("posisi kfln indonesia", "kewajiban finansial luar negeri",
                                       "kewajiban finansial luar negeri (kfln)")},
+    # Tw IV-2025: "Posisi AFLN Indonesia meningkat", "kewajiban neto PII naik sebesar 10,8" and the
+    # KFLN's "utang menjadi 431,7" came back under these names and found nothing. Bare "AFLN" and
+    # "PII" stay out for the reason above.
+    "afln indonesia": "Aset",
+    "kfln indonesia": "Kewajiban",
+    **{name: "Posisi Investasi Internasional, bersih" for name in (
+        "kewajiban neto pii", "kewajiban neto pii indonesia", "pii indonesia")},
+    **{name: ULN_ROW for name in ("utang kfln", "kfln utang")},
 }
 
 
@@ -69,6 +77,7 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     if _add_sum_row(table, ULN_ROW, ULN_PARTS):
         table.term_aliases = dict(TERM_ALIASES)
     table.label_aliases = {name: row for name, row in LABEL_ALIASES.items() if row in table.row_labels}
+    table.positions = True   # "Posisi" Investasi Internasional: stocks at the end of each quarter
     return table
 
 

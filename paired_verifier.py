@@ -1608,9 +1608,12 @@ _DEFICIT_TREND_LATER_IN_SENTENCE = re.compile(
     r"|lebih\s+(tinggi|rendah|besar|kecil|lebar|sempit))\b",
     re.IGNORECASE,
 )
-# The same, noun first: "peningkatan defisit neraca jasa", "penyempitan defisit TB".
+# The same, noun first: "peningkatan defisit neraca jasa", "penyempitan defisit TB", and the
+# verb made a noun with -nya: PII Tw IV-2025 "meningkatnya kewajiban neto investasi langsung
+# sebesar 21,5" (−182,4 → −203,9).
 _DEFICIT_TREND_NOUN_FIRST = re.compile(
-    r"\b(?P<verb>peningkatan|kenaikan|pelebaran|penambahan|penurunan|penyempitan|pengurangan)\s+"
+    r"\b(?P<verb>peningkatan|kenaikan|pelebaran|penambahan|penurunan|penyempitan|pengurangan"
+    r"|(?:meningkat|naik|melebar|membesar|bertambah|menurun|turun|menyempit|mengecil|berkurang)nya)\s+"
     + _DEFICIT_NOUNS + r"\b",
     re.IGNORECASE,
 )
@@ -1624,7 +1627,10 @@ _DEFICIT_CLAIM_NAME = re.compile(
 # exactly where the extractor took the level for the direction.
 _SAID_UP = re.compile(
     r"\b(lebih\s+tinggi|meningkat|peningkatan|naik|kenaikan|membaik|perbaikan|terakselerasi|"
-    r"akselerasi|menguat|penguatan)\b", re.IGNORECASE)
+    # "penurunan penjualan Kelompok Barang Lainnya di tengah pertumbuhan penjualan Kelompok
+    # Peralatan …" (SPE Juli 2026) words both ways; read as "turun" alone, the growing groups
+    # were refuted. Not "tumbuh": SBank's "tetap tumbuh" is a level (TableData.level_phrases).
+    r"akselerasi|menguat|penguatan|pertumbuhan)\b", re.IGNORECASE)
 _SAID_DOWN = re.compile(
     r"\b(lebih\s+rendah|menurun|penurunan|turun|melambat|perlambatan|memburuk|melemah|pelemahan)\b",
     re.IGNORECASE)
@@ -1790,12 +1796,15 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
     # ("SBT meningkat" in a Tw II 2026 report) and leave the QoQ baseline implicit. Pull
     # the metric's immediately-preceding period from the table itself so the claim is
     # checkable without relying on the LLM to guess the earlier period.
+    baseline_guessed = False
     if len(labelled) == 1:
         p0 = used_periods[0]
         if p0.col_label is None and p0.year is not None and p0.month is not None:
-            prev = (_stated_baseline(fact.context_quote or "", src.table, labelled[0][0],
-                                     p0.year, p0.month, fact.operation)
-                    or _previous_period(src.table, labelled[0][0], p0.year, p0.month))
+            prev = _stated_baseline(fact.context_quote or "", src.table, labelled[0][0],
+                                    p0.year, p0.month, fact.operation)
+            if prev is None:
+                prev = _previous_period(src.table, labelled[0][0], p0.year, p0.month)
+                baseline_guessed = prev is not None
             if prev is not None:
                 (py, pm), pv = prev
                 labelled = [(labelled[0][0], pv), labelled[0]]
@@ -1931,6 +1940,19 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             ),
         )
 
+    if not ok and baseline_guessed and not (size_note or band_note) and operation in ("is_increasing", "is_decreasing"):
+        other = _year_on_year_reading(src.table, labelled[-1][0], used_periods[-1], values[-1], operation, quote)
+        if other:
+            return _make_result(
+                fact, periods, matched_source, None, None, None, src.table.unit, None, "Inconclusive",
+                reason_code="klaim_tidak_lengkap",
+                reasoning=(
+                    f"Kalimat tidak menyebut pembandingnya: dibanding {used_periods[0].month} "
+                    f"{used_periods[0].year} '{labelled[-1][0]}' {round(values[0], 4)} → {round(values[-1], 4)} "
+                    f"tidak sesuai, tetapi {other} sesuai; perlu dicek pembanding yang dimaksud."
+                ),
+            )
+
     verdict = "Entailed" if ok else "Refuted"
     breakdown = ", ".join(f"{p.month} {p.year}={round(v, 4)}" for p, (_, v) in zip(used_periods, labelled))
     return _make_result(
@@ -1941,6 +1963,30 @@ def _compute_trend(fact: ExtractedFact, resolved: List[Tuple[str, float]], src: 
             f"{'sesuai' if ok else 'tidak sesuai'} dengan klaim"
         ),
     )
+
+
+# Words that say what a trend compares with. Without any, "IPR diprakirakan meningkat" may mean the
+# month before or the same month a year before.
+_TREND_BASIS = re.compile(
+    r"\b(dibandingkan|dibanding|sebelumnya|lalu|secara\s+(?:bulanan|tahunan|triwulanan)"
+    r"|mtm|yoy|qtq|ytd|bulanan|tahunan|triwulanan)\b", re.IGNORECASE)
+
+
+def _year_on_year_reading(table, label: str, point: PeriodPoint, value: float, operation: str,
+                          quote: str) -> Optional[str]:
+    """"dibanding <same month a year before> …" when that reading of an unbased trend holds.
+
+    SPE Juni 2026: "Pada Juli 2026, IPR diprakirakan meningkat." was checked against June (225,0 →
+    224,4) and refuted, while the release reads it year on year (Juli 2025 222,3 → 224,4) and the
+    next sentence says "secara tahunan". A sentence that names no basis is not refuted when the
+    other natural reading holds; None when it names one, or neither reading holds."""
+    if _TREND_BASIS.search(quote) or point.year is None or not point.month:
+        return None
+    _, before = table.lookup_fuzzy(label, point.year - 1, point.month)
+    if before is None:
+        return None
+    holds = value > before if operation == "is_increasing" else value < before
+    return f"dibanding {point.month} {point.year - 1} ({round(before, 4)} → {round(value, 4)})" if holds else None
 
 
 # "naik dari 0,5 miliar dolar AS menjadi 0,7 miliar dolar AS": a trend that prints both ends.
@@ -2196,6 +2242,18 @@ _NEGATIVE_BALANCE_WORDS = re.compile(
 )
 
 
+def _fall_before_rate(fact: ExtractedFact) -> Optional[re.Match]:
+    """"turun 4,1%": a fall word right before the claimed number, printed as a rate. SPE Juni 2026
+    "lebih baik dibandingkan Juli 2025 yang turun 4,1% (mtm)" came back +4,1 against the −4,1 of
+    Tabel 3 and was refuted. Only a rate: "turun 4,1 poin" or "turun sebesar 4,1 triliun" is a
+    change, not a negative level."""
+    text = f"{abs(fact.claimed_value):.4f}".rstrip("0").rstrip(".")
+    whole, _, frac = text.partition(".")
+    number = re.escape(whole) + (r"\s*,\s*" + re.escape(frac) if frac else "")
+    return re.search(r"\b(?:menurun|turun|terkoreksi)\s+(?:sebesar\s+)?" + number + r"\s*%",
+                     fact.context_quote or "", re.IGNORECASE)
+
+
 # BPM6 tables (NPI) store the debit side negative: 'Impor', 'Pembayaran'. A report prints
 # "impor minyak … sebesar 11,6 miliar dolar AS" and "impor gas … meningkat" about their size.
 _DEBIT_ROW = re.compile(r"^(impor|pembayaran|debit)\b", re.IGNORECASE)
@@ -2225,7 +2283,7 @@ def _reinterpret_signed_level(
     """
     if fact.claimed_value is None or computed >= 0 or fact.claimed_value <= 0:
         return None
-    word = _NEGATIVE_BALANCE_WORDS.search(fact.context_quote or "")
+    word = _NEGATIVE_BALANCE_WORDS.search(fact.context_quote or "") or _fall_before_rate(fact)
     if word is None and all(_is_debit_row(label) for label, _ in resolved):
         word = re.search(r".+", resolved[0][0].split(QUAL_SEP.strip())[-1].strip())
     if word is None:
@@ -2475,9 +2533,25 @@ def _compute_operation(
         )
 
     if op == "diff":
+        diff_points = list(fact.periods)
+        if len(resolved) == 1:
+            # "Pada akhir triwulan IV 2025, kewajiban neto PII naik sebesar 10,8" arrives with Q4
+            # alone, and Q4 − Q4 refuted it. A change stated for one period runs from the one before.
+            p0 = diff_points[0]
+            prev = (_previous_period(src.table, resolved[0][0], p0.year, p0.month)
+                    if p0.col_label is None and p0.year is not None and p0.month else None)
+            if prev is None:
+                return _make_result(
+                    fact, [], matched_source, fact.claimed_value, fact.unit, None, fact.unit, None,
+                    "Inconclusive", reason_code="periode",
+                    reasoning=(f"Klaim perubahan hanya menyebut satu periode dan tabel tidak punya periode "
+                               f"sebelumnya untuk '{resolved[0][0]}' sebagai pembanding."))
+            (py, pm), pv = prev
+            resolved = [(resolved[0][0], pv), resolved[0]]
+            diff_points = [PeriodPoint(metric_label=resolved[0][0], year=py, month=pm), p0]
         converted = [raw / factor for (_, raw) in resolved]
         computed = round(converted[-1] - converted[0], 4)
-        periods = _build_periods(fact.periods, resolved, converted)
+        periods = _build_periods(diff_points, resolved, converted)
         # "defisit 0,9 … dibandingkan … 9,1" read as a change of 8,2 that the sentence never
         # prints: both ends are rounded, so the change carries both roundings (8,26 here).
         diff_tolerance = (MATCH_TOLERANCE if _printed_in(fact.claimed_value, fact.context_quote)
@@ -2590,7 +2664,43 @@ def _quote_names_qualifier(metric_label: str, quote: str) -> bool:
     leaf_words = _sig_words(metric_label.rsplit(QUAL_SEP, 1)[1])
     if bool(leaf_words) and leaf_words <= _sig_words(quote):
         return True
-    return _quote_bounds_group(metric_label.rsplit(QUAL_SEP, 1)[1], quote)
+    if _quote_bounds_group(metric_label.rsplit(QUAL_SEP, 1)[1], quote):
+        return True
+    # City tables put the group first ('2. Bandung > Indeks Ekspektasi Konsumen (IEK)'): SK Juli
+    # 2026 "penurunan indeks pada sejumlah kota, terutama di Bandung, Pontianak, dan Samarinda"
+    # names its cities, and was left Tidak Cukup Data as an unnamed subset. A first level counts
+    # only when it is a name, not the series ('Indeks …', 'Saldo Bersih …').
+    words, figures = _label_tokens(metric_label.split(QUAL_SEP, 1)[0])
+    return (bool(words) and not figures and not words & _SERIES_WORDS
+            and words <= _label_tokens(quote)[0])
+
+
+# Words of a series' own name, never of a group's: see _quote_names_qualifier.
+_SERIES_WORDS = frozenset({"indeks", "index", "saldo", "bersih", "total", "jumlah", "nilai"})
+
+# A group noun and the words after it: "Kelompok Makanan, Minuman, dan Tembakau", "Subkelompok
+# Sandang", "kota Medan".
+_MEMBER_AFTER_NOUN_RE = re.compile(
+    r"\b(?:sub)?(?:kelompok|kota|daerah|wilayah|provinsi)\s+((?:\S+\s*){1,6})", re.IGNORECASE)
+
+
+def _member_named(metric_label: str, quote: str) -> bool:
+    """True when a flat breakdown row (no qualifier) is named as a member in the sentence: its
+    words follow a group noun. SPE Juni 2026: "kelompok lainnya mencatatkan perbaikan …, yaitu
+    pada Kelompok Makanan, Minuman, dan Tembakau (…) serta Subkelompok Sandang" lists the members
+    of its "lainnya", and both were refused as an unnamed subset."""
+    if not metric_label or QUAL_SEP in metric_label:
+        return False
+    words = _label_tokens(re.sub(r"^o/w\s+", "", metric_label, flags=re.IGNORECASE))[0]
+    if not words:
+        return False
+    for m in _MEMBER_AFTER_NOUN_RE.finditer(quote):
+        # The name starts right after the noun: "… serta Kelompok Dari sisi harga, tekanan inflasi"
+        # (two sentences run together) does not name 'tekanan inflasi' as a group.
+        after = re.findall(r"[a-z0-9]+", m.group(1).lower())
+        if after and after[0] in words and words <= _label_tokens(m.group(1))[0]:
+            return True
+    return False
 
 
 def _id_number(text: str) -> float:
@@ -3005,7 +3115,30 @@ def _attach_group_exclusions(facts: List[ExtractedFact]) -> None:
             ):
                 continue
             excluded.extend(p.metric_label for p in other.periods)
+        if fact.group_scope == "rest" and not excluded:
+            excluded = _named_in_previous_sentence(fact, facts)
         fact.group_exclude = list(dict.fromkeys(excluded))
+
+
+def _named_in_previous_sentence(fact: ExtractedFact, facts: List[ExtractedFact]) -> List[str]:
+    """The rows the sentence before a "lainnya" names, when its own names none.
+
+    SK Juli 2026: "Penurunan indeks terjadi pada kelompok pengeluaran Rp2,1-3 juta dan Rp3,1-4
+    juta … Sementara itu, kelompok lainnya mengalami peningkatan indeks." — the rest fact was
+    judged on all five groups, the two that fell among them, and refuted. Facts come in document
+    order, so the sentence before is the last other quote ahead of this one's first fact."""
+    quote = _normalize_quote(fact.context_quote)
+    previous = None
+    for other in facts:
+        other_quote = _normalize_quote(other.context_quote)
+        if other_quote == quote:
+            break
+        previous = other_quote
+    if previous is None:
+        return []
+    return [p.metric_label for other in facts
+            if _normalize_quote(other.context_quote) == previous and not other.group_scope
+            for p in other.periods if QUAL_SEP in (p.metric_label or "")]
 
 
 def _normalize_quote(quote: Optional[str]) -> str:
@@ -3548,18 +3681,26 @@ def _quarter_end_position(fact: ExtractedFact, sources: List[_ExcelSource]) -> O
 
     NPI: "Posisi cadangan devisa pada akhir Juni 2026 … 5,4 bulan impor dan pembayaran ULN
     pemerintah" against a quarterly row (Q2 2026 = 5,41) was left Tidak Cukup Data. Only for a
-    sentence that says "akhir <bulan>" for a quarter-end month, and only when the matched row
-    has no monthly figures at all — a monthly table still answers with its own June.
+    sentence that says "akhir <bulan>" for a quarter-end month (or "akhir <tahun>" for December),
+    and only when the matched row has no monthly figures at all — a monthly table still answers
+    with its own June.
+
+    A table of positions (TableData.positions, PII) needs no such words: "Untuk keseluruhan tahun
+    2025, kewajiban neto PII naik 26,9 miliar dolar AS (11,0% yoy) dibandingkan akhir 2024" came
+    back Dec 2024 → Dec 2025, and every full-year claim of the Tw IV-2025 report was left
+    Tidak Cukup Data although the Q4 columns hold them.
     """
     quote = fact.context_quote or ""
     points = fact.periods
     if not points or any(p.col_label or p.month not in _QUARTER_OF_END_MONTH for p in points):
         return None
-    if not all(re.search(r"\bakhir\s+" + _MONTH_NAME_ID[p.month] + r"\b", quote, re.IGNORECASE)
-               for p in points):
-        return None
+    # One end named is enough: "naik 0,8 miliar dolar AS dari akhir tahun 2024" dates only the start.
+    said_end = any(re.search(r"\bakhir\s+(?:" + _MONTH_NAME_ID[p.month]
+                             + (r"|(?:tahun\s+)?" + str(p.year) if p.month == "Dec" else "")
+                             + r")\b", quote, re.IGNORECASE)
+                   for p in points)
     for src in sources:
-        if src.table.axis_type != "temporal":
+        if src.table.axis_type != "temporal" or not (said_end or src.table.positions):
             continue
         periods = [src.table.available_periods(p.metric_label) for p in points]
         if all(ps and all(m.startswith("Q") for _, m in ps) for ps in periods):
@@ -3617,6 +3758,57 @@ def _quarter_as_end_month(fact: ExtractedFact, sources: List[_ExcelSource]) -> O
     return out
 
 
+# "kontraksi pertumbuhan ULN swasta yang lebih rendah": a negative growth rate that got smaller
+# (eased) or bigger (deepened) — about the rate, not the level.
+_CONTRACTION_OF_GROWTH = re.compile(
+    r"\bkontraksi\s+(?P<span>(?:pertumbuhan\s+)?(?:\S+\s+){0,4}?)(?:yang\s+)?"
+    r"(?P<how>lebih\s+(?:rendah|kecil|terbatas|dalam|besar|tinggi)|semakin\s+dalam|mereda|tertahan)\b",
+    re.IGNORECASE)
+
+
+def _contraction_of_growth(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[FactVerificationResult]:
+    """A trend on a contraction of GROWTH, judged on the yoy rate at both ends.
+
+    SULNI Agustus 2026: "peningkatan ULN publik … di tengah kontraksi pertumbuhan ULN swasta yang
+    lebih rendah" came back is_decreasing on the private debt level (192,5 → 194,6 thousand juta)
+    and was refuted. The sentence says the yoy rate is still negative but smaller: −1,35% in Q1,
+    −0,57% in Q2. Only when the contraction names the claim's own row and the claim has both ends.
+    """
+    match = _CONTRACTION_OF_GROWTH.search(fact.context_quote or "")
+    if match is None or len(fact.periods) != 2 or any(p.col_label or p.year is None for p in fact.periods):
+        return None
+    leaf = fact.periods[-1].metric_label.rsplit(QUAL_SEP, 1)[-1]
+    if not _sig_words(leaf) & _sig_words(match.group("span")):
+        return None
+    deepened = re.search(r"dalam|besar|tinggi", match.group("how"), re.IGNORECASE) is not None
+    for src in sources:
+        if src.table.axis_type != "temporal":
+            continue
+        rates, labels = [], []
+        for p in fact.periods:
+            label, now = src.table.lookup_fuzzy(p.metric_label, p.year, p.month)
+            _, before = src.table.lookup_fuzzy(p.metric_label, p.year - 1, p.month)
+            if now is None or not before:
+                break
+            rates.append(round((now / before - 1) * 100, 2))
+            labels.append(label)
+        if len(rates) != 2:
+            continue
+        holds = rates[-1] < 0 and (abs(rates[-1]) > abs(rates[0]) if deepened else abs(rates[-1]) < abs(rates[0]))
+        periods = [PeriodResult(metric_label=labels[i], year=p.year, month=p.month, col_label=None,
+                                excel_value=rates[i]) for i, p in enumerate(fact.periods)]
+        return _make_result(
+            fact, periods, src.label, None, None, rates[-1], "persen_yoy", None,
+            "Entailed" if holds else "Refuted",
+            reasoning=(
+                f"Kalimat menyebut kontraksi pertumbuhan '{leaf}' yang {match.group('how').lower()}: "
+                f"dinilai pada pertumbuhan yoy, bukan level | Excel [{src.label}]: "
+                f"{_point_desc(fact.periods[0])} {rates[0]}% → {_point_desc(fact.periods[-1])} {rates[-1]}% (yoy)"
+            ),
+        )
+    return None
+
+
 def _only_quarterly_reason(missing: List[PeriodPoint], sources: List[_ExcelSource]) -> Optional[str]:
     """Why a MONTHLY point found nothing, when a source holds that series only per quarter (B5).
 
@@ -3672,6 +3864,11 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
         if combined is not None:
             return combined
 
+    if fact.operation in _TREND_OPS:
+        eased = _contraction_of_growth(fact, sources)
+        if eased is not None:
+            return eased
+
     # A quantified group claim ("seluruh", "sebagian besar", "lainnya") the extractor marked as
     # such is judged on every group of its breakdown — see _judge_group_scope.
     fact = _net_position_threshold(fact, sources) or _majority_the_sentence_states(fact) or fact
@@ -3687,7 +3884,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     if fact.operation in _TREND_OPS | _THRESHOLD_OPS:
         quote = fact.context_quote or ""
         if _SUBSET_PHRASE_RE.search(_without_own_names(quote, fact)) and not any(
-            _quote_names_qualifier(p.metric_label, quote) for p in fact.periods
+            _quote_names_qualifier(p.metric_label, quote) or _member_named(p.metric_label, quote)
+            for p in fact.periods
         ) and not _all_net_rows(fact, sources):
             return _make_result(
                 fact, [], None, None, None, None, None, None, "Inconclusive", reason_code="klaim_tidak_lengkap",

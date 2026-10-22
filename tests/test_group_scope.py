@@ -207,6 +207,23 @@ def test_rest_excludes_the_groups_its_sentence_names():
                           [_source(rows)]).verdict == "Entailed"
 
 
+def test_rest_excludes_the_groups_the_sentence_before_names():
+    """SK Juli 2026: "Penurunan indeks terjadi pada kelompok … Rp2,1-3 juta dan Rp3,1-4 juta …
+    Sementara itu, kelompok lainnya mengalami peningkatan indeks." The named groups sit in the
+    sentence before, so the rest fact's own sentence excluded nothing and the two that fell
+    refuted it."""
+    rows = {b: (100.0, 104.0) for b in BRANCHES}
+    rows["Cabang Utara"] = rows["Cabang Selatan"] = (100.0, 97.0)
+    before = "Penurunan penjualan terjadi di Cabang Utara dan Cabang Selatan."
+    rest = _fact("is_increasing", BRANCHES, "rest", "Sementara itu, cabang lainnya mengalami peningkatan.")
+    facts = [_fact("is_decreasing", BRANCHES[:2], None, before), rest]
+
+    _attach_group_exclusions(facts)
+
+    assert rest.group_exclude == [f"Penjualan{SEP}{b}" for b in BRANCHES[:2]]
+    assert _evaluate_fact(rest, [_source(rows)]).verdict == "Entailed"
+
+
 # --- groups the extractor bundled or quantified although the sentence names them -------------
 
 def test_named_sibling_groups_bundled_into_one_trend_are_judged_per_group():

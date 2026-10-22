@@ -34,6 +34,14 @@ EXPECTATION_ALIASES = {
     "tekanan inflasi": "Ekspektasi Harga Umum",
 }
 
+# The report's names for the whole index in Tabel 1-4, whole claims only (TableData.label_aliases):
+# SPE Juni 2026 "Pada Juni 2026, IPR tercatat sebesar 225,0" found no row 'IPR'. Not as a term
+# alias: "penjualan eceran Kelompok Sandang" is a group, not the total.
+TOTAL_ALIASES = {name: "INDEKS TOTAL" for name in (
+    "ipr", "indeks penjualan riil", "indeks penjualan riil (ipr)", "ipr penjualan eceran",
+    "penjualan eceran", "kinerja penjualan eceran", "kinerja penjualan", "penjualan",
+)}
+
 # The report's names for the city rows of Tabel 5-8.
 CITY_ALIASES = {"semarang (termasuk purwokerto)": "Semarang"}
 
@@ -49,6 +57,8 @@ def parse(data: bytes, sheet_name: str) -> TableData:
         table.measure_levels = frozenset(
             label.split(QUAL_SEP, 1)[1].strip().lower() for label in table.row_labels
             if QUAL_SEP in label and re.search(r"\d+\s*bulan", label))
+    elif re.match(r"Tabel [1-4]\b", sheet_name.strip()) and "INDEKS TOTAL" in table.row_labels:
+        table.label_aliases = dict(TOTAL_ALIASES)
     elif re.match(r"Tabel [5-8]\b", sheet_name.strip()) and "Semarang" in table.row_labels:
         table.term_aliases = dict(CITY_ALIASES)
     return table

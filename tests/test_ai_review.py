@@ -479,13 +479,13 @@ def _spe_review(quote=_SPE_QUOTE):
 def test_second_look_accepts_the_sign_the_sentence_states(monkeypatch):
     # SPE Juni 2026: the review cited Juli 2025's -4,1 and said sesuai; the engine, rebuilding the
     # claim as +4,1, could not reproduce it and the false Tidak Sesuai stood.
+    # The engine itself now reads "turun 4,1%" as −4,1 (paired_verifier._fall_before_rate), so the
+    # cited cell is accepted with or without the second look.
     codes = {"S1": _source(_SPE)}
-    monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", "")
-    assert judge_review(_spe_claim(), _spe_review(), codes)[1] == "unchanged"
-
-    monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", "1")
-    final, outcome = judge_review(_spe_claim(), _spe_review(), codes)
-    assert outcome == "to_entailed" and final.verdict == "Entailed"
+    for flag in ("", "1"):
+        monkeypatch.setenv("AI_REVIEW_SECOND_LOOK", flag)
+        final, outcome = judge_review(_spe_claim(), _spe_review(), codes)
+        assert outcome == "to_entailed" and final.verdict == "Entailed"
 
 
 def test_second_look_leaves_the_sign_alone_when_the_sentence_says_a_rise(monkeypatch):

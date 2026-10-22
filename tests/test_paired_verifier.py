@@ -1957,6 +1957,63 @@ def test_trend_naming_its_member_is_still_verified_from_the_same_sentence():
     assert result.verdict == "Entailed"
 
 
+def test_a_city_named_first_in_its_row_is_named_by_the_sentence():
+    # SK Juli 2026 s026: the city tables put the city first, and the guard looked only at the
+    # last level ('IEK', not spelled out in full) — Bandung was left Tidak Cukup Data.
+    label = "2. Bandung > Indeks Ekspektasi Konsumen (IEK)"
+    source = _make_source(_make_table(title="Indeks per Kota", unit="", data={
+        (label, 2026, "Jun"): 128.2, (label, 2026, "Jul"): 115.4}))
+    fact = _make_fact(
+        operation="is_decreasing", claimed_value=None, unit=None,
+        context_quote=("Namun, penurunan indeks pada sejumlah kota, terutama di Bandung, Pontianak, "
+                       "dan Samarinda menyebabkan IEK lebih rendah dibandingkan dengan bulan sebelumnya."),
+        periods=[_make_period(metric_label=label, year=2026, month="Jun"),
+                 _make_period(metric_label=label, year=2026, month="Jul")],
+    )
+
+    assert _evaluate_fact(fact, [source]).verdict == "Entailed"
+    # A city the sentence does not name stays a stand-in.
+    jakarta = "1. Jakarta > Indeks Ekspektasi Konsumen (IEK)"
+    from paired_verifier import _quote_names_qualifier
+    assert not _quote_names_qualifier(jakarta, fact.context_quote)
+
+
+def test_a_member_named_after_its_group_noun_is_not_an_unnamed_subset():
+    # SPE Juni 2026 s014: "kelompok lainnya …, yaitu pada Kelompok Makanan, Minuman, dan Tembakau"
+    # lists the members of its "lainnya".
+    row = "Makanan, Minuman, & Tembakau"
+    source = _make_source(_make_table(title="Pertumbuhan Tahunan", unit="", data={(row, 2026, "Jun"): -3.6}))
+    fact = _make_fact(
+        operation="below_threshold", claimed_value=0.0, unit=None,
+        context_quote=("Sementara itu, kelompok lainnya mencatatkan perbaikan meski masih berada dalam fase "
+                       "kontraksi, yaitu pada Kelompok Makanan, Minuman, dan Tembakau (indeks 318,4; "
+                       "terkontraksi 3,6% (yoy)) serta Subkelompok Sandang."),
+        periods=[_make_period(metric_label=row, year=2026, month="Jun")],
+    )
+
+    assert _evaluate_fact(fact, [source]).verdict == "Entailed"
+    # Two sentences run together: "… serta Kelompok Dari sisi harga, tekanan inflasi …" names no
+    # group 'tekanan inflasi'.
+    from paired_verifier import _member_named
+    assert not _member_named("tekanan inflasi", "serta Kelompok Dari sisi harga, tekanan inflasi menurun")
+
+
+def test_growth_of_some_groups_beside_the_fall_of_another_keeps_the_extractors_direction():
+    # SPE Juli 2026: "penurunan penjualan Kelompok Barang Lainnya di tengah pertumbuhan penjualan
+    # Kelompok Peralatan Informasi dan Komunikasi" was read as "turun" for the growing group.
+    row = "Peralatan Informasi dan Komunikasi"
+    source = _make_source(_make_table(title="Tabel 1. IPR", unit="Indeks",
+                                      data={(row, 2026, "Jul"): 68.4, (row, 2026, "Aug"): 70.1}))
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        context_quote=("Perkembangan tersebut dipengaruhi terutama oleh penurunan penjualan Kelompok Barang "
+                       "Lainnya di tengah pertumbuhan penjualan Kelompok Peralatan Informasi dan Komunikasi."),
+        periods=[_make_period(metric_label=row, month="Jul"), _make_period(metric_label=row, month="Aug")],
+    )
+
+    assert _evaluate_fact(fact, [source]).verdict == "Entailed"
+
+
 def _ipdg_source():
     return _make_source(_make_table(title="Indeks per Kelompok Pengeluaran", unit="", data={
         ("Indeks Pembelian Barang Tahan Lama (IPDG) > Pengeluaran Rp2,1 - 3 juta", 2026, "Jun"): 99.0,
@@ -2150,6 +2207,64 @@ def test_the_yoy_rate_in_the_same_sentence_still_reads_the_yoy_table():
 
     assert result.verdict == "Entailed"
     assert result.matched_excel_source == "TABEL1_1.xls / Tabel 2"
+
+
+def test_a_contraction_of_growth_that_eased_is_judged_on_the_yoy_rate():
+    # SULNI Agustus 2026 s002: the private debt level ROSE (192,5 -> 194,6 ribu juta), but the
+    # sentence is about its yoy rate: −1,35% in Q1, −0,57% in Q2.
+    table = _make_table(title="Posisi ULN", unit="Juta USD", data={
+        ("Swasta", 2025, "Mar"): 195160.0, ("Swasta", 2026, "Mar"): 192525.57,
+        ("Swasta", 2025, "Jun"): 195733.6, ("Swasta", 2026, "Jun"): 194616.52})
+    quote = ("Perkembangan tersebut disebabkan oleh peningkatan ULN publik, baik pemerintah maupun bank "
+             "sentral, di tengah kontraksi pertumbuhan ULN swasta yang lebih rendah.")
+    fact = _make_fact(operation="is_decreasing", claimed_value=None, unit=None, context_quote=quote,
+                      periods=[_make_period(metric_label="Swasta", month="Mar"),
+                               _make_period(metric_label="Swasta", month="Jun")])
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert result.computed_value == pytest.approx(-0.57)
+    # The public debt of the same sentence is not the contracting row: its own trend stands.
+    from paired_verifier import _contraction_of_growth
+    public = _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                        periods=[_make_period(metric_label="Publik", month="Mar"),
+                                 _make_period(metric_label="Publik", month="Jun")])
+    assert _contraction_of_growth(public, [_make_source(table)]) is None
+
+
+def test_a_trend_without_a_basis_is_not_refuted_when_the_yearly_reading_holds():
+    # SPE Juni 2026 s018: "Pada Juli 2026, IPR diprakirakan meningkat." Jun 225,0 -> Jul 224,4 (down
+    # month on month), Jul 2025 222,3 -> 224,4 (up year on year, the release's reading).
+    table = _make_table(title="Tabel 1. IPR", unit="Indeks", data={
+        ("INDEKS TOTAL", 2025, "Jul"): 222.3, ("INDEKS TOTAL", 2026, "Jun"): 225.0,
+        ("INDEKS TOTAL", 2026, "Jul"): 224.4})
+
+    def trend(quote):
+        return _make_fact(operation="is_increasing", claimed_value=None, unit=None, context_quote=quote,
+                          periods=[_make_period(metric_label="INDEKS TOTAL", month="Jul")])
+
+    unbased = _evaluate_fact(trend("Pada Juli 2026, IPR diprakirakan meningkat."), [_make_source(table)])
+    assert unbased.verdict == "Inconclusive"
+    assert "Jul 2025" in unbased.reasoning
+    # A sentence that names its basis is judged on it.
+    based = _evaluate_fact(trend("IPR Juli 2026 meningkat dibandingkan bulan sebelumnya."), [_make_source(table)])
+    assert based.verdict == "Refuted"
+
+
+def test_a_rate_said_to_fall_matches_the_negative_cell():
+    # SPE Juni 2026 s008: "lebih baik dibandingkan Juli 2025 yang turun 4,1% (mtm)", Tabel 3 −4,1.
+    mtm = _make_source(_make_table(title="Tabel 3. Pertumbuhan Bulanan IPR (%, mtm)", unit="%, mtm",
+                                   data={("INDEKS TOTAL", 2025, "Jul"): -4.1}), sheet="Tabel 3")
+    quote = "Meski demikian, kinerja penjualan pada Juli 2026 tersebut lebih baik dibandingkan Juli 2025 yang turun 4,1% (mtm)."
+    fact = _make_fact(periods=[_make_period(metric_label="INDEKS TOTAL", year=2025, month="Jul")],
+                      claimed_value=4.1, unit="persen", context_quote=quote)
+
+    assert _evaluate_fact(fact, [mtm]).verdict == "Entailed"
+    # Without the fall word next to the number, a positive claim still differs from −4,1.
+    plain = _make_fact(periods=[_make_period(metric_label="INDEKS TOTAL", year=2025, month="Jul")],
+                       claimed_value=4.1, unit="persen", context_quote="Penjualan Juli 2025 tumbuh 4,1% (mtm).")
+    assert _evaluate_fact(plain, [mtm]).verdict == "Refuted"
 
 
 def test_yoy_claim_against_a_levels_table_still_computes_growth():
@@ -3093,6 +3208,38 @@ def test_a_change_in_net_liabilities_is_measured_on_their_size():
     assert result.verdict == "Entailed"
 
 
+def test_a_change_stated_for_one_period_runs_from_the_period_before():
+    # PII Tw IV-2025 s063: "Pada akhir triwulan IV 2025, kewajiban neto PII naik sebesar 10,8" came
+    # with Q4 alone; Q4 − Q4 = 0 refuted it. Q3 −261,80 -> Q4 −272,63: net liabilities +10,8.
+    label = "Posisi Investasi Internasional, bersih"
+    table = _make_table(title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+                        data={(label, 2025, "Q3"): -261.8006, (label, 2025, "Q4"): -272.6251})
+    fact = _make_fact(
+        operation="diff", claimed_value=10.8, unit="miliar USD",
+        context_quote="Pada akhir triwulan IV 2025, kewajiban neto PII naik sebesar 10,8 miliar dolar AS.",
+        periods=[_make_period(metric_label=label, year=2025, month="Q4")],
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_rise_in_net_liabilities_said_with_nya_is_measured_on_their_size():
+    # PII Tw IV-2025 s031: "meningkatnya kewajiban neto investasi langsung sebesar 21,5" on
+    # −182,36 → −203,90 was refuted against the signed change (−21,54).
+    label = "Investasi Langsung (neto)"
+    table = _make_table(title="Posisi Investasi Internasional Indonesia", unit="miliar USD",
+                        data={(label, 2024, "Q4"): -182.3646, (label, 2025, "Q4"): -203.901})
+    fact = _make_fact(
+        operation="diff", claimed_value=21.5, unit="miliar USD",
+        context_quote=("Perkembangan ini terutama dikontribusikan oleh meningkatnya kewajiban neto investasi "
+                       "langsung sebesar 21,5 miliar dolar AS."),
+        periods=[_make_period(metric_label=label, year=2024, month="Q4"),
+                 _make_period(metric_label=label, year=2025, month="Q4")],
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
 def test_pointer_pass_does_not_point_a_net_figure_at_a_gross_cell():
     # PII e2e: "investasi portofolio mengalami kewajiban neto tertinggi sebesar 229,6" fell to the
     # pointer, which read the gross liability cell (273,1). The sheet has no net cell per
@@ -3552,6 +3699,38 @@ def test_a_position_at_the_end_of_june_is_read_from_the_second_quarter():
     assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
 
 
+def test_the_end_of_a_year_is_read_from_the_fourth_quarter():
+    table = _npi_table({("Cadangan Devisa", 2024, "Q4"): 155719.4, ("Cadangan Devisa", 2025, "Q4"): 156471.0})
+    fact = _make_fact(
+        operation="diff",
+        periods=[_make_period(metric_label="Cadangan Devisa", year=2024, month="Dec"),
+                 _make_period(metric_label="Cadangan Devisa", year=2025, month="Dec")],
+        claimed_value=0.8, unit="miliar dolar AS",
+        context_quote="Posisi cadangan devisa naik 0,8 miliar dolar AS dari akhir tahun 2024.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_table_of_positions_reads_any_december_from_the_fourth_quarter():
+    # PII Tw IV-2025 s030: "Untuk keseluruhan tahun 2025, kewajiban neto PII Indonesia naik 26,9
+    # miliar dolar AS (11,0% yoy) dibandingkan akhir 2024" came back Dec 2024 -> Dec 2025 and was
+    # left Tidak Cukup Data: the sheet is quarterly. A position at December is the Q4 one.
+    cells = {("Investasi Lainnya (neto)", 2024, "Q4"): 22059.78, ("Investasi Lainnya (neto)", 2025, "Q4"): 28055.22}
+    fact = _make_fact(
+        operation="yoy_growth",
+        periods=[_make_period(metric_label="Investasi Lainnya (neto)", year=2025, month="Dec")],
+        claimed_value=27.2, unit="persen",
+        context_quote="Perkembangan ini didorong oleh aset neto investasi lainnya yang naik 27,2% (yoy).",
+    )
+    positions = _npi_table(cells)
+    positions.positions = True
+
+    assert _evaluate_fact(fact, [_make_source(positions)]).verdict == "Entailed"
+    # A table of flows: its December is not its fourth quarter, and the sentence says no "akhir".
+    assert _evaluate_fact(fact, [_make_source(_npi_table(cells))]).verdict == "Inconclusive"
+
+
 def test_net_purchases_abroad_printed_positive_match_the_negative_asset_row():
     table = _npi_table({("Investasi Portofolio > Aset", 2026, "Q2"): -1487.61})
     fact = _make_fact(
@@ -3928,8 +4107,13 @@ def test_a_trend_whose_sentence_names_no_baseline_still_uses_the_previous_quarte
 
     result = _one_quarter_trend("Giro", "Giro diprakirakan meningkat pada triwulan III 2026.", table)
 
-    assert result.verdict == "Refuted"
-    assert "Q2 2026=80.36" in result.reasoning
+    # Down from Q2 (80,36), up from Q3 2025 (50,82): with no basis named, not refuted — both
+    # readings are shown for the reader to settle.
+    assert result.verdict == "Inconclusive"
+    assert "Q2 2026" in result.reasoning and "80.36" in result.reasoning and "Q3 2025" in result.reasoning
+    falls_both_ways = _sbank_deposits(Giro={(2025, "Q3"): 90.0, (2026, "Q2"): 80.36, (2026, "Q3"): 76.38})
+    assert _one_quarter_trend("Giro", "Giro diprakirakan meningkat pada triwulan III 2026.",
+                              falls_both_ways).verdict == "Refuted"
 
 
 def test_layout_levels_of_a_row_are_not_a_group_the_claim_left_out():

@@ -352,6 +352,11 @@ class TableData:
     # not crude oil alone. Set by the publication parser; a claim whose own name is one of them,
     # answered here by a row that is not, is made Tidak Cukup Data (paired_verifier._absent_item_guard).
     absent_items: Dict[str, str] = field(default_factory=dict, repr=False)
+    # Every row is a position at the end of its period (PII), so a quarter's figure is the one at
+    # its last month: "akhir 2024" or a December the extractor gave is the Q4 column. Never for a
+    # table of flows, whose December is not its quarter. Set by the publication parser; used by
+    # paired_verifier._quarter_end_position.
+    positions: bool = False
     # Words in a sentence that pick one child of the matched row, as {regex: child's own name}:
     # NPI's "pasar surat utang" means the 'Surat utang' child of the private-sector portfolio
     # liabilities, not the row itself (shares plus debt). Set by the publication parser; used by

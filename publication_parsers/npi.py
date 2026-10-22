@@ -29,6 +29,9 @@ SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 TERM_ALIASES = {
     "neraca perdagangan nonmigas": "Neraca perdagangan nonmigas (memorandum)",
     "wisatawan mancanegara": "Ke dalam negeri",
+    # Tw IV-2025 "penurunan jumlah kunjungan wisatawan mancanegara" kept 'kunjungan' and found nothing.
+    "jumlah kunjungan wisatawan mancanegara": "Ke dalam negeri",
+    "kunjungan wisatawan mancanegara": "Ke dalam negeri",
     "kunjungan wisman": "Ke dalam negeri",
     "wisman": "Ke dalam negeri",
     "wisatawan nasional": "Jumlah pelawat > Ke luar negeri",

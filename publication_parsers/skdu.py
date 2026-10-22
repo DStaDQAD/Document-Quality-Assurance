@@ -30,6 +30,11 @@ TERM_ALIASES_BY_SHEET = (
         "akses kredit": "Saldo Bersih (% Mudah - % Sulit)",
         "akses kredit perbankan": "Saldo Bersih (% Mudah - % Sulit)",
     }),
+    # Tw I-2026 spells the row out: "dengan akses kredit yang lebih mudah" found nothing.
+    (r"T3\b", {
+        "akses kredit": "Saldo Bersih (% Lebih Mudah - % Lebih Sulit)",
+        "akses kredit perbankan": "Saldo Bersih (% Lebih Mudah - % Lebih Sulit)",
+    }),
 )
 
 # "Kinerja sejumlah LU tercatat meningkat, antara lain LU Industri Pengolahan, …": the report's
