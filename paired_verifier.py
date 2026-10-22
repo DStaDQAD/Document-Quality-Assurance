@@ -3569,6 +3569,53 @@ def _quarter_end_position(fact: ExtractedFact, sources: List[_ExcelSource]) -> O
     return None
 
 
+_END_MONTH_OF_QUARTER = {quarter: month for month, quarter in _QUARTER_OF_END_MONTH.items()}
+# A quantity accumulated over the quarter, which its last month does not hold.
+_OVER_THE_QUARTER = re.compile(
+    r"\b(selama|sepanjang|rata-rata|rerata|kumulatif|total)\s+(?:\w+\s+){0,2}?triwulan\b", re.IGNORECASE)
+
+
+def _quarter_as_end_month(fact: ExtractedFact, sources: List[_ExcelSource]) -> Optional[ExtractedFact]:
+    """A position "pada triwulan II" read from tables that hold it only per month: June.
+
+    SULNI Agustus 2026, a quarterly release: "Posisi ULN Indonesia pada triwulan II 2026 tercatat
+    sebesar 453,4 miliar dolar AS" against monthly tables came back Q2 2026, which no sheet has, and
+    every claim of the release was left Tidak Cukup Data. A position at a quarter is the position at
+    its last month. Only when no source has the quarter for the metric (a quarterly table answers
+    the quarter itself), the metric's row is monthly, and the sentence does not speak of a total or
+    an average over the quarter ("selama triwulan II"), which the last month does not hold.
+    """
+    points = fact.periods
+    if (not points or fact.operation in ("sum", "average")
+            or not any(p.col_label is None and p.month in _END_MONTH_OF_QUARTER for p in points)
+            or _OVER_THE_QUARTER.search(fact.context_quote or "")):
+        return None
+    temporal = [src for src in sources if src.table.axis_type == "temporal"]
+    moved = []
+    for p in points:
+        if p.col_label is not None or p.month not in _END_MONTH_OF_QUARTER:
+            moved.append(p)
+            continue
+        if any(src.table.lookup_fuzzy(p.metric_label, p.year, p.month)[1] is not None for src in temporal):
+            return None
+        month = _END_MONTH_OF_QUARTER[p.month]
+        if not any(src.table.lookup_fuzzy(p.metric_label, p.year, month)[1] is not None for src in temporal):
+            return None
+        moved.append(PeriodPoint(p.metric_label, p.year, month))
+    # A one-quarter trend ("peningkatan ULN publik" in a triwulan II release) compares with the
+    # quarter before: its last month, not the month before June that _previous_period would pick.
+    if fact.operation in _TREND_OPS and len(points) == 1 and moved[0] is not points[0]:
+        quarter = int(points[0].month[1])
+        year, prior = (points[0].year, quarter - 1) if quarter > 1 else (points[0].year - 1, 4)
+        prior_month = _END_MONTH_OF_QUARTER[f"Q{prior}"]
+        if any(src.table.lookup_fuzzy(points[0].metric_label, year, prior_month)[1] is not None
+               for src in temporal):
+            moved.insert(0, PeriodPoint(points[0].metric_label, year, prior_month))
+    out = copy.copy(fact)
+    out.periods = moved
+    return out
+
+
 def _only_quarterly_reason(missing: List[PeriodPoint], sources: List[_ExcelSource]) -> Optional[str]:
     """Why a MONTHLY point found nothing, when a source holds that series only per quarter (B5).
 
@@ -3609,6 +3656,8 @@ def _evaluate_fact(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVeri
     fact = _semester_periods(fact, sources) or fact
     # "dengan SBT sebesar 0,07%" the extractor wrote as a yoy growth of 0,07%.
     fact = _balance_read_as_growth(fact) or fact
+    # "posisi ULN pada triwulan II 2026" against tables that hold it only per month: June.
+    fact = _quarter_as_end_month(fact, sources) or fact
 
     # A superlative ranks the named groups as well as giving their direction (B4).
     if fact.rank_group:

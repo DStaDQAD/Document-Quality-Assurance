@@ -4520,3 +4520,91 @@ def test_two_excel_sheets_sharing_a_row_name_are_not_a_source_conflict():
     assert result.verdict == "Entailed"
     assert result.source_conflict is None
     assert len(result.source_values or []) <= 1
+
+
+# SULNI Agustus 2026 is a quarterly release: "Posisi ULN Indonesia pada triwulan II 2026 tercatat
+# sebesar 453,4 miliar dolar AS" against monthly tables. A position at a quarter is the position at
+# its last month; with no Q2 column anywhere every claim came back Tidak Cukup Data.
+def _monthly_uln(rows):
+    return _make_table(title="Posisi Utang Luar Negeri Indonesia", unit="Juta USD", data=rows)
+
+
+def test_a_quarter_position_is_read_from_the_quarters_last_month():
+    table = _monthly_uln({("Total", 2026, "Apr"): 449100.0, ("Total", 2026, "May"): 451000.0,
+                          ("Total", 2026, "Jun"): 453412.0})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Total", month="Q2")], claimed_value=453.4,
+        unit="miliar dolar AS",
+        context_quote="Posisi ULN Indonesia pada triwulan II 2026 tercatat sebesar 453,4 miliar dolar AS.",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Entailed"
+    assert [(p.year, p.month) for p in result.periods] == [(2026, "Jun")]
+
+
+def test_a_quarter_growth_compares_the_last_months_a_year_apart():
+    table = _monthly_uln({("Pemerintah", 2025, "Jun"): 210200.0, ("Pemerintah", 2026, "Jun"): 216300.0})
+    fact = _make_fact(
+        operation="yoy_growth", periods=[_make_period(metric_label="Pemerintah", month="Q2")],
+        claimed_value=2.9, unit="persen_yoy",
+        context_quote="Posisi ULN pemerintah pada triwulan II 2026 tercatat sebesar 216,3 miliar dolar AS, atau tumbuh 2,9% (yoy).",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_quarter_trend_runs_from_one_quarter_end_to_the_next():
+    table = _monthly_uln({("Swasta", 2026, "Mar"): 196000.0, ("Swasta", 2026, "Jun"): 194600.0})
+    fact = _make_fact(
+        operation="is_decreasing", claimed_value=None, unit=None,
+        periods=[_make_period(metric_label="Swasta", month="Q1"), _make_period(metric_label="Swasta", month="Q2")],
+        context_quote="Posisi ULN swasta pada triwulan II 2026 menurun dibandingkan triwulan sebelumnya.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Entailed"
+
+
+def test_a_table_with_its_own_quarter_column_answers_the_quarter_itself():
+    # TabI.7 keeps the debt-to-GDP ratio per quarter; a monthly sheet with a same-named row must
+    # not answer in its place.
+    quarterly = _make_table(title="Rasio ULN", unit="persen", data={("Rasio Utang terhadap PDB", 2026, "Q2"): 30.63})
+    monthly = _make_table(title="Rasio ULN bulanan", unit="persen", data={("Rasio Utang terhadap PDB", 2026, "Jun"): 99.0})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Rasio Utang terhadap PDB", month="Q2")], claimed_value=30.6,
+        unit="persen", context_quote="Rasio ULN terhadap PDB pada triwulan II 2026 sebesar 30,6%.",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(monthly, sheet="M"), _make_source(quarterly, sheet="Q")])
+
+    assert result.verdict == "Entailed"
+    assert result.periods[0].month == "Q2"
+
+
+def test_a_flow_over_the_quarter_is_not_read_from_its_last_month():
+    # "selama triwulan II" sums April-June; June alone is not the answer.
+    table = _make_table(title="Penjualan", unit="miliar Rp",
+                        data={("Penjualan", 2026, "Jun"): 120.0, ("Penjualan", 2026, "May"): 110.0})
+    fact = _make_fact(
+        periods=[_make_period(metric_label="Penjualan", month="Q2")], claimed_value=120.0, unit="miliar Rp",
+        context_quote="Penjualan selama triwulan II 2026 tercatat sebesar Rp120,0 miliar.",
+    )
+
+    assert _evaluate_fact(fact, [_make_source(table)]).verdict == "Inconclusive"
+
+
+def test_a_one_quarter_trend_compares_with_the_previous_quarters_last_month():
+    # "peningkatan ULN publik" in a triwulan II release: against March, not May.
+    table = _monthly_uln({("Publik", 2026, "Mar"): 260000.0, ("Publik", 2026, "May"): 240000.0,
+                          ("Publik", 2026, "Jun"): 258752.0})
+    fact = _make_fact(
+        operation="is_increasing", claimed_value=None, unit=None,
+        periods=[_make_period(metric_label="Publik", month="Q2")],
+        context_quote="Perkembangan tersebut disebabkan oleh peningkatan ULN publik.",
+    )
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert [(p.year, p.month) for p in result.periods] == [(2026, "Mar"), (2026, "Jun")]
+    assert result.verdict == "Refuted"
