@@ -53,6 +53,19 @@ MIN_USEFUL_CHARS = 200
 # blank when deciding whether most of a document's pages need the vision fallback.
 MIN_PAGE_CHARS = 40
 
+# A page counts as carrying the narrative when its own sentences hold at least this many words.
+# Running headers, chart axis labels and table captions add characters to a page without a
+# sentence among them: SKDU Tw I-2026's 18 pages, NPI Tw IV-2025's 45 and PPKom Tw IV-2025's 21
+# passed MIN_PAGE_CHARS on most pages while every prose page was a picture, and each came back
+# with zero claims. Measured on every sample PDF: reports read well from their text layer have
+# 4 or more pages above 80 words (PPKom Tw I: 4 among 17 appendix tables), the picture reports
+# 0 or 1 (the back cover's methodology).
+MIN_PROSE_PAGE_WORDS = 80
+MIN_PROSE_PAGES = 2
+# Lines that are never prose: a caption ('Tabel 3 Pertumbuhan …', 'Grafik 5 …').
+_CAPTION_LINE_RE = re.compile(r"^\s*(tabel|grafik|gambar|lampiran|table|chart|figure)\s*\d", re.IGNORECASE)
+_PROSE_WORD_RE = re.compile(r"[A-Za-z]{2,}")
+
 # How many PDF pages to send per vision LLM call. Batching cuts the number of requests, which
 # is what matters when the provider throttles by requests-per-minute rather than by tokens:
 # Gemini's free tier caps gemini-2.5-flash at ~5 requests/minute, so 10 per-page calls need
@@ -707,6 +720,30 @@ async def extract_text_from_pdf_vision_async(
     return combined
 
 
+def _prose_pages(text: str) -> int:
+    """How many pages carry the narrative: at least MIN_PROSE_PAGE_WORDS words in lines of five
+    words or more, not counting captions or lines repeated on three pages or more (a running
+    header or footer). `text` has its table rows stripped already (_strip_tabular_content)."""
+    pages = [[line.strip() for line in body.split("\n") if line.strip()]
+             for body in PAGE_MARKER_RE.split(text)[2::2]]
+    seen: dict = {}
+    for lines in pages:
+        for line in set(lines):
+            seen[line] = seen.get(line, 0) + 1
+    count = 0
+    for lines in pages:
+        words = 0
+        for line in lines:
+            if seen[line] >= 3 or _CAPTION_LINE_RE.match(line):
+                continue
+            found = _PROSE_WORD_RE.findall(line)
+            if len(found) >= 5:
+                words += len(found)
+        if words >= MIN_PROSE_PAGE_WORDS:
+            count += 1
+    return count
+
+
 async def extract_narrative_text(
     file_bytes: bytes,
     vision_llm: Optional[BaseChatModel] = None,
@@ -740,8 +777,12 @@ async def extract_narrative_text(
     tables_only = not too_short and not mostly_blank_pages and (
         len(PAGE_MARKER_RE.sub('', prose).strip()) < MIN_USEFUL_CHARS
     )
+    # Headers, captions and chart labels on every page, and no sentences: the prose is pictures.
+    no_prose = not (too_short or mostly_blank_pages or tables_only) and (
+        _prose_pages(prose) < min(MIN_PROSE_PAGES, total_pages or 1)
+    )
 
-    if too_short or mostly_blank_pages or tables_only:
+    if too_short or mostly_blank_pages or tables_only or no_prose:
         if vision_llm is None:
             logger.warning(
                 "PDF content too short or mostly blank pages (%d chars excl. markers) and no "

@@ -132,7 +132,7 @@ def test_extract_text_from_pdf_returns_empty_string_when_no_pages_at_all(mock_pa
 @patch("pdf_extraction._count_total_pages")
 @patch("pdf_extraction.extract_text_from_pdf")
 def test_extract_narrative_text_skips_vision_when_pypdf_text_is_long_enough(mock_extract_text, mock_count_pages):
-    mock_extract_text.return_value = "[== Halaman 1 ==]\n" + "x" * 250
+    mock_extract_text.return_value = "[== Halaman 1 ==]\n" + _PROSE
     mock_count_pages.return_value = 1
 
     result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
@@ -355,3 +355,88 @@ def test_a_text_layer_that_is_all_table_rows_falls_back_to_vision(mock_extract_t
 
     mock_vision.assert_called_once()
     assert result == mock_vision.return_value
+
+
+_PROSE = ("Pada triwulan IV 2025, kegiatan usaha tercatat tumbuh positif dengan saldo bersih "
+          "tertimbang sebesar 12,46%, lebih tinggi dibandingkan triwulan sebelumnya. ") * 5
+
+
+def _pages(bodies):
+    return "".join(f"[== Halaman {i} ==]\n{body}\n\n" for i, body in enumerate(bodies, 1))
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_a_text_layer_of_headers_and_chart_labels_falls_back_to_vision(
+    mock_extract_text, mock_vision, mock_count_pages
+):
+    # SKDU Tw I-2026, NPI Tw IV-2025, PPKom Tw IV-2025: the prose pages are pictures. What the
+    # text layer holds is the running header, chart axis numbers and table captions — enough
+    # characters on most pages to pass as text, and not one sentence to extract.
+    header = "Perkembangan Properti Komersial (PPKOM)"
+    chart = "\n".join(["(% SBT)", "*) Angka Prakiraan", "0,53", "-0,98", "12,46", "I II III IV I II III IV"])
+    caption = "Tabel 3 Pertumbuhan Triwulanan Indeks Harga Properti Komersial Total dan Wilayah Jakarta"
+    bodies = [f"{header}\n{chart}\n{caption}" for _ in range(18)]
+    mock_extract_text.return_value = _pages(bodies)
+    mock_count_pages.return_value = 18
+    mock_vision.return_value = "[== Halaman 1 ==]\nIndeks harga properti komersial tumbuh 0,6%."
+
+    result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
+
+    mock_vision.assert_called_once()
+    assert result == mock_vision.return_value
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_a_few_prose_pages_ahead_of_many_appendix_tables_stay_on_the_text_layer(
+    mock_extract_text, mock_vision, mock_count_pages
+):
+    # PPKom Tw I-2026: four pages of narrative, then seventeen appendix tables. The tables
+    # outnumber the prose, but the prose is all there in the text layer.
+    caption = "Tabel {n} Perkembangan Indeks Harga Properti Komersial Wilayah Medan dan Semarang"
+    rows = "\n".join(f"Jual {n} 101,2 102,3 103,4 104,5 105,6 106,7 107,8" for n in range(8))
+    bodies = [_PROSE.replace("IV 2025", f"{q} 2025") for q in ("I", "II", "III", "IV")]
+    bodies += [caption.format(n=n) + "\n" + rows for n in range(17)]
+    mock_extract_text.return_value = _pages(bodies)
+    mock_count_pages.return_value = 21
+
+    asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
+
+    mock_vision.assert_not_called()
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_a_one_page_press_release_with_prose_stays_on_the_text_layer(
+    mock_extract_text, mock_vision, mock_count_pages
+):
+    mock_extract_text.return_value = _pages([_PROSE])
+    mock_count_pages.return_value = 1
+
+    asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
+
+    mock_vision.assert_not_called()
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf_vision_async")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_a_running_header_repeated_on_every_page_is_not_prose(
+    mock_extract_text, mock_vision, mock_count_pages
+):
+    # A long running header or footer sentence repeated on every page reads like prose line by
+    # line; repeated, it is page furniture.
+    footer = ("Laporan Neraca Pembayaran Indonesia diterbitkan oleh Departemen Statistik Bank "
+              "Indonesia setiap triwulan")
+    bodies = [f"{footer}\n{n}\n0,5\n-1,2" for n in range(1, 11)]
+    mock_extract_text.return_value = _pages(bodies)
+    mock_count_pages.return_value = 10
+    mock_vision.return_value = "[== Halaman 1 ==]\nTransaksi berjalan mencatat defisit."
+
+    asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
+
+    mock_vision.assert_called_once()
