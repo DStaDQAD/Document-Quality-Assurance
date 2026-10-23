@@ -2233,6 +2233,20 @@ def test_a_contraction_of_growth_that_eased_is_judged_on_the_yoy_rate():
     assert _contraction_of_growth(public, [_make_source(table)]) is None
 
 
+def test_a_bound_in_months_is_not_judged_on_money():
+    # Cadev ORA: "di atas standar kecukupan internasional sekitar 3 bulan impor" against the
+    # reserves themselves (146.320 juta USD) came back Sesuai.
+    table = _make_table(title="Official Reserve Assets", unit="Juta USD",
+                        data={("Cadangan Devisa", 2026, "Sep"): 146320.43})
+    fact = _make_fact(operation="above_threshold", claimed_value=3.0, unit="bulan",
+                      periods=[_make_period(metric_label="Cadangan Devisa", month="Sep")],
+                      context_quote="… serta berada di atas standar kecukupan internasional sekitar 3 bulan impor.")
+
+    result = _evaluate_fact(fact, [_make_source(table)])
+
+    assert result.verdict == "Inconclusive" and result.reason_code == "jenis"
+
+
 def test_a_trend_without_a_basis_is_not_refuted_when_the_yearly_reading_holds():
     # SPE Juni 2026 s018: "Pada Juli 2026, IPR diprakirakan meningkat." Jun 225,0 -> Jul 224,4 (down
     # month on month), Jul 2025 222,3 -> 224,4 (up year on year, the release's reading).

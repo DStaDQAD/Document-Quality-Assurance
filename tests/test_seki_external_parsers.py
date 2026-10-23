@@ -38,6 +38,85 @@ def _table():
     return table
 
 
+def _ora_xlsx(month_cell):
+    """The team's 'Tabel Cadev ORA': SDDS Official Reserve Assets, one sheet called 'sheet'."""
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ORA"      # openpyxl renames "Sheet" -> "sheet" to "sheet1" (case-insensitive clash)
+    ws.title = "sheet"
+    rows = [
+        [None, None, None, None, None, "Lampiran 1"],
+        ["SDDS Data Category and Component", None, "Unit Description", "Data Observation"],
+        [None, None, None, "Date of Latest Observation", "Latest Data", "Latest Data -1"],
+        ["Official Reserve Assets", None, "Millions of US$", month_cell, 146320.43, 146507.61],
+        ["     ", "Foreign currency reserves", "Millions of US$", month_cell, 125187.37, 124668.19],
+        [None, "Gold", "Millions of US$", month_cell, 11739.34, 12446.11],
+    ]
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+@pytest.mark.parametrize("month_cell", ["September/26", "Septembr/26", "Sep/2026"])
+def test_the_teams_ora_table_reads_this_month_and_the_one_before(month_cell):
+    # Oktober 2026: a check with ORA + Indimon came back 0/0/6 — no reader found a period header.
+    table = cadangan_devisa.parse(_ora_xlsx(month_cell), "sheet")
+
+    assert table.unit == "Juta USD"
+    assert table.lookup_fuzzy("cadangan devisa", 2026, "Sep") == ("Cadangan Devisa", 146320.43)
+    assert table.lookup_fuzzy("cadangan devisa", 2026, "Aug") == ("Cadangan Devisa", 146507.61)
+    assert table.lookup_fuzzy("Gold", 2026, "Aug")[1] == 12446.11
+    assert table.term_aliases["emas"] == "Cadangan Devisa > Gold"
+
+
+def test_the_teams_indimon_table_reads_the_reserves_memorandum_in_usd():
+    # The SEKI reader took Indimon's first data column for its labels ('930537.86…'), silently.
+    import datetime
+    import io
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Tabel SP (indonesian version)"
+    rows = [
+        ["PERKEMBANGAN BESARAN MONETER"], ["(Dalam Miliar Rupiah)"],
+        [None, "Items", 2026, None],
+        ["No.", None, "Agst", "Sep*"],
+        [None, None, datetime.datetime(2026, 8, 31), datetime.datetime(2026, 9, 30), datetime.datetime(2026, 7, 31)],
+        [1, "Uang Primer", 1835112.12, 1892362.26, 1800000.0],
+        [None, "Memorandum item:"],
+        [None, "Cadangan Devisa (konsep IRFCL)    4)"],
+        [None, "Dalam Juta USD", 146507.61, 146320.43, 145343.82],
+    ]
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    table = cadangan_devisa.parse(buf.getvalue(), "Tabel SP (indonesian version)")
+
+    assert table.unit == "Miliar Rp" and table.row_units == {"Cadangan Devisa": "Juta USD"}
+    assert table.lookup_fuzzy("cadangan devisa", 2026, "Sep") == ("Cadangan Devisa", 146320.43)
+    assert table.lookup_fuzzy("Uang Primer", 2026, "Aug")[1] == 1835112.12
+
+
+def test_a_sheet_without_the_ora_layout_falls_back_to_the_generic_readers():
+    import io
+    import openpyxl
+    from publication_parsers import PublicationParseError
+    wb = openpyxl.Workbook()
+    wb.active.title = "ORA"
+    wb.active.title = "sheet"
+    wb.active.append(["Bukan tabel ORA", 1, 2])
+    buf = io.BytesIO()
+    wb.save(buf)
+    with pytest.raises(PublicationParseError):
+        cadangan_devisa.parse(buf.getvalue(), "sheet")
+
+
 def test_a_component_with_both_sides_gets_a_hidden_net_row():
     table = _table()
     pii._add_net_rows(table)

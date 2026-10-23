@@ -2033,6 +2033,8 @@ def _stated_endpoints_missed(quote: str, values: List[float], table_unit: Option
 # A trend stated in physical units, and table units that are money.
 _VOLUME_TREND = re.compile(r"\b(volume|barel|barrel|MMBTU|ton)\b", re.IGNORECASE)
 _MONEY_UNIT = re.compile(r"\b(USD|dolar|dollar|Rp|rupiah)\b", re.IGNORECASE)
+# A claimed quantity counted in months, times or years ("5,3 bulan impor", "3 kali").
+_COUNTED_UNIT = re.compile(r"\b(bulan|kali|tahun|hari)\b", re.IGNORECASE)
 
 # Words that DO say a figure stayed where it was.
 _UNCHANGED_WORDS = re.compile(
@@ -2080,6 +2082,18 @@ def _compute_threshold(
     label, value = resolved[0][0], values[0]
     matched_source = src.label
     periods = _build_periods(fact.periods, resolved, values)
+    # A bound counted in months or times is no bound on money: "di atas standar kecukupan
+    # internasional sekitar 3 bulan impor" was judged on the reserves themselves (146.320 juta USD
+    # > 3) and came back Sesuai (Cadev ORA, Oktober 2026).
+    row_unit = getattr(src.table, "row_units", {}).get(label) or src.table.unit or ""
+    if (_COUNTED_UNIT.search(fact.unit or "") and _MONEY_UNIT.search(row_unit)
+            and not _COUNTED_UNIT.search(label)):
+        return _make_result(
+            fact, periods, matched_source, fact.claimed_value, fact.unit, None, src.table.unit, None,
+            "Inconclusive", reason_code="jenis",
+            reasoning=(f"Ambang klaim dalam {fact.unit}, sedangkan '{label}' di [{matched_source}] bernilai "
+                       f"uang ({src.table.unit}); keduanya tidak bisa dibandingkan."),
+        )
     threshold = fact.claimed_value
     if threshold is None and (_NET_BALANCE_UNIT.search(src.table.unit or "")
                               or _NET_BALANCE_UNIT.search(label)):
