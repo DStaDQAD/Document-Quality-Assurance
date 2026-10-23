@@ -1116,6 +1116,12 @@ class _NoteOrderBody(_ByBody):
     ids: List[int]
 
 
+class _UploadHintsBody(_ByBody):
+    press: str = ""
+    report: str = ""
+    excel: str = ""
+
+
 async def _settings_call(fn, *args):
     """Run a team_settings call off the event loop, mapping its errors to HTTP."""
     try:
@@ -1140,6 +1146,7 @@ def _settings_snapshot() -> dict:
                 "team_aliases": team_settings.list_team_aliases(key),
                 "notes": team_settings.notes(key),
                 "known_rows": team_settings.known_rows(key),
+                "upload_hints": team_settings.upload_hints(key),
             }
             for key in team_settings.PUBLICATIONS
         ],
@@ -1195,6 +1202,13 @@ async def put_note_endpoint(publication: str, note_id: int, body: _NoteBody) -> 
 async def delete_note_endpoint(publication: str, note_id: int, by: str = "") -> JSONResponse:
     await _settings_call(team_settings.delete_note, publication, note_id, by)
     return JSONResponse({"ok": True})
+
+
+@app.put("/api/settings/{publication}/upload-hints")
+async def put_upload_hints_endpoint(publication: str, body: _UploadHintsBody) -> JSONResponse:
+    """The example file names shown under each upload area for this publication."""
+    return JSONResponse(await _settings_call(
+        team_settings.set_upload_hints, publication, body.press, body.report, body.excel, body.by))
 
 
 @app.post("/api/settings/{publication}/reset")

@@ -197,3 +197,31 @@ def test_the_teams_notes_reach_the_review_prompt_only_when_there_are_some():
     seen.clear()
     asyncio.run(ai_review.review_claims(_one_claim(), [_pii_source()], _capturing_review_llm(seen)))
     assert "CATATAN TIM" not in seen[0]
+
+
+# --- upload hints: example file names under each upload area ---------------------------------
+
+def test_every_publication_has_default_upload_hints_taken_from_sharepoint():
+    for key in team_settings.PUBLICATIONS:
+        hints = team_settings.upload_hints(key)
+        assert set(hints) == {"press", "report", "excel"} and hints["excel"]
+    assert "Tabel Cadev ORA" in team_settings.upload_hints("cadangan-devisa")["excel"]
+    assert "Indimon" in team_settings.upload_hints("cadangan-devisa")["excel"]
+    assert team_settings.upload_hints("ppkom")["press"] == ""          # report only
+    assert team_settings.upload_hints("uang-primer-m0")["report"] == ""  # press release only
+
+
+def test_upload_hints_are_edited_logged_and_reset():
+    team_settings.set_upload_hints("pii", press="Siaran Pers PIII Tw.<I-IV> 2026.docx", report="",
+                                   excel="TABEL5_39.xls", by="Ani")
+    assert team_settings.upload_hints("pii") == {
+        "press": "Siaran Pers PIII Tw.<I-IV> 2026.docx", "report": "", "excel": "TABEL5_39.xls"}
+    log = team_settings.changes("pii")
+    assert (log[0]["kind"], log[0]["action"], log[0]["by"]) == ("hint", "ubah", "Ani")
+    team_settings.reset("pii", by="Budi")
+    assert team_settings.upload_hints("pii") == team_settings.UPLOAD_HINT_DEFAULTS["pii"]
+
+
+def test_an_overlong_upload_hint_is_refused():
+    with pytest.raises(SettingsError):
+        team_settings.set_upload_hints("pii", press="x" * 400, report="", excel="", by="Ani")

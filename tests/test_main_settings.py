@@ -53,3 +53,17 @@ def test_a_database_failure_is_a_503_not_a_crash(monkeypatch):
     monkeypatch.setattr(team_settings, "hidden_publications", broken)
     response = client.get("/api/settings")
     assert response.status_code == 503 and "Pengaturan" in response.json()["detail"]
+
+
+def test_upload_hints_are_listed_and_edited():
+    body = client.get("/api/settings").json()
+    cadev = next(p for p in body["publications"] if p["key"] == "cadangan-devisa")
+    assert "Tabel Cadev ORA" in cadev["upload_hints"]["excel"]
+    saved = client.put("/api/settings/cadangan-devisa/upload-hints",
+                       json={"press": "SP Cadev.docx", "report": "", "excel": "ORA.xlsx", "by": "Ani"})
+    assert saved.status_code == 200 and saved.json()["excel"] == "ORA.xlsx"
+    body = client.get("/api/settings").json()
+    cadev = next(p for p in body["publications"] if p["key"] == "cadangan-devisa")
+    assert cadev["upload_hints"] == {"press": "SP Cadev.docx", "report": "", "excel": "ORA.xlsx"}
+    assert client.put("/api/settings/cadangan-devisa/upload-hints",
+                      json={"press": "x", "report": "", "excel": "", "by": ""}).status_code == 422

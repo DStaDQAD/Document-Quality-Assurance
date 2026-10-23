@@ -343,6 +343,10 @@ select { cursor: pointer; }
 .builtin-block summary:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; border-radius: var(--r); }
 .settings-empty { font-size: 13px; color: var(--text-400); padding: 12px 0 4px; }
 .note-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.hints-form { display: grid; gap: 12px; max-width: 70ch; }
+.hints-form label { font-size: 12px; font-weight: 600; color: var(--text-500); display: grid; gap: 5px; }
+.hints-form input:disabled { opacity: 0.6; cursor: not-allowed; }
+.hints-actions { display: flex; justify-content: flex-end; }
 .note-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
   border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--white); }
 .note-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text-900); white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -419,6 +423,8 @@ select { cursor: pointer; }
   font-size: 10px; font-weight: 700; color: var(--text-500);
   text-transform: uppercase; letter-spacing: 0.07em;
 }
+/* "Contoh: …" under an upload area: how the team's SharePoint names this file. */
+.upload-hint { margin: 6px 0 0; font-size: 11px; line-height: 1.4; color: var(--text-400); overflow-wrap: anywhere; }
 
 /* ── Aturan pemeriksaan: which comparisons run, always visible under the upload columns ── */
 .rules {
@@ -1169,14 +1175,17 @@ body.auth-locked .app {
                 <div class="upload-field" id="press-upload-field">
                   <span class="upload-label">Siaran Pers</span>
                   <div id="press-source-container"></div>
+                  <p class="upload-hint" id="press-hint" hidden></p>
                 </div>
                 <div class="upload-field" id="publication-report-field" hidden>
                   <span class="upload-label">Laporan</span>
                   <div id="publication-report-container"></div>
+                  <p class="upload-hint" id="report-hint" hidden></p>
                 </div>
                 <div class="upload-field" id="excel-upload-field">
                   <span class="upload-label" id="excel-upload-label">Tabel Excel</span>
                   <div id="excel-sources-container"></div>
+                  <p class="upload-hint" id="excel-hint" hidden></p>
                   <button type="button" id="add-excel-btn" class="add-excel-btn">
                     <span class="material-symbols-outlined">add</span> Tambah Tabel
                   </button>
@@ -1683,8 +1692,9 @@ body.auth-locked .app {
   document.getElementById("add-excel-btn").addEventListener("click", addExcelSource);
 
   // ── Jenis publikasi. Each publication has a press release; `report` says whether BI also
-  // publishes a narrative report for it. `excel` records where its Excel tables come from (empty
-  // when unknown; not shown in the UI). The keys are what the server stores in the history (check_history.PUBLICATIONS).
+  // publishes a narrative report for it. The example file names under each upload area come from
+  // the server (Pengaturan, team_settings.UPLOAD_HINT_DEFAULTS). The keys are what the server stores
+  // in the history (check_history.PUBLICATIONS).
   // `rules` is the publication's fixed set of checks, which replaces the Aturan pemeriksaan
   // checkboxes (see syncRules). A press release alone has no second document to cross-check and
   // as a rule no charts, so those publications skip both.
@@ -1693,19 +1703,19 @@ body.auth-locked .app {
   // A publication released as a report alone (no Siaran Pers): nothing to cross-check against.
   const REPORT_ONLY_RULES = ["intra", "excel", "charts", "typo"];
   const PUBLICATIONS = {
-    "uang-beredar":    { label: "Uang Beredar", report: true, excel: "SEKI Tabel I.1 / I.1.A", rules: WITH_REPORT_RULES },
-    "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, excel: "SEKI Tabel I.2", rules: PRESS_ONLY_RULES },
-    "npi":             { label: "Neraca Pembayaran Indonesia", report: true, excel: "SEKI Tabel V.1", rules: WITH_REPORT_RULES },
-    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, excel: "SEKI Tabel V.39", rules: WITH_REPORT_RULES },
-    "cadangan-devisa": { label: "Cadangan Devisa", report: false, excel: "SEKI Tabel V.9", rules: PRESS_ONLY_RULES },
-    "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, excel: "Tabel SULNI (zip di halaman SULNI)", rules: PRESS_ONLY_RULES },
-    "sk":              { label: "Survei Konsumen (SK)", report: true, excel: "SK.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
-    "spe":             { label: "Survei Penjualan Eceran (SPE)", report: true, excel: "spe.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
-    "skdu":            { label: "Laporan Survei Kegiatan Dunia Usaha (SKDU)", report: true, excel: "SKDU.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
-    "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, excel: "Data-Series-PMI zip dari halaman Laporan PMI", rules: WITH_REPORT_RULES },
-    "sbank":           { label: "Survei Perbankan (SBank)", report: true, excel: "SBank.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
-    "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, excel: "shpr.zip dari halaman Laporan BI", rules: WITH_REPORT_RULES },
-    "ppkom":           { label: "Survei Properti Komersial (PPKom)", report: true, press: false, excel: "Tabel PPKom (xlsx)", rules: REPORT_ONLY_RULES },
+    "uang-beredar":    { label: "Uang Beredar", report: true, rules: WITH_REPORT_RULES },
+    "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, rules: PRESS_ONLY_RULES },
+    "npi":             { label: "Neraca Pembayaran Indonesia", report: true, rules: WITH_REPORT_RULES },
+    "pii":             { label: "Posisi Investasi Internasional Indonesia", report: true, rules: WITH_REPORT_RULES },
+    "cadangan-devisa": { label: "Cadangan Devisa", report: false, rules: PRESS_ONLY_RULES },
+    "sulni":           { label: "Statistik Utang Luar Negeri (SULNI)", report: false, rules: PRESS_ONLY_RULES },
+    "sk":              { label: "Survei Konsumen (SK)", report: true, rules: WITH_REPORT_RULES },
+    "spe":             { label: "Survei Penjualan Eceran (SPE)", report: true, rules: WITH_REPORT_RULES },
+    "skdu":            { label: "Laporan Survei Kegiatan Dunia Usaha (SKDU)", report: true, rules: WITH_REPORT_RULES },
+    "pmi":             { label: "Prompt Manufacturing Index (PMI)", report: true, rules: WITH_REPORT_RULES },
+    "sbank":           { label: "Survei Perbankan (SBank)", report: true, rules: WITH_REPORT_RULES },
+    "shpr":            { label: "Survei Harga Properti Residensial (SHPR)", report: true, rules: WITH_REPORT_RULES },
+    "ppkom":           { label: "Survei Properti Komersial (PPKom)", report: true, press: false, rules: REPORT_ONLY_RULES },
   };
 
   const publicationSelect = document.getElementById("publication-select");
@@ -1737,6 +1747,7 @@ body.auth-locked .app {
     });
     return { container, inp, role, assign };
   }
+  let uploadHints = {};   // {publication: {press, report, excel}} from /api/settings (showUploadHints)
   const pressSlot  = makeReportSlot("press-source-container", "Siaran Pers");
   const reportSlot = makeReportSlot("publication-report-container", "Laporan");
 
@@ -1753,7 +1764,20 @@ body.auth-locked .app {
     document.getElementById("publication-report-field").hidden = !pub?.report;
     document.getElementById("press-upload-field").hidden = pub?.press === false;
     document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report && pub?.press !== false);
+    showUploadHints();
     syncRules();
+  }
+
+  // "Contoh: …" under each upload area: the file names as the team's SharePoint folders name them,
+  // editable in Pengaturan. Filled once the server answers; until then, and for "", nothing shows.
+  function showUploadHints() {
+    const hints = uploadHints[currentPublication()] || {};
+    for (const slot of ["press", "report", "excel"]) {
+      const el = document.getElementById(`${slot}-hint`);
+      const text = (hints[slot] || "").trim();
+      el.hidden = !text;
+      el.textContent = text ? `Contoh: ${text}` : "";
+    }
   }
   publicationSelect.addEventListener("change", applyPublication);
 
@@ -2877,7 +2901,8 @@ body.auth-locked .app {
   const settingsErrorEl = document.getElementById("settings-error");
   const ACTION_WORDS = { tambah: "menambah", ubah: "mengubah", hapus: "menghapus", urutkan: "mengurutkan",
                          sembunyikan: "menyembunyikan", tampilkan: "menampilkan" };
-  const KIND_WORDS = { alias: "padanan", note: "catatan", visibility: "publikasi", reset: "pengaturan" };
+  const KIND_WORDS = { alias: "padanan", note: "catatan", visibility: "publikasi", hint: "contoh nama dokumen",
+                       reset: "pengaturan" };
 
   function settingsName() {
     return settingsNameEl.value.trim();
@@ -3006,6 +3031,7 @@ body.auth-locked .app {
     const tabs = [
       ["aliases", "Padanan nama", pub.team_aliases.length],
       ["notes", "Catatan", pub.notes.length],
+      ["hints", "Dokumen unggahan", null],
       ["changes", "Riwayat perubahan", null],
     ];
     document.getElementById("settings-detail").innerHTML = `
@@ -3030,7 +3056,8 @@ body.auth-locked .app {
         </div>
       </div>
       <div class="settings-body" role="tabpanel">${settingsTab === "aliases" ? aliasesHtml(pub)
-        : settingsTab === "notes" ? notesHtml(pub) : `<p class="settings-empty">Memuat riwayat perubahan…</p>`}</div>`;
+        : settingsTab === "notes" ? notesHtml(pub) : settingsTab === "hints" ? hintsHtml(pub)
+        : `<p class="settings-empty">Memuat riwayat perubahan…</p>`}</div>`;
     if (settingsTab === "changes") loadChanges();
   }
 
@@ -3092,6 +3119,26 @@ body.auth-locked .app {
           <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah catatan</button>
         </div>
         <p class="settings-feedback" id="note-feedback" aria-live="polite"></p>
+      </form>`;
+  }
+
+  function hintsHtml(pub) {
+    const has = { press: PUBLICATIONS[pub.key]?.press !== false, report: !!PUBLICATIONS[pub.key]?.report, excel: true };
+    const labels = { press: "Siaran Pers", report: "Laporan", excel: "Tabel Excel" };
+    const hints = pub.upload_hints || {};
+    return `
+      <p class="settings-help">Contoh nama file yang muncul di bawah kotak unggah, mengikuti penamaan di folder
+        SharePoint tim. Hanya petunjuk: file dengan nama lain tetap bisa diperiksa.</p>
+      <form class="hints-form" id="hints-form" autocomplete="off">
+        ${["press", "report", "excel"].map((slot) => `
+          <label>${labels[slot]}
+            <input type="text" id="hint-${slot}" maxlength="300" value="${escapeHtml(hints[slot] || "")}"
+                   ${has[slot] ? "" : "disabled"} placeholder="${has[slot] ? "Contoh nama file" : "Publikasi ini tidak punya " + labels[slot].toLowerCase()}">
+          </label>`).join("")}
+        <div class="hints-actions">
+          <button type="submit" class="run-btn"><span class="material-symbols-outlined">save</span>Simpan contoh</button>
+        </div>
+        <p class="settings-feedback" id="hints-feedback" aria-live="polite"></p>
       </form>`;
   }
 
@@ -3197,6 +3244,11 @@ body.auth-locked .app {
       const row = document.getElementById("alias-row").value;
       settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/aliases`, { phrase, row, by: settingsName() }),
                      "alias-feedback", "Padanan ditambahkan; berlaku mulai pemeriksaan berikutnya.");
+    } else if (e.target.id === "hints-form") {
+      const value = (slot) => document.getElementById(`hint-${slot}`).value;
+      settingsAction(button, () => settingsSend("PUT", `/api/settings/${pub}/upload-hints`,
+          { press: value("press"), report: value("report"), excel: value("excel"), by: settingsName() }),
+        "hints-feedback", "Contoh nama dokumen disimpan; tampil di formulir unggah.");
     } else if (e.target.id === "note-form") {
       const text = document.getElementById("note-text").value;
       settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/notes`, { text, by: settingsName() }),
@@ -3215,6 +3267,7 @@ body.auth-locked .app {
   // The upload card's "Jenis publikasi": a hidden publication leaves the choices, except the one
   // already chosen (a running form keeps its value).
   function applyHiddenPublications(publications) {
+    applyUploadHints(publications);
     const hidden = new Set(publications.filter((p) => p.hidden).map((p) => p.key));
     const chosen = publicationSelect.value;
     publicationSelect.querySelectorAll("option[value]").forEach((opt) => {
@@ -3226,6 +3279,10 @@ body.auth-locked .app {
   }
   async function refreshHiddenPublications() {
     try { applyHiddenPublications((await fetchJson("/api/settings")).publications); } catch (_) { /* keep all */ }
+  }
+  function applyUploadHints(publications) {
+    uploadHints = Object.fromEntries(publications.map((p) => [p.key, p.upload_hints || {}]));
+    showUploadHints();
   }
 
   // Sidebar toggle
