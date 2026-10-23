@@ -2301,6 +2301,22 @@ def test_growth_tolerance_widens_only_where_rounding_actually_bites():
     assert MATCH_TOLERANCE < _growth_tolerance(10253.7, 9387.9) < MATCH_TOLERANCE + 0.01
 
 
+def test_a_growth_printed_to_two_decimals_gets_its_own_rounding_only():
+    # SHPR Tw IV-2025: "Palembang … 1,06% (yoy)" against 108,5555 / 107,3956 = 1,0800%. A figure
+    # printed to two decimals allows 0,005 of its own: 0,02 is a real error (0,05 let it through).
+    table = _make_table(title="Indeks Harga Properti Residensial", unit="Indeks (2018=100)",
+                        data={("PALEMBANG > TOTAL", 2024, "Q4"): 107.3956, ("PALEMBANG > TOTAL", 2025, "Q4"): 108.5555})
+
+    def claim(value, quote):
+        return _make_fact(operation="yoy_growth", claimed_value=value, unit="persen", context_quote=quote,
+                          periods=[_make_period(metric_label="PALEMBANG > TOTAL", year=2025, month="Q4")])
+
+    assert _evaluate_fact(claim(1.06, "IHPR Palembang tumbuh 1,06% (yoy)."), [_make_source(table)]).verdict == "Refuted"
+    assert _evaluate_fact(claim(1.08, "IHPR Palembang tumbuh 1,08% (yoy)."), [_make_source(table)]).verdict == "Entailed"
+    # Printed to one decimal, the old allowance stands: 1,1 for 1,08.
+    assert _evaluate_fact(claim(1.1, "IHPR Palembang tumbuh 1,1% (yoy)."), [_make_source(table)]).verdict == "Entailed"
+
+
 def test_yoy_refuses_a_prior_year_value_equal_to_the_claimed_growth():
     from paired_verifier import _compute_yoy_growth, _ExcelSource
     from structured_extractor import ExtractedFact, PeriodPoint

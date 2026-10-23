@@ -814,7 +814,8 @@ def _printing_step(value: float) -> float:
     return float(Decimal(1).scaleb(exponent)) if exponent < 0 else 1.0
 
 
-def _growth_tolerance(current: float, prior: float) -> float:
+def _growth_tolerance(current: float, prior: float, claimed: Optional[float] = None,
+                      quote: Optional[str] = None) -> float:
     """Tolerance for a yoy computed from two PRINTED levels, widened by their rounding.
 
     A table states 7,6 and 7,5; the true values lie anywhere within half a printed step of
@@ -832,12 +833,18 @@ def _growth_tolerance(current: float, prior: float) -> float:
     The band shrinks to nothing as the base grows (on 9.387,9 it is 0,001pp), so this stays a
     rounding allowance rather than a blanket loosening. A directly-printed growth cell is
     unaffected — there is no division.
+
+    The claim's own rounding is half its last printed digit when the sentence shows it, never
+    more than MATCH_TOLERANCE: SHPR Tw IV-2025 "Palembang … 1,06% (yoy)" against 108,56 / 107,40
+    = 1,08% passed on 0,05 + 0,009, though a figure printed to two decimals allows 0,005.
     """
+    decimals = _printed_decimals(claimed, quote) if claimed is not None else None
+    own = MATCH_TOLERANCE if decimals is None else min(MATCH_TOLERANCE, 0.5 * 10 ** -decimals)
     if not prior:
-        return MATCH_TOLERANCE
+        return own
     half = _printing_step(prior) / 2
     band = 100 * (half / abs(prior)) * (1 + abs(current / prior))
-    return round(MATCH_TOLERANCE + band, 4)
+    return round(own + band, 4)
 
 
 class _Why(str):
@@ -1450,7 +1457,7 @@ def _compute_yoy_growth(fact: ExtractedFact, resolved: List[Tuple[str, float]], 
         size_note = ", dihitung dari besarnya karena baris ini bernilai negatif"
     else:
         computed = round((curr_raw - prior_raw) / abs(prior_raw) * 100, 4)
-    tolerance = _growth_tolerance(curr_raw, prior_raw)
+    tolerance = _growth_tolerance(curr_raw, prior_raw, fact.claimed_value, fact.context_quote)
     delta, verdict = _numeric_verdict(fact.claimed_value, computed, tolerance)
     periods = [current_period, PeriodResult(metric_label=prior_label, year=prior_year, month=p.month, excel_value=round(prior_raw, 4))]
     if verdict == "Refuted":
