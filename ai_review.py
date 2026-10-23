@@ -32,8 +32,8 @@ from pydantic import BaseModel, Field
 from cell_formula import FormulaError, evaluate
 from excel_parser_bi import BITableData
 from paired_verifier import (
-    _evaluate_fact_safely, _ExcelSource, _group_family, _period_ordinal, _printed_in, _unit_factor,
-    _value_verdict,
+    _evaluate_fact_safely, _ExcelSource, _group_family, _numeric_verdict, _period_ordinal, _printed_in,
+    _unit_factor,
 )
 from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint
@@ -415,7 +415,10 @@ def _judge_formula(
             value = value / factor
         # Signed: the model writes the formula the way the sentence reads ("meningkatnya kewajiban
         # neto" = Kewajiban − Aset growing), so a change the other way does not pass on its size.
-        _delta, verdict, _rule = _value_verdict(target, value, result.context_quote)
+        # A formula's result is a derived number, held to MATCH_TOLERANCE like the engine's diff and
+        # never widened by the printed decimals (the owner's rule: "23 juta" vs 22,78 is Tidak
+        # Sesuai). Re-review 2026-10-23 let "14 juta" (13,90) and "178 juta" (178,05) through.
+        _delta, verdict = _numeric_verdict(target, value)
         holds, shown = verdict == "Entailed", f"{round(value, 4)} (klaim {target})"
     note = f"Ditinjau AI: rumus {review.formula} atas sel {cells} = {shown} — {review.explanation}"
     if holds:

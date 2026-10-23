@@ -275,6 +275,21 @@ def test_a_formula_that_misses_the_number_flags_a_tidak_cukup_data():
     assert (outcome, final.verdict) == ("flag", "Inconclusive")
 
 
+def test_a_formula_result_is_not_widened_by_how_the_sentence_prints_it():
+    # PII Tw IV-2025 s046: "sebesar 14 juta dolar AS" against 803,20 -> 817,10 = 13,90. A change
+    # printed without decimals is not widened (owner's rule: "23 juta" vs 22,78 is Tidak Sesuai).
+    pii = _table(title="Posisi Investasi Internasional Indonesia", unit="Juta USD", data={
+        ("Aset > Derivatif Finansial", 2025, "Q3"): 803.2041, ("Aset > Derivatif Finansial", 2025, "Q4"): 817.1022})
+    quote = "Kenaikan posisi aset derivatif finansial sebesar 14 juta dolar AS."
+    result = _result(verdict="Refuted", operation="diff", claimed_value=14.0, unit="juta USD", quote=quote,
+                     label="aset derivatif finansial")
+    review = _review(first_words="Kenaikan posisi aset derivatif finansial", subject="aset derivatif finansial",
+                     operation="diff", formula="c2-c1", formula_unit="tabel", claim_number=14,
+                     cells=[CitedCell(sheet="S1", row="Aset > Derivatif Finansial", period="Q3 2025", value=803.2041),
+                            CitedCell(sheet="S1", row="Aset > Derivatif Finansial", period="Q4 2025", value=817.1022)])
+    assert judge_review(result, review, {"S1": _source(pii, sheet="5.39")}) == (result, "unchanged")
+
+
 def test_a_formula_that_is_not_allowed_is_ignored():
     result = _result(verdict="Inconclusive", operation="diff", claimed_value=12.1, unit="miliar USD",
                      quote=_NET_QUOTE, label="kewajiban neto investasi portofolio")
