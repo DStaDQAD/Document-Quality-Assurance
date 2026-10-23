@@ -103,3 +103,8 @@ eval/inventory/
 eval/cases/ub_jun2026/
 eval/cases/cadev_jul2026/
 eval/cases/sulni_agu2026/
+
+# Agent skills installed locally (npx skills add), not part of the app
+.agents/
+.claude/skills/
+skills-lock.json
