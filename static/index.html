@@ -25,7 +25,7 @@
   --border-dark: #B8CBEF;
   --text-900: #0B1F3A;
   --text-500: #3D5078;
-  --text-400: #7589A8;
+  --text-400: #56698A;  /* ≥4.5:1 on white, page-bg and a selected blue-100 row (was #7589A8, 3.56:1) */
   --green-700: #047857; --green-100: #D1FAE5;
   --red-700:   #B91C1C; --red-100:   #FEE2E2;
   --amber-700: #92400E; --amber-100: #FEF3C7;
@@ -83,6 +83,7 @@ textarea, input, select, button { font-family: inherit; }
   position: relative;
 }
 .nav-item .material-symbols-outlined { font-size: 20px; flex-shrink: 0; transition: color 0.15s; }
+.nav-item:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; }
 .nav-item.inactive-nav { color: rgba(255,255,255,0.5); }
 .nav-item.inactive-nav:hover { background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.9); }
 .nav-item.active-nav {
@@ -109,9 +110,7 @@ textarea, input, select, button { font-family: inherit; }
   box-shadow: 0 1px 4px rgba(11,31,58,0.05);
 }
 .topbar-title {
-  font-size: 15px; font-weight: 800; letter-spacing: -0.02em;
-  background: linear-gradient(135deg, var(--navy-900), var(--blue-600));
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+  margin: 0; font-size: 15px; font-weight: 800; letter-spacing: -0.02em; color: var(--navy-900);
 }
 .topbar-divider { width: 1px; height: 18px; background: var(--border); }
 .topbar-sub {
@@ -235,6 +234,15 @@ select { cursor: pointer; }
   flex: 1; border: none; outline: none; background: transparent;
   font-family: inherit; font-size: 13px; color: var(--text-900);
 }
+/* The input draws no ring of its own; the whole toolbar shows where the focus is. */
+.history-toolbar:focus-within { box-shadow: inset 0 0 0 2px var(--blue-400); }
+.history-legend { flex-shrink: 0; font-size: 12px; color: var(--text-400); white-space: nowrap; }
+.history-legend .is-match { color: #15803D; }
+.history-legend .is-mismatch { color: #DC2626; }
+.history-legend .is-unverified { color: #B45309; }
+.history-open { width: 1%; color: var(--text-400); text-align: right; }
+.history-open .material-symbols-outlined { font-size: 18px; vertical-align: middle; }
+.history-row:hover .history-open { color: var(--blue-600); }
 .history-table-wrap { overflow-x: auto; }
 .history-row { cursor: pointer; }
 .history-row:focus { outline: 2px solid var(--blue-400); outline-offset: -2px; }
@@ -293,7 +301,8 @@ select { cursor: pointer; }
   transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1); pointer-events: none; }
 .switch:has(input:checked)::after { transform: translateX(14px); }
 .settings-detail-head { display: flex; align-items: flex-start; gap: 12px; }
-.settings-detail-head h2 { flex: 1; margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-900); }
+.settings-title { flex: 1; min-width: 0; }
+.settings-detail-head h2 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-900); }
 .settings-detail-head .muted-text { display: block; font-size: 12px; font-weight: 400; margin-top: 3px; }
 .settings-tabs { display: flex; gap: 2px; margin: 16px -22px -18px; padding: 0 16px; }
 .settings-tab {
@@ -370,8 +379,10 @@ select { cursor: pointer; }
 }
 .history-back {
   margin-left: auto; border: none; background: none; cursor: pointer;
-  color: var(--blue-400); font-family: inherit; font-size: 13px; font-weight: 600;
+  color: var(--blue-600); font-family: inherit; font-size: 13px; font-weight: 600;
 }
+.history-back:hover { text-decoration: underline; text-underline-offset: 3px; }
+.history-back:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; border-radius: var(--r); }
 
 /* ── Dropzones ── */
 .dz-sub   {
@@ -393,6 +404,7 @@ select { cursor: pointer; }
   border-color: var(--blue-400);
   background: linear-gradient(180deg, #EEF5FF, #E6F0FF);
 }
+.dropzone-sm:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; border-color: var(--blue-400); }
 .dropzone-sm .material-symbols-outlined { color: var(--blue-500); font-size: 22px; }
 .dropzone-sm .dz-sub     { font-size: 11px; color: var(--text-400); }
 /* Brief flash when a dropped/picked file is the wrong type and was ignored */
@@ -640,9 +652,9 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 }
 
 /* ── Toolbar row: search + source/page filters ── */
+/* No rule of its own: the tab strip above already draws the line. */
 .toolbar-row {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  padding-top: 20px; border-top: 1px solid var(--border);
 }
 .search-box { position: relative; flex: 1 1 200px; min-width: 160px; }
 .search-box .material-symbols-outlined {
@@ -701,6 +713,11 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .stat-card.inconclusive .stat-num { color: #D97706; }
 .stat-card.total .stat-num        { color: var(--navy-900); }
 .stat-label { font-size: 11px; color: var(--text-500); font-weight: 500; line-height: 1.4; }
+.stat-num-text { font-size: 18px; letter-spacing: -0.01em; }
+.stat-hint { display: block; font-weight: 400; color: var(--text-400); margin-top: 2px; }
+/* Read by screen readers, not drawn. */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 .fact-cards { display: flex; flex-direction: column; gap: 10px; }
 .fact-card {
@@ -839,24 +856,24 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .badge.grammar    { background: linear-gradient(135deg, #DBEAFE, #BFDBFE); color: var(--blue-600); }
 
 /* ── Paired: report sub-tabs (Cek Fakta / Cek Ejaan) ── */
-.report-subtabs { display: flex; gap: 8px; margin-bottom: 18px; }
+/* In-page tabs: one style across the app (result page and Pengaturan) — a text tab with an
+   underline for the current one. Pills stay for the result filters (Semua / Tidak Sesuai / …). */
+.report-subtabs { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); }
 .report-subtab-btn {
-  flex: 1; display: flex; align-items: center; justify-content: center; gap: 6px;
-  padding: 10px 16px; border-radius: var(--r-lg); border: 1px solid var(--border);
-  background: var(--white); color: var(--text-500); font-size: 13px; font-weight: 600;
-  cursor: pointer; transition: all 0.15s; font-family: inherit;
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 10px 14px; margin-bottom: -1px; border: none; border-bottom: 2px solid transparent;
+  background: none; color: var(--text-500); font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: color 0.15s, border-color 0.15s; font-family: inherit;
 }
-.report-subtab-btn:hover { border-color: var(--navy-700); color: var(--navy-900); background: var(--blue-50); }
-.report-subtab-btn.active {
-  background: linear-gradient(135deg, #1e4fba, #0B1F3A); border-color: transparent;
-  color: white; box-shadow: 0 2px 8px rgba(11,31,58,0.22);
-}
+.report-subtab-btn:hover { color: var(--text-900); }
+.report-subtab-btn.active { color: var(--blue-600); border-bottom-color: var(--blue-500); }
+.report-subtab-btn:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; border-radius: var(--r); }
 .report-subtab-btn .material-symbols-outlined { font-size: 17px; }
 .subtab-count {
   font-size: 11px; font-weight: 700; padding: 1px 8px; border-radius: 999px;
-  background: var(--blue-50); color: var(--navy-900);
+  background: var(--blue-50); color: var(--navy-900); font-variant-numeric: tabular-nums;
 }
-.report-subtab-btn.active .subtab-count { background: rgba(255,255,255,0.22); color: white; }
+.report-subtab-btn.active .subtab-count { background: var(--blue-100); color: var(--blue-600); }
 .report-subtab-btn.has-issues:not(.active) .subtab-count { background: #FEE2E2; color: var(--red-700); }
 .report-tab-panel { display: none; }
 .report-tab-panel.active { display: block; }
@@ -1077,7 +1094,7 @@ body.auth-locked .app {
 </style>
 </head>
 <body class="auth-locked">
-<div class="app">
+<div class="app" inert>
 
 <!-- ═══ SIDEBAR ═══ -->
 <aside class="sidebar" id="sidebar">
@@ -1093,27 +1110,27 @@ body.auth-locked .app {
 
   <nav class="sidebar-nav">
     <div class="nav-section-label">Verifikasi</div>
-    <a class="nav-item active-nav" data-tab="paired" title="Verifikasi">
+    <button type="button" class="nav-item active-nav" data-tab="paired" title="Verifikasi">
       <span class="material-symbols-outlined">compare_arrows</span>
       <span class="nav-text">Verifikasi</span>
-    </a>
-    <a class="nav-item inactive-nav" data-tab="history" title="Riwayat">
+    </button>
+    <button type="button" class="nav-item inactive-nav" data-tab="history" title="Riwayat">
       <span class="material-symbols-outlined">history</span>
       <span class="nav-text">Riwayat</span>
-    </a>
-    <a class="nav-item inactive-nav" data-tab="settings" title="Pengaturan">
+    </button>
+    <button type="button" class="nav-item inactive-nav" data-tab="settings" title="Pengaturan">
       <span class="material-symbols-outlined">tune</span>
       <span class="nav-text">Pengaturan</span>
-    </a>
+    </button>
     <!-- "Lihat Data" browses /api/tables (the ground-truth SQLite DB). That DB is
          not shipped to the deployment (only synthetic sample data), so the tab is
          hidden here. Uncomment to restore it for local development. -->
     <!--
     <div class="nav-section-label" style="margin-top:8px">Data</div>
-    <a class="nav-item inactive-nav" data-tab="data" title="Lihat Data">
+    <button type="button" class="nav-item inactive-nav" data-tab="data" title="Lihat Data">
       <span class="material-symbols-outlined">table_chart</span>
       <span class="nav-text">Lihat Data</span>
-    </a>
+    </button>
     -->
   </nav>
 
@@ -1128,9 +1145,7 @@ body.auth-locked .app {
 <!-- ═══ MAIN ═══ -->
 <div class="main">
   <header class="topbar">
-    <span class="topbar-title" id="header-title">Verifikasi</span>
-    <div class="topbar-divider"></div>
-    <span class="topbar-sub">Document Quality Assurance</span>
+    <h1 class="topbar-title" id="header-title">Verifikasi</h1>
   </header>
 
   <main class="content">
@@ -1238,7 +1253,10 @@ body.auth-locked .app {
       <div class="card">
         <div class="card-header history-toolbar">
           <span class="material-symbols-outlined">search</span>
-          <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa">
+          <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa"
+                 aria-label="Cari riwayat menurut nama dokumen atau pemeriksa">
+          <span class="history-legend" aria-hidden="true">Hasil: <span class="is-match">✓ Sesuai</span> ·
+            <span class="is-mismatch">✗ Tidak Sesuai</span> · <span class="is-unverified">? Tidak Cukup Data</span></span>
         </div>
         <div class="error-banner history-busy" id="history-busy" hidden></div>
         <div id="history-list"></div>
@@ -1296,7 +1314,7 @@ body.auth-locked .app {
 <!-- ═══ LOGIN GATE (blurred app behind the card; revealed on login) ═══ -->
 <div id="auth-gate" class="is-checking">
   <div class="auth-spinner"></div>
-  <form class="auth-card" id="auth-form" autocomplete="on">
+  <form class="auth-card" id="auth-form" autocomplete="on" role="dialog" aria-modal="true" aria-labelledby="auth-title">
     <div class="auth-brand">
       <div class="auth-logo">
         <span class="material-symbols-outlined" style="font-variation-settings:'FILL' 1,'wght' 500,'opsz' 24">analytics</span>
@@ -1307,7 +1325,7 @@ body.auth-locked .app {
       </div>
     </div>
 
-    <h2>Masuk</h2>
+    <h2 id="auth-title">Masuk</h2>
     <p class="auth-sub">Silakan masuk untuk menggunakan aplikasi.</p>
 
     <div class="auth-error" id="auth-error">
@@ -1331,6 +1349,17 @@ body.auth-locked .app {
 </div>
 
 <script>
+  // Icons are drawn from a font of ligatures ("history", "delete"): hidden from screen readers so
+  // they are not read aloud as English words. Every control carries its own text or aria-label.
+  function hideIconNames(root) {
+    root.querySelectorAll(".material-symbols-outlined:not([aria-hidden])").forEach((i) => i.setAttribute("aria-hidden", "true"));
+  }
+  hideIconNames(document);
+  new MutationObserver((records) => records.forEach((r) => r.addedNodes.forEach((n) => {
+    if (n.nodeType !== 1) return;
+    if (n.matches(".material-symbols-outlined")) n.setAttribute("aria-hidden", "true"); else hideIconNames(n);
+  }))).observe(document.body, { childList: true, subtree: true });
+
   const PANEL_TITLES = { paired: "Verifikasi", history: "Riwayat", settings: "Pengaturan", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
@@ -1355,6 +1384,7 @@ body.auth-locked .app {
       const active = n.dataset.tab === tab;
       n.classList.toggle("active-nav", active);
       n.classList.toggle("inactive-nav", !active);
+      if (active) n.setAttribute("aria-current", "page"); else n.removeAttribute("aria-current");
     });
     document.getElementById("header-title").textContent = PANEL_TITLES[tab] || tab;
   }
@@ -1442,6 +1472,13 @@ body.auth-locked .app {
     }
 
     dz.addEventListener("click", () => inp.click());
+    // A keyboard reaches the drop area like a button: Tab to it, Enter or Space opens the picker.
+    dz.setAttribute("role", "button");
+    dz.tabIndex = 0;
+    dz.setAttribute("aria-label", `${placeholder} — tekan Enter untuk memilih file`);
+    dz.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") { e.preventDefault(); inp.click(); }
+    });
     inp.addEventListener("change", () => take(inp.files));
     dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("drag-over"); });
     dz.addEventListener("dragleave", () => dz.classList.remove("drag-over"));
@@ -1921,7 +1958,7 @@ body.auth-locked .app {
     const S = 128, cx = 64, cy = 64, radius = 46, sw = 20;
     const circ = 2 * Math.PI * radius;
     if (total === 0) {
-      return `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="#DDE5F5" stroke-width="${sw}"/><text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-family="Inter,sans-serif" font-size="13" fill="#7589A8">0</text></svg>`;
+      return `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}"><circle cx="${cx}" cy="${cy}" r="${radius}" fill="none" stroke="#DDE5F5" stroke-width="${sw}"/><text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="middle" font-family="Inter,sans-serif" font-size="13" fill="#56698A">0</text></svg>`;
     }
     const slices = [
       { value: r, color: '#EF4444' },
@@ -1940,7 +1977,7 @@ body.auth-locked .app {
       });
     }
     svgCircles += `<text x="${cx}" y="${cy - 5}" text-anchor="middle" font-family="Inter,sans-serif" font-size="22" font-weight="800" fill="#0B1F3A">${total}</text>`;
-    svgCircles += `<text x="${cx}" y="${cy + 13}" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#7589A8">FAKTA</text>`;
+    svgCircles += `<text x="${cx}" y="${cy + 13}" text-anchor="middle" font-family="Inter,sans-serif" font-size="9" fill="#56698A">FAKTA</text>`;
     return `<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}">${svgCircles}</svg>`;
   }
 
@@ -1954,7 +1991,6 @@ body.auth-locked .app {
     // units would push the "Total Fakta" stat card out of shape.
     const shownUnits = uniqueUnits.slice(0, 3).map(escapeHtml).join(", ")
       + (uniqueUnits.length > 3 ? ", …" : "");
-    const unitStr = uniqueUnits.length ? ` &middot; Unit: <strong>${shownUnits}</strong>` : '';
 
     const mode = data.mode || "excel";
     const conflicts = data.conflict_count || 0;
@@ -2025,8 +2061,10 @@ body.auth-locked .app {
           <div class="stat-card entailed"><div class="stat-num">${e}</div><div class="stat-label">Sesuai</div></div>
         </div>
         <div class="stat-row">
-          <div class="stat-card inconclusive"><div class="stat-num">${i}</div><div class="stat-label">Tidak Cukup Data</div></div>
-          <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total Fakta${unitStr}</div></div>
+          <div class="stat-card inconclusive"><div class="stat-num">${i}</div><div class="stat-label">Tidak Cukup Data<span class="stat-hint">Tabel tidak bisa memastikan klaimnya; alasannya ada di Rincian tiap klaim.</span></div></div>
+          ${uniqueUnits.length
+            ? `<div class="stat-card total"><div class="stat-num stat-num-text">${shownUnits}</div><div class="stat-label">Satuan tabel referensi</div></div>`
+            : `<div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total fakta</div></div>`}
         </div>
       </div>
     </div>${gapStrip}${unreadStrip}${formatStrip}`;
@@ -2058,7 +2096,8 @@ body.auth-locked .app {
     const toolbarRow = total > 0 ? `<div class="toolbar-row">
       <div class="search-box">
         <span class="material-symbols-outlined">search</span>
-        <input type="text" id="fact-search-inp" placeholder="Cari indikator atau kutipan...">
+        <input type="text" id="fact-search-inp" placeholder="Cari indikator atau kutipan..."
+               aria-label="Cari klaim menurut indikator atau kutipan">
       </div>
       ${sourceFilter}
       ${pageFilter}
@@ -2108,7 +2147,7 @@ body.auth-locked .app {
               ? `<span class="fact-val-label">Nilai:</span> <span class="fact-val ${valCls}">${computedVal}</span> <span class="fact-val-label">(klaim ${arah} ${claimedVal})</span>`
               : `<span class="na">Tidak ditemukan di data</span>`;
           } else if (hasClaimed) {
-            comparison = `<span class="fact-val-label">PDF:</span> <span class="fact-val ${valCls}">${claimedVal}</span>`;
+            comparison = `<span class="fact-val-label">Dokumen:</span> <span class="fact-val ${valCls}">${claimedVal}</span>`;
             if (computedVal) {
               comparison += ` <span class="fact-arrow">&#8594;</span> <span class="fact-val-label">Referensi:</span> <span class="fact-val">${computedVal}</span>`;
             } else if (verdict === "Inconclusive") {
@@ -2145,7 +2184,7 @@ body.auth-locked .app {
           const reasonParts = (item.reasoning || "").split(" | ").map((s) => s.trim()).filter(Boolean);
           const detail = reasonParts.length
             ? `<details class="fact-detail">
-                <summary>Detail <span class="material-symbols-outlined">expand_more</span></summary>
+                <summary>Rincian <span class="material-symbols-outlined">expand_more</span></summary>
                 <ul>${reasonParts.map((s) => `<li>${escapeHtml(s)}</li>`).join("")}</ul>
               </details>`
             : "";
@@ -2469,11 +2508,13 @@ body.auth-locked .app {
       <td>${who}</td>
       <td>${escapeHtml(MODE_LABELS[item.mode] || item.mode)}</td>
       <td class="history-counts">
-        <span class="is-match">✓ ${item.n_match}</span>
-        <span class="is-mismatch">✗ ${item.n_mismatch}</span>
-        <span class="is-unverified">? ${item.n_unverified}</span>
+        <span class="is-match" title="Sesuai">✓ ${item.n_match}</span>
+        <span class="is-mismatch" title="Tidak Sesuai">✗ ${item.n_mismatch}</span>
+        <span class="is-unverified" title="Tidak Cukup Data">? ${item.n_unverified}</span>
+        <span class="sr-only">${item.n_match} sesuai, ${item.n_mismatch} tidak sesuai, ${item.n_unverified} tidak cukup data</span>
       </td>
       <td>${escapeHtml(formatDuration(item.duration_s))}</td>
+      <td class="history-open"><span class="material-symbols-outlined">chevron_right</span></td>
     </tr>`;
   }
 
@@ -2506,7 +2547,7 @@ body.auth-locked .app {
       return;
     }
     listEl.innerHTML = `<div class="history-table-wrap"><table class="data-table history-table">
-      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th></tr></thead>
+      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th><th><span class="sr-only">Buka</span></th></tr></thead>
       <tbody>${historyItems.map(renderHistoryRow).join("")}</tbody>
     </table></div>`;
   }
@@ -2970,8 +3011,10 @@ body.auth-locked .app {
     document.getElementById("settings-detail").innerHTML = `
       <div class="card-header">
         <div class="settings-detail-head">
-          <h2>${escapeHtml(label)}${pub.hidden ? ` <span class="tag-builtin">Disembunyikan</span>` : ""}
-            <span class="muted-text">Padanan dipakai mesin dan Tinjauan AI; catatan hanya dibaca Tinjauan AI.</span></h2>
+          <div class="settings-title">
+            <h2>${escapeHtml(label)}${pub.hidden ? ` <span class="tag-builtin">Disembunyikan</span>` : ""}</h2>
+            <span class="muted-text">Padanan dipakai mesin dan Tinjauan AI; catatan hanya dibaca Tinjauan AI.</span>
+          </div>
           <button type="button" class="cancel-btn" id="settings-reset-open">
             <span class="material-symbols-outlined">restart_alt</span>Kembalikan ke awal</button>
         </div>
@@ -3204,6 +3247,7 @@ body.auth-locked .app {
 
     function unlock() {
       document.body.classList.remove("auth-locked");
+      document.querySelector(".app").inert = false;
       gate.style.opacity = "0";
       setTimeout(() => { gate.hidden = true; }, 350);
       openFromHash();
