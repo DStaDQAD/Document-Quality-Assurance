@@ -258,6 +258,116 @@ select { cursor: pointer; }
   font-size: 13px; color: var(--text-900);
 }
 .history-banner .material-symbols-outlined { font-size: 18px; color: var(--blue-400); }
+
+/* ── Pengaturan (team settings): publication list on the left, the chosen one's detail on the
+   right. The list is the navigation; the detail is one card with its own three tabs. ── */
+.settings-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); gap: 18px; align-items: start; }
+.settings-layout > .card { margin-bottom: 0; }
+.settings-who {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 14px; font-size: 13px; color: var(--text-500);
+}
+.settings-who .checker-field { margin-right: 0; }
+.settings-who .checker-field input { width: 220px; }
+.settings-who.is-missing .checker-field { border-color: var(--red-700); box-shadow: 0 0 0 3px var(--red-100); }
+.pub-list { list-style: none; margin: 0; padding: 6px; }
+.pub-item {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r);
+  cursor: pointer; transition: background 0.15s;
+}
+.pub-item:hover { background: var(--blue-50); }
+.pub-item.is-selected { background: var(--blue-100); }
+.pub-item:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; }
+.pub-name { flex: 1; min-width: 0; font-size: 13px; font-weight: 600; color: var(--text-900); line-height: 1.3; }
+.pub-state { display: block; font-size: 11px; font-weight: 500; color: var(--text-400); margin-top: 1px; }
+.pub-item.is-hidden .pub-name { color: var(--text-400); }
+/* A real checkbox, drawn as a switch: keyboard, form semantics and screen readers come free. */
+.switch { position: relative; width: 34px; height: 20px; flex-shrink: 0; }
+.switch input { appearance: none; -webkit-appearance: none; margin: 0; width: 100%; height: 100%;
+  border-radius: 999px; background: var(--border-dark); cursor: pointer; transition: background 0.15s; }
+.switch input:checked { background: var(--blue-500); }
+.switch input:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; }
+.switch input:disabled { opacity: 0.5; cursor: wait; }
+.switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--white); box-shadow: 0 1px 2px rgba(11,31,58,0.25);
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1); pointer-events: none; }
+.switch:has(input:checked)::after { transform: translateX(14px); }
+.settings-detail-head { display: flex; align-items: flex-start; gap: 12px; }
+.settings-detail-head h2 { flex: 1; margin: 0; font-size: 16px; font-weight: 700; letter-spacing: -0.01em; color: var(--text-900); }
+.settings-detail-head .muted-text { display: block; font-size: 12px; font-weight: 400; margin-top: 3px; }
+.settings-tabs { display: flex; gap: 2px; margin: 16px -22px -18px; padding: 0 16px; }
+.settings-tab {
+  padding: 10px 12px; border: none; background: none; cursor: pointer; font-family: inherit;
+  font-size: 13px; font-weight: 600; color: var(--text-500); border-bottom: 2px solid transparent;
+  display: inline-flex; align-items: center; gap: 6px; transition: color 0.15s, border-color 0.15s;
+}
+.settings-tab:hover { color: var(--text-900); }
+.settings-tab.active { color: var(--blue-600); border-bottom-color: var(--blue-500); }
+.settings-tab:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; border-radius: var(--r); }
+.settings-tab .subtab-count { font-variant-numeric: tabular-nums; }
+.settings-body { padding: 18px 22px 22px; }
+.settings-help { font-size: 13px; color: var(--text-500); margin: 0 0 14px; max-width: 70ch; }
+.settings-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-bottom: 6px; }
+.settings-form label { font-size: 12px; font-weight: 600; color: var(--text-500); display: grid; gap: 5px; }
+.settings-form .run-btn, .note-add .run-btn { padding: 9px 16px; }
+.settings-feedback { font-size: 12px; margin: 6px 0 0; min-height: 18px; }
+.settings-feedback.is-warning { color: var(--amber-700); }
+.settings-feedback.is-error { color: var(--red-700); }
+.settings-feedback.is-ok { color: var(--green-700); }
+.alias-table { margin-top: 14px; }
+.alias-table td.alias-arrow { color: var(--text-400); width: 1%; padding-left: 0; padding-right: 0; }
+.alias-table td.alias-meta { color: var(--text-400); font-size: 11px; text-align: right; white-space: nowrap; }
+.alias-table td { white-space: normal; }
+.tag-builtin { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+  color: var(--text-500); background: var(--page-bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
+.icon-btn {
+  border: none; background: none; cursor: pointer; color: var(--text-400); padding: 4px; border-radius: var(--r);
+  display: inline-flex; align-items: center; justify-content: center; transition: color 0.15s, background 0.15s;
+}
+.icon-btn .material-symbols-outlined { font-size: 18px; }
+.icon-btn:hover:not(:disabled) { color: var(--text-900); background: var(--page-bg); }
+.icon-btn.is-danger:hover:not(:disabled) { color: var(--red-700); background: var(--red-100); }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 1px; }
+.builtin-block { margin-top: 18px; }
+.builtin-block summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-500); padding: 4px 0; }
+.builtin-block summary:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; border-radius: var(--r); }
+.settings-empty { font-size: 13px; color: var(--text-400); padding: 12px 0 4px; }
+.note-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
+.note-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
+  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--white); }
+.note-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text-900); white-space: pre-wrap; overflow-wrap: anywhere; }
+.note-meta { display: block; font-size: 11px; color: var(--text-400); margin-top: 4px; }
+.note-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.note-item textarea { min-height: 70px; }
+.note-edit-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
+.note-add { display: grid; gap: 8px; }
+.note-add-row { display: flex; align-items: center; gap: 10px; }
+.word-count { margin-right: auto; font-size: 12px; color: var(--text-400); font-variant-numeric: tabular-nums; }
+.word-count.is-over { color: var(--red-700); font-weight: 600; }
+.change-list { list-style: none; margin: 0; padding: 0; }
+.change-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
+.change-item:last-child { border-bottom: none; }
+.change-when { color: var(--text-400); font-size: 12px; font-variant-numeric: tabular-nums; }
+.change-what { color: var(--text-900); overflow-wrap: anywhere; }
+.change-what .muted-text { font-size: 12px; }
+.reset-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 12px; padding: 10px 12px;
+  border: 1px solid #FECACA; border-radius: var(--r); background: #FFF5F5; font-size: 13px; color: #991B1B; }
+.reset-strip .grow { flex: 1; min-width: 200px; }
+.danger-btn { background: var(--red-700); color: white; border: none; border-radius: var(--r); padding: 8px 14px;
+  font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer; }
+.danger-btn:hover:not(:disabled) { background: #991B1B; }
+.danger-btn:disabled { opacity: 0.5; cursor: wait; }
+.settings-skeleton { display: grid; gap: 10px; padding: 18px 22px; }
+.settings-skeleton span { height: 12px; border-radius: 4px; background: linear-gradient(90deg, var(--page-bg), var(--border), var(--page-bg));
+  background-size: 200% 100%; animation: settings-shimmer 1.2s ease-in-out infinite; }
+@keyframes settings-shimmer { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+@media (prefers-reduced-motion: reduce) { .settings-skeleton span { animation: none; } .switch::after { transition: none; } }
+@media (max-width: 860px) {
+  .settings-layout { grid-template-columns: minmax(0, 1fr); }
+  .settings-form { grid-template-columns: minmax(0, 1fr); }
+  .change-item { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+}
 .history-back {
   margin-left: auto; border: none; background: none; cursor: pointer;
   color: var(--blue-400); font-family: inherit; font-size: 13px; font-weight: 600;
@@ -991,6 +1101,10 @@ body.auth-locked .app {
       <span class="material-symbols-outlined">history</span>
       <span class="nav-text">Riwayat</span>
     </a>
+    <a class="nav-item inactive-nav" data-tab="settings" title="Pengaturan">
+      <span class="material-symbols-outlined">tune</span>
+      <span class="nav-text">Pengaturan</span>
+    </a>
     <!-- "Lihat Data" browses /api/tables (the ground-truth SQLite DB). That DB is
          not shipped to the deployment (only synthetic sample data), so the tab is
          hidden here. Uncomment to restore it for local development. -->
@@ -1134,6 +1248,32 @@ body.auth-locked .app {
       </div>
     </div>
 
+    <!-- Panel: Pengaturan. The team's shared settings per publication (GET /api/settings,
+         team_settings.py): visibility on the upload card, aliases, notes for the Tinjauan AI. -->
+    <div class="panel" id="panel-settings">
+      <div class="panel-wrap-wide">
+        <div class="settings-who" id="settings-who">
+          <label class="checker-field" title="Setiap perubahan dicatat dengan nama ini">
+            <span class="material-symbols-outlined">person</span>
+            <input type="text" id="settings-name" maxlength="80" autocomplete="name" placeholder="Nama Anda">
+          </label>
+          <span id="settings-who-help">Perubahan berlaku untuk seluruh tim dan dicatat dengan nama Anda.</span>
+        </div>
+        <div class="error-banner" id="settings-error" hidden></div>
+        <div class="settings-layout">
+          <div class="card">
+            <div class="card-header"><span class="form-label" style="margin:0">Publikasi</span></div>
+            <ul class="pub-list" id="pub-list" aria-label="Publikasi">
+              <li class="settings-skeleton"><span></span><span></span><span></span></li>
+            </ul>
+          </div>
+          <div class="card" id="settings-detail">
+            <div class="settings-skeleton"><span></span><span></span><span></span><span></span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Panel: Lihat Data -->
     <div class="panel" id="panel-data">
       <div class="panel-wrap-wide">
@@ -1191,7 +1331,7 @@ body.auth-locked .app {
 </div>
 
 <script>
-  const PANEL_TITLES = { paired: "Verifikasi", history: "Riwayat", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi", history: "Riwayat", settings: "Pengaturan", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
   function showTab(tab) {
@@ -1204,6 +1344,8 @@ body.auth-locked .app {
     }
     // Reloaded on every visit, so a check finished a moment ago is already listed.
     if (tab === "history") loadHistory(true);
+    // Reloaded on every visit too: a teammate may have changed something meanwhile.
+    if (tab === "settings") loadSettings();
   }
 
   // The nav item and header title; an entry opened from Riwayat shows on the Verifikasi panel
@@ -2680,6 +2822,369 @@ body.auth-locked .app {
     });
   });
 
+  // ── Pengaturan ───────────────────────────────────────────────────────────────────────────
+  // Shared by the whole team (/api/settings). The name field is the same one Riwayat stores
+  // (CHECKER_NAME_KEY); every change is sent with it and logged under it.
+  let settingsData = null;
+  let settingsSelected = "uang-beredar";
+  let settingsTab = "aliases";
+  let settingsResetOpen = false;
+  let settingsChanges = null;
+  let settingsRequest = 0;
+  const settingsNameEl = document.getElementById("settings-name");
+  const settingsWho = document.getElementById("settings-who");
+  const settingsErrorEl = document.getElementById("settings-error");
+  const ACTION_WORDS = { tambah: "menambah", ubah: "mengubah", hapus: "menghapus", urutkan: "mengurutkan",
+                         sembunyikan: "menyembunyikan", tampilkan: "menampilkan" };
+  const KIND_WORDS = { alias: "padanan", note: "catatan", visibility: "publikasi", reset: "pengaturan" };
+
+  function settingsName() {
+    return settingsNameEl.value.trim();
+  }
+  function syncNameFields(value) {
+    settingsNameEl.value = value;
+    checkerNameEl.value = value;
+    try { localStorage.setItem(CHECKER_NAME_KEY, value); } catch (_) {}
+  }
+  const SETTINGS_WHO_HELP = "Perubahan berlaku untuk seluruh tim dan dicatat dengan nama Anda.";
+  settingsNameEl.addEventListener("input", () => {
+    if (!settingsName()) return;
+    settingsWho.classList.remove("is-missing");
+    document.getElementById("settings-who-help").textContent = SETTINGS_WHO_HELP;
+  });
+  settingsNameEl.addEventListener("change", () => syncNameFields(settingsName()));
+  checkerNameEl.addEventListener("change", () => { settingsNameEl.value = checkerNameEl.value.trim(); });
+
+  // The name is asked for at the moment it is needed, next to the field, never in a dialog.
+  function requireName() {
+    if (settingsName()) return true;
+    settingsWho.classList.add("is-missing");
+    document.getElementById("settings-who-help").textContent =
+      "Isi nama Anda dulu: setiap perubahan dicatat dengan nama pengubahnya.";
+    settingsNameEl.focus();
+    return false;
+  }
+
+  async function settingsSend(method, url, body) {
+    const res = await fetch(url, {
+      method, headers: body ? { "Content-Type": "application/json" } : {},
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    if (!res.ok) {
+      let detail = `Server membalas ${res.status}.`;
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  function showSettingsError(message) {
+    settingsErrorEl.textContent = message || "";
+    settingsErrorEl.hidden = !message;
+  }
+
+  async function loadSettings(keepTab) {
+    const request = ++settingsRequest;
+    settingsNameEl.value = checkerNameEl.value.trim();
+    try {
+      const data = await fetchJson("/api/settings");
+      if (request !== settingsRequest) return;
+      settingsData = data;
+      settingsChanges = null;
+      showSettingsError("");
+      applyHiddenPublications(data.publications);
+      if (!keepTab) settingsResetOpen = false;
+      renderPubList();
+      renderSettingsDetail();
+    } catch (err) {
+      if (request !== settingsRequest) return;
+      showSettingsError(err.message);
+    }
+  }
+
+  function currentPub() {
+    return settingsData.publications.find((p) => p.key === settingsSelected);
+  }
+
+  function renderPubList() {
+    const list = document.getElementById("pub-list");
+    list.innerHTML = settingsData.publications.map((p) => {
+      const label = PUBLICATIONS[p.key]?.label || p.key;
+      return `<li class="pub-item${p.key === settingsSelected ? " is-selected" : ""}${p.hidden ? " is-hidden" : ""}"
+                  data-key="${p.key}" tabindex="0" aria-current="${p.key === settingsSelected}">
+        <span class="pub-name">${escapeHtml(label)}
+          <span class="pub-state">${p.hidden ? "Disembunyikan dari pilihan" : "Tampil di pilihan"}</span></span>
+        <span class="switch"><input type="checkbox" role="switch" data-key="${p.key}" ${p.hidden ? "" : "checked"}
+              aria-label="Tampilkan ${escapeHtml(label)} di pilihan Jenis publikasi"></span>
+      </li>`;
+    }).join("");
+  }
+
+  document.getElementById("pub-list").addEventListener("click", async (e) => {
+    const toggle = e.target.closest("input[role=switch]");
+    if (toggle) {
+      e.stopPropagation();
+      if (!requireName()) { toggle.checked = !toggle.checked; return; }
+      toggle.disabled = true;
+      try {
+        await settingsSend("PUT", `/api/settings/${toggle.dataset.key}/visibility`,
+                           { hidden: !toggle.checked, by: settingsName() });
+        await loadSettings(true);
+      } catch (err) {
+        toggle.checked = !toggle.checked;
+        toggle.disabled = false;
+        showSettingsError(err.message);
+      }
+      return;
+    }
+    const item = e.target.closest(".pub-item");
+    if (item) selectPublication(item.dataset.key);
+  });
+  document.getElementById("pub-list").addEventListener("keydown", (e) => {
+    const item = e.target.closest(".pub-item");
+    if (!item || e.target.matches("input")) return;
+    if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectPublication(item.dataset.key); }
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const next = e.key === "ArrowDown" ? item.nextElementSibling : item.previousElementSibling;
+      if (next) next.focus();
+    }
+  });
+
+  function selectPublication(key) {
+    settingsSelected = key;
+    settingsResetOpen = false;
+    settingsChanges = null;
+    renderPubList();
+    renderSettingsDetail();
+  }
+
+  function renderSettingsDetail() {
+    const pub = currentPub();
+    const label = PUBLICATIONS[pub.key]?.label || pub.key;
+    const tabs = [
+      ["aliases", "Padanan nama", pub.team_aliases.length],
+      ["notes", "Catatan", pub.notes.length],
+      ["changes", "Riwayat perubahan", null],
+    ];
+    document.getElementById("settings-detail").innerHTML = `
+      <div class="card-header">
+        <div class="settings-detail-head">
+          <h2>${escapeHtml(label)}${pub.hidden ? ` <span class="tag-builtin">Disembunyikan</span>` : ""}
+            <span class="muted-text">Padanan dipakai mesin dan Tinjauan AI; catatan hanya dibaca Tinjauan AI.</span></h2>
+          <button type="button" class="cancel-btn" id="settings-reset-open">
+            <span class="material-symbols-outlined">restart_alt</span>Kembalikan ke awal</button>
+        </div>
+        ${settingsResetOpen ? `
+        <div class="reset-strip" role="alert">
+          <span class="grow">Padanan tim dihapus, catatan kembali ke catatan awal, dan publikasi ini ditampilkan lagi.</span>
+          <button type="button" class="cancel-btn" id="settings-reset-cancel">Batal</button>
+          <button type="button" class="danger-btn" id="settings-reset-confirm">Ya, kembalikan</button>
+        </div>` : ""}
+        <div class="settings-tabs" role="tablist">
+          ${tabs.map(([key, text, count]) => `<button type="button" role="tab" class="settings-tab${key === settingsTab ? " active" : ""}"
+              data-tab="${key}" aria-selected="${key === settingsTab}">${text}${count === null ? "" : ` <span class="subtab-count">${count}</span>`}</button>`).join("")}
+        </div>
+      </div>
+      <div class="settings-body" role="tabpanel">${settingsTab === "aliases" ? aliasesHtml(pub)
+        : settingsTab === "notes" ? notesHtml(pub) : `<p class="settings-empty">Memuat riwayat perubahan…</p>`}</div>`;
+    if (settingsTab === "changes") loadChanges();
+  }
+
+  function aliasesHtml(pub) {
+    const rows = pub.known_rows.map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+    const team = pub.team_aliases.map((a) => `<tr>
+        <td>${escapeHtml(a.phrase)}</td><td class="alias-arrow">→</td><td>${escapeHtml(a.row)}</td>
+        <td class="alias-meta">${escapeHtml(a.by)} · ${escapeHtml(formatWib(a.at).replace(" WIB", ""))}</td>
+        <td style="width:1%"><button type="button" class="icon-btn is-danger" data-delete-alias="${a.id}"
+            aria-label="Hapus padanan ${escapeHtml(a.phrase)}"><span class="material-symbols-outlined">delete</span></button></td>
+      </tr>`).join("");
+    const builtin = pub.builtin_aliases.map((a) => `<tr>
+        <td>${escapeHtml(a.phrase)}</td><td class="alias-arrow">→</td><td>${escapeHtml(a.row)}</td>
+        <td class="alias-meta"><span class="tag-builtin">bawaan</span></td></tr>`).join("");
+    return `
+      <p class="settings-help">Jika laporan menulis nama yang berbeda dari nama baris tabel, tambahkan padanannya.
+        Padanan berlaku bila nama metrik dalam klaim <strong>sama persis</strong> dengan frasanya; untuk variasi lain, tambahkan padanan baru.</p>
+      <form class="settings-form" id="alias-form" autocomplete="off">
+        <label>Frasa di laporan<input type="text" id="alias-phrase" maxlength="200" placeholder="mis. AFLN Indonesia" required></label>
+        <label>Baris tabel<input type="text" id="alias-row" maxlength="300" list="alias-rows" placeholder="mis. Aset" required></label>
+        <datalist id="alias-rows">${rows}</datalist>
+        <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah padanan</button>
+      </form>
+      <p class="settings-feedback" id="alias-feedback" aria-live="polite">${pub.known_rows.length ? ""
+        : "Saran nama baris muncul setelah publikasi ini pernah diperiksa."}</p>
+      ${team ? `<div class="history-table-wrap alias-table"><table class="data-table">
+          <thead><tr><th>Frasa di laporan</th><th></th><th>Baris tabel</th><th></th><th></th></tr></thead>
+          <tbody>${team}</tbody></table></div>`
+        : `<p class="settings-empty">Belum ada padanan dari tim untuk publikasi ini.</p>`}
+      ${builtin ? `<details class="builtin-block"><summary>Padanan bawaan (${pub.builtin_aliases.length})</summary>
+          <div class="history-table-wrap alias-table"><table class="data-table"><tbody>${builtin}</tbody></table></div>
+        </details>` : ""}`;
+  }
+
+  function wordCount(texts) {
+    return texts.reduce((n, t) => n + (t.trim() ? t.trim().split(/\s+/).length : 0), 0);
+  }
+
+  function notesHtml(pub) {
+    const used = wordCount(pub.notes.map((n) => n.text));
+    const items = pub.notes.map((n, i) => `<li class="note-item" data-note="${n.id}">
+        <div class="note-text">${escapeHtml(n.text)}
+          <span class="note-meta">${n.seeded && n.by === "catatan awal" ? "Catatan awal" : escapeHtml(n.by)}${n.at ? " · " + escapeHtml(formatWib(n.at).replace(" WIB", "")) : ""}</span></div>
+        <div class="note-actions">
+          <button type="button" class="icon-btn" data-move="-1" ${i === 0 ? "disabled" : ""} aria-label="Naikkan catatan"><span class="material-symbols-outlined">arrow_upward</span></button>
+          <button type="button" class="icon-btn" data-move="1" ${i === pub.notes.length - 1 ? "disabled" : ""} aria-label="Turunkan catatan"><span class="material-symbols-outlined">arrow_downward</span></button>
+          <button type="button" class="icon-btn" data-edit-note aria-label="Ubah catatan"><span class="material-symbols-outlined">edit</span></button>
+          <button type="button" class="icon-btn is-danger" data-delete-note aria-label="Hapus catatan"><span class="material-symbols-outlined">delete</span></button>
+        </div></li>`).join("");
+    return `
+      <p class="settings-help">Konvensi cara membaca kalimat publikasi ini, dalam kata-kata tim. Tinjauan AI membacanya
+        saat memeriksa ulang klaim Tidak Sesuai dan Tidak Cukup Data; jawabannya tetap dicek program.
+        Contoh: “secara triwulanan” → tabel %qtq; “secara tahunan” → tabel %yoy.</p>
+      ${items ? `<ol class="note-list">${items}</ol>` : `<p class="settings-empty">Belum ada catatan. Tulis konvensi pertama di bawah.</p>`}
+      <form class="note-add" id="note-form">
+        <textarea id="note-text" maxlength="2000" placeholder="Tulis konvensi baru…" aria-label="Catatan baru"></textarea>
+        <div class="note-add-row">
+          <span class="word-count" id="note-words" data-used="${used}">${used} / ${settingsData.notes_max_words} kata</span>
+          <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah catatan</button>
+        </div>
+        <p class="settings-feedback" id="note-feedback" aria-live="polite"></p>
+      </form>`;
+  }
+
+  async function loadChanges() {
+    const key = settingsSelected;
+    const body = document.querySelector("#settings-detail .settings-body");
+    try {
+      if (!settingsChanges) settingsChanges = (await fetchJson(`/api/settings/changes?publication=${key}`)).changes;
+      if (key !== settingsSelected || settingsTab !== "changes") return;
+      body.innerHTML = settingsChanges.length ? `<ul class="change-list">${settingsChanges.map((c) => `<li class="change-item">
+          <span class="change-when">${escapeHtml(formatWib(c.at))}</span>
+          <span class="change-what"><strong>${escapeHtml(c.by)}</strong> ${ACTION_WORDS[c.action] || c.action}
+            ${c.kind === "reset" ? "mengembalikan pengaturan ke awal" : KIND_WORDS[c.kind] || c.kind}
+            ${c.after || c.before ? `<span class="muted-text">· ${escapeHtml(c.after || c.before)}</span>` : ""}</span>
+        </li>`).join("")}</ul>` : `<p class="settings-empty">Belum ada perubahan pada publikasi ini.</p>`;
+    } catch (err) {
+      body.innerHTML = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
+    }
+  }
+
+  function setFeedback(id, kind, text) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.className = `settings-feedback${kind ? " is-" + kind : ""}`;
+    el.textContent = text;
+  }
+
+  // A failed save keeps what was typed; a successful one reloads, then says what happened.
+  async function settingsAction(button, fn, feedbackId, done) {
+    if (!requireName()) return;
+    if (button) button.disabled = true;
+    try {
+      const result = await fn();
+      await loadSettings(true);
+      const warnings = (result && result.warnings) || [];
+      if (feedbackId) setFeedback(feedbackId, warnings.length ? "warning" : "ok", warnings.length ? warnings.join(" ") : done);
+    } catch (err) {
+      if (feedbackId) setFeedback(feedbackId, "error", err.message); else showSettingsError(err.message);
+      if (button) button.disabled = false;
+    }
+  }
+
+  document.getElementById("settings-detail").addEventListener("click", (e) => {
+    const pub = settingsSelected;
+    const tab = e.target.closest(".settings-tab");
+    if (tab) { settingsTab = tab.dataset.tab; renderSettingsDetail(); return; }
+    if (e.target.closest("#settings-reset-open")) { settingsResetOpen = true; renderSettingsDetail(); return; }
+    if (e.target.closest("#settings-reset-cancel")) { settingsResetOpen = false; renderSettingsDetail(); return; }
+    const confirmReset = e.target.closest("#settings-reset-confirm");
+    if (confirmReset) {
+      settingsAction(confirmReset, () => settingsSend("POST", `/api/settings/${pub}/reset`, { by: settingsName() }));
+      return;
+    }
+    const delAlias = e.target.closest("[data-delete-alias]");
+    if (delAlias) {
+      settingsAction(delAlias, () => settingsSend("DELETE",
+        `/api/settings/${pub}/aliases/${delAlias.dataset.deleteAlias}?by=${encodeURIComponent(settingsName())}`),
+        "alias-feedback", "Padanan dihapus.");
+      return;
+    }
+    const noteEl = e.target.closest(".note-item");
+    if (!noteEl) return;
+    const id = Number(noteEl.dataset.note);
+    const move = e.target.closest("[data-move]");
+    if (move) {
+      const ids = currentPub().notes.map((n) => n.id);
+      const i = ids.indexOf(id), j = i + Number(move.dataset.move);
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+      settingsAction(move, () => settingsSend("PUT", `/api/settings/${pub}/notes/order`, { ids, by: settingsName() }));
+      return;
+    }
+    if (e.target.closest("[data-delete-note]")) {
+      settingsAction(e.target.closest("[data-delete-note]"), () => settingsSend("DELETE",
+        `/api/settings/${pub}/notes/${id}?by=${encodeURIComponent(settingsName())}`), "note-feedback", "Catatan dihapus.");
+      return;
+    }
+    if (e.target.closest("[data-edit-note]")) {
+      const note = currentPub().notes.find((n) => n.id === id);
+      noteEl.innerHTML = `<div style="flex:1">
+          <textarea aria-label="Ubah catatan" maxlength="2000">${escapeHtml(note.text)}</textarea>
+          <div class="note-edit-actions">
+            <button type="button" class="cancel-btn" data-cancel-edit>Batal</button>
+            <button type="button" class="run-btn" data-save-edit><span class="material-symbols-outlined">check</span>Simpan</button>
+          </div></div>`;
+      noteEl.querySelector("textarea").focus();
+      return;
+    }
+    if (e.target.closest("[data-cancel-edit]")) { renderSettingsDetail(); return; }
+    const save = e.target.closest("[data-save-edit]");
+    if (save) {
+      const text = noteEl.querySelector("textarea").value;
+      settingsAction(save, () => settingsSend("PUT", `/api/settings/${pub}/notes/${id}`, { text, by: settingsName() }),
+                     "note-feedback", "Catatan disimpan.");
+    }
+  });
+
+  document.getElementById("settings-detail").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const pub = settingsSelected;
+    const button = e.target.querySelector("button[type=submit]");
+    if (e.target.id === "alias-form") {
+      const phrase = document.getElementById("alias-phrase").value;
+      const row = document.getElementById("alias-row").value;
+      settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/aliases`, { phrase, row, by: settingsName() }),
+                     "alias-feedback", "Padanan ditambahkan; berlaku mulai pemeriksaan berikutnya.");
+    } else if (e.target.id === "note-form") {
+      const text = document.getElementById("note-text").value;
+      settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/notes`, { text, by: settingsName() }),
+                     "note-feedback", "Catatan ditambahkan; dipakai Tinjauan AI mulai pemeriksaan berikutnya.");
+    }
+  });
+
+  document.getElementById("settings-detail").addEventListener("input", (e) => {
+    if (e.target.id !== "note-text") return;
+    const counter = document.getElementById("note-words");
+    const total = Number(counter.dataset.used) + wordCount([e.target.value]);
+    counter.textContent = `${total} / ${settingsData.notes_max_words} kata`;
+    counter.classList.toggle("is-over", total > settingsData.notes_max_words);
+  });
+
+  // The upload card's "Jenis publikasi": a hidden publication leaves the choices, except the one
+  // already chosen (a running form keeps its value).
+  function applyHiddenPublications(publications) {
+    const hidden = new Set(publications.filter((p) => p.hidden).map((p) => p.key));
+    const chosen = publicationSelect.value;
+    publicationSelect.querySelectorAll("option[value]").forEach((opt) => {
+      if (!opt.value) return;
+      const hide = hidden.has(opt.value) && opt.value !== chosen;
+      opt.hidden = hide;
+      opt.disabled = hide;
+    });
+  }
+  async function refreshHiddenPublications() {
+    try { applyHiddenPublications((await fetchJson("/api/settings")).publications); } catch (_) { /* keep all */ }
+  }
+
   // Sidebar toggle
   document.getElementById("sidebar-toggle").addEventListener("click", () => {
     document.getElementById("sidebar").classList.toggle("collapsed");
@@ -2702,6 +3207,7 @@ body.auth-locked .app {
       gate.style.opacity = "0";
       setTimeout(() => { gate.hidden = true; }, 350);
       openFromHash();
+      refreshHiddenPublications();
     }
     function showForm() {
       gate.classList.remove("is-checking");

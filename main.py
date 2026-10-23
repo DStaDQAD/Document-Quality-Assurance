@@ -74,7 +74,10 @@ from fastapi.responses import (
     StreamingResponse,
 )
 
+from pydantic import BaseModel
+
 import check_history
+import team_settings
 from db import DB_PATH, fetch_table_rows, get_readonly_db, list_tables
 from excel_parser_bi import list_sheet_names
 from excel_ingestion import ingest_bytes
@@ -1084,6 +1087,120 @@ async def get_history_endpoint(check_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
     summary, result = entry
     return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
+
+
+# ── Pengaturan (team_settings): hide/show publications, team aliases, notes for the Tinjauan AI.
+# Shared by everyone signed in; every change carries the editor's name (`by`) and is logged.
+
+_SETTINGS_UNAVAILABLE = "Pengaturan tidak bisa dibuka sekarang; coba lagi sebentar lagi."
+
+
+class _ByBody(BaseModel):
+    by: str = ""
+
+
+class _VisibilityBody(_ByBody):
+    hidden: bool
+
+
+class _AliasBody(_ByBody):
+    phrase: str = ""
+    row: str = ""
+
+
+class _NoteBody(_ByBody):
+    text: str = ""
+
+
+class _NoteOrderBody(_ByBody):
+    ids: List[int]
+
+
+async def _settings_call(fn, *args):
+    """Run a team_settings call off the event loop, mapping its errors to HTTP."""
+    try:
+        return await asyncio.to_thread(fn, *args)
+    except team_settings.UnknownPublication as exc:
+        raise HTTPException(status_code=404, detail="Publikasi ini tidak dikenal.") from exc
+    except team_settings.SettingsError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.warning("Settings call %s failed", getattr(fn, "__name__", fn), exc_info=True)
+        raise HTTPException(status_code=503, detail=_SETTINGS_UNAVAILABLE) from exc
+
+
+def _settings_snapshot() -> dict:
+    hidden = team_settings.hidden_publications()
+    return {
+        "publications": [
+            {
+                "key": key,
+                "hidden": key in hidden,
+                "builtin_aliases": [{"phrase": p, "row": r} for p, r in team_settings.builtin_aliases(key)],
+                "team_aliases": team_settings.list_team_aliases(key),
+                "notes": team_settings.notes(key),
+                "known_rows": team_settings.known_rows(key),
+            }
+            for key in team_settings.PUBLICATIONS
+        ],
+        "notes_max_words": team_settings.NOTES_MAX_WORDS,
+    }
+
+
+@app.get("/api/settings")
+async def get_settings_endpoint() -> JSONResponse:
+    """Every publication's visibility, aliases (built-in and the team's), notes and known rows."""
+    return JSONResponse(await _settings_call(_settings_snapshot))
+
+
+@app.get("/api/settings/changes")
+async def get_settings_changes_endpoint(publication: str = "") -> JSONResponse:
+    return JSONResponse({"changes": await _settings_call(team_settings.changes, publication or None)})
+
+
+@app.put("/api/settings/{publication}/visibility")
+async def put_visibility_endpoint(publication: str, body: _VisibilityBody) -> JSONResponse:
+    await _settings_call(team_settings.set_hidden, publication, body.hidden, body.by)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/settings/{publication}/aliases")
+async def post_alias_endpoint(publication: str, body: _AliasBody) -> JSONResponse:
+    return JSONResponse(await _settings_call(team_settings.add_alias, publication, body.phrase, body.row, body.by))
+
+
+@app.delete("/api/settings/{publication}/aliases/{alias_id}")
+async def delete_alias_endpoint(publication: str, alias_id: int, by: str = "") -> JSONResponse:
+    await _settings_call(team_settings.delete_alias, publication, alias_id, by)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/settings/{publication}/notes")
+async def post_note_endpoint(publication: str, body: _NoteBody) -> JSONResponse:
+    return JSONResponse(await _settings_call(team_settings.add_note, publication, body.text, body.by))
+
+
+@app.put("/api/settings/{publication}/notes/order")
+async def put_note_order_endpoint(publication: str, body: _NoteOrderBody) -> JSONResponse:
+    await _settings_call(team_settings.reorder_notes, publication, body.ids, body.by)
+    return JSONResponse({"ok": True})
+
+
+@app.put("/api/settings/{publication}/notes/{note_id}")
+async def put_note_endpoint(publication: str, note_id: int, body: _NoteBody) -> JSONResponse:
+    return JSONResponse(await _settings_call(team_settings.update_note, publication, note_id, body.text, body.by))
+
+
+@app.delete("/api/settings/{publication}/notes/{note_id}")
+async def delete_note_endpoint(publication: str, note_id: int, by: str = "") -> JSONResponse:
+    await _settings_call(team_settings.delete_note, publication, note_id, by)
+    return JSONResponse({"ok": True})
+
+
+@app.post("/api/settings/{publication}/reset")
+async def post_reset_endpoint(publication: str, body: _ByBody) -> JSONResponse:
+    await _settings_call(team_settings.reset, publication, body.by)
+    return JSONResponse({"ok": True})
 
 
 @app.get("/api/tables", response_model=TableListResponse)

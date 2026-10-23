@@ -508,7 +508,16 @@ Catatan tentang tabel:
 - claim_no sama dengan nomor klaim, dan first_words adalah 5 kata pertama kalimatnya."""
 
 HUMAN = ("TABEL:\n{tables}\n\nPADANAN NAMA (nama di laporan = baris tabel):\n{aliases}\n\n"
-         "KLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor.")
+         "{team_notes}KLAIM YANG DIPERIKSA:\n{claims}\n\nBeri satu review per klaim, urut sesuai nomor.")
+
+
+def team_notes_block(team_notes: str) -> str:
+    """The team's notes for this publication (Pengaturan), as a block before the claims; empty
+    when there are none. Advice for reading the sentences: every answer is still checked."""
+    if not (team_notes or "").strip():
+        return ""
+    return ("CATATAN TIM UNTUK PUBLIKASI INI (konvensi cara membaca kalimat; jawabanmu tetap "
+            f"diperiksa program):\n{team_notes.strip()}\n\n")
 
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", SYSTEM),
@@ -577,10 +586,12 @@ async def ask_reviews(
     codes: Dict[str, _ExcelSource],
     llm: BaseChatModel,
     batch_size: int = BATCH_SIZE,
+    team_notes: str = "",
 ) -> Dict[int, ClaimReview]:
     """The model's answer per claim index. A batch that fails is logged and left unanswered."""
     tables = "\n\n".join(table_markdown(code, src) for code, src in codes.items())
     aliases = alias_lines(codes)
+    notes = team_notes_block(team_notes)
     chain = (PROMPT_SECOND_LOOK if second_look_enabled() else PROMPT) | llm.with_structured_output(ReviewBatch)
     # Batches are independent, so they are asked together: one after another, NPI's nine took
     # 216 s on 2026-10-12. The cap keeps a long report from bursting the provider's rate limit.
@@ -590,7 +601,8 @@ async def ask_reviews(
         claims = "\n".join(_claim_line(n, results[i]) for n, i in enumerate(batch, 1))
         async with limit:
             try:
-                return batch, await chain.ainvoke({"tables": tables, "aliases": aliases, "claims": claims})
+                return batch, await chain.ainvoke({"tables": tables, "aliases": aliases, "team_notes": notes,
+                                                    "claims": claims})
             except Exception:
                 logger.warning("Tinjauan AI: batch %d gagal; klaimnya tetap dengan vonis kode",
                                batch_no, exc_info=True)
@@ -640,6 +652,7 @@ async def review_claims(
     new_refuted: str = "note",
     use_guard: bool = True,
     batch_size: int = BATCH_SIZE,
+    team_notes: str = "",
 ) -> Tuple[List[FactVerificationResult], ReviewStats]:
     """Every unconfirmed narrative claim, after the model's second look and code's judgement."""
     codes = reviewable_sources(sources)
@@ -647,7 +660,7 @@ async def review_claims(
     stats = ReviewStats(candidates=len(indices))
     if not codes or not indices:
         return list(results), stats
-    answers = await ask_reviews(results, indices, codes, llm, batch_size)
+    answers = await ask_reviews(results, indices, codes, llm, batch_size, team_notes=team_notes)
     stats.answered = len(answers)
     reviewed = list(results)
     counts: Counter = Counter()

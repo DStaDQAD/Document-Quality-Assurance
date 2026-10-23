@@ -44,6 +44,7 @@ from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _expand_report_terms, _same_root, _sig_words, label_match_score
 from publication_parsers import load_grid as _load_grid
 from publication_parsers import notes_enabled, notes_for, parse_for_publication, skipped_sections
+import team_settings
 from table_parser_generic import (
     _MONTH_ABBREVS,
     parse_generic_grid,
@@ -5708,6 +5709,28 @@ def _with_reason_codes(results: List[FactVerificationResult]) -> List[FactVerifi
     return out
 
 
+def _apply_team_aliases(sources: List[_ExcelSource], team_aliases: Dict[str, str]) -> None:
+    """The team's aliases (whole metric name only) on every table that has the row they name. A
+    team alias over a parser's alias of the same phrase wins."""
+    if not team_aliases:
+        return
+    for src in sources:
+        rows = set(src.table.row_labels)
+        picked = {phrase: row for phrase, row in team_aliases.items() if row in rows}
+        if picked:
+            src.table.label_aliases = {**getattr(src.table, "label_aliases", {}), **picked}
+
+
+def _remember_rows(publication: str, sources: List[_ExcelSource]) -> None:
+    rows = [label for src in sources if not src.pointer_only for label in src.table.row_labels]
+    if not publication or not rows:
+        return
+    try:
+        team_settings.record_known_rows(publication, rows)
+    except Exception:
+        logger.warning("Nama baris untuk saran padanan tidak tersimpan", exc_info=True)
+
+
 async def verify_paired(
     narrative_text: str,
     excel_sources: List[Tuple[bytes, str, str]],
@@ -5823,6 +5846,13 @@ async def verify_paired(
             "excel", "done",
             detail=f"{len(parsed_sources)} sumber · parser: {', '.join(excel_parsers)}",
         )
+
+    # Step 1a: the team's settings for this publication (Pengaturan, team_settings): its aliases
+    # join the parser's own on each table; its notes go to the Tinjauan AI (step 3c). The row
+    # names are kept for the alias form's suggestions. None of it can stop the check.
+    team_aliases, team_notes = team_settings.for_check(publication)
+    _apply_team_aliases(parsed_sources, team_aliases)
+    _remember_rows(publication, parsed_sources)
 
     # Step 1b: PDF-internal tables become sources too. Appended AFTER the Excel ones so that in
     # "both" mode an equal-scoring Excel sheet keeps the headline verdict (ties keep the earlier
@@ -5985,7 +6015,8 @@ async def verify_paired(
             emit("compare", "running", detail=f"tinjauan AI: {n_candidates} klaim")
             try:
                 results, review_stats = await review_claims(
-                    results, table_sources, review_llm, new_refuted=review_new_refuted
+                    results, table_sources, review_llm, new_refuted=review_new_refuted,
+                    team_notes=team_notes,
                 )
                 n_reviewed, n_flagged = review_stats.changed, review_stats.flagged
             except Exception:
