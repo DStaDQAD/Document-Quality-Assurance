@@ -373,3 +373,31 @@ def test_all_members_are_the_level_where_the_cited_rows_differ():
     assert complete.verdict == "Entailed"
     assert missing.reason_code == "klaim_tidak_lengkap" and "BATAM > TOTAL" in missing.reasoning
     assert "KECIL" not in missing.reasoning
+
+
+SUB_LU = ("Pengaturan", {("Makanan", 2026, "Q1"): 55.33, ("Tembakau", 2026, "Q1"): 44.88,
+                         ("Kertas", 2026, "Q1"): 57.27, ("Kayu", 2026, "Q1"): 46.25,
+                         ("Kulit", 2026, "Q1"): 55.83})
+
+
+@pytest.mark.parametrize("formula, verdict", [
+    ("(c1>50)+(c2>50)+(c3>50)+(c4>50)+(c5>50) > 2.5", "Entailed"),   # 3 of 5: a majority
+    ("(c1>50)+(c2>50)+(c3>50)+(c4>50)+(c5>50) > 3.5", "Refuted"),
+])
+def test_a_majority_is_a_count_over_every_member(formula, verdict):
+    # PMI Tw I-2026: "PMI-BI pada sebagian besar Sub-LU berada pada fase ekspansi" — 8 of 14 above 50,
+    # which a threshold on every member refuted.
+    cells = [_cell(row, 2026, "Q1") for row in ("Makanan", "Tembakau", "Kertas", "Kayu", "Kulit")]
+    claim = _claim("formula", cells, formula=formula, all_members=True)
+
+    assert evaluate_claim(claim, _views(SUB_LU)).verdict == verdict
+
+
+@pytest.mark.parametrize("named, verdict", [(("Kertas", "Kulit", "Makanan"), "Entailed"),
+                                            (("Kertas", "Kayu", "Makanan"), "Refuted")])
+def test_a_ranking_is_the_named_lowest_against_the_rest_highest(named, verdict):
+    rest = [r for r in ("Makanan", "Tembakau", "Kertas", "Kayu", "Kulit") if r not in named]
+    cells = [_cell(row, 2026, "Q1") for row in (*named, *rest)]
+    claim = _claim("formula", cells, formula="min(c1,c2,c3) >= max(c4,c5)", all_members=True)
+
+    assert evaluate_claim(claim, _views(SUB_LU)).verdict == verdict

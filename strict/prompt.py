@@ -18,6 +18,10 @@ no values, on purpose.
 2. CHOOSE CELLS WITH THE PARAGRAPH IN VIEW. A name means what it means in its paragraph: 'KFLN' in a
    paragraph about direct investment is the row 'Kewajiban > Investasi Langsung', while 'posisi KFLN
    Indonesia' in the summary is 'Kewajiban'. Copy into 'subject' what the sentence says is measured.
+   THE PARAGRAPH'S POPULATION: when a table holds the same breakdown for several populations, take
+   the row of the population the paragraph is about — 'kredit investasi' in a paragraph about UMKM
+   credit is the UMKM row, not the economy-wide one; 'simpanan berjangka' under uang kuasi is the
+   M2 component, under DPK the deposit type.
 
 3. NOT IN THE TABLES IS AN ANSWER. When no listed table holds the data — a sector, breakdown, series
    or kind of figure the tables do not have (sales when the tables hold prices, a sector the table
@@ -38,6 +42,8 @@ no values, on purpose.
 
 5. OPERATIONS AND THE CELLS EACH NEEDS (cells in this order):
    value            1 cell: a level, or a rate printed in its own table (mtm, qtq, a '%, yoy' table).
+                    A rate marked '(mtm)', '(qtq)', 'secara bulanan' or 'secara triwulanan' is a
+                    value on its own table, never yoy_growth.
    yoy_growth       a growth table's 1 cell when the table holds growth rates; otherwise 2 cells,
                     the same period a year apart, earlier first.
    diff             2 cells, earlier then later: a stated rise or fall BY an amount.
@@ -94,8 +100,10 @@ no values, on purpose.
 
 11. THE BOUND IS NEVER THE CLAIM'S OWN NUMBER. 'IKK sebesar 116,8, berada pada level optimis' is a
    value claim 116,8 AND above_threshold with claimed_value_raw '100'. For PMI and its components a
-   'fase kontraksi' is below_threshold 50 and a 'fase ekspansi' above_threshold 50 — the index is a
-   level around 50, not a growth rate, so never judge its phase with a formula on its sign.
+   'fase kontraksi' is below_threshold 50 and a 'fase ekspansi' above_threshold 50,
+   for every row the sentence itself covers (a quantifier such as 'sebagian besar' changes that —
+   rule 14) — the index
+   is a level around 50, not a growth rate, so never judge its phase with a formula on its sign.
 
 12. NET POSITIONS. Net liabilities ('kewajiban neto') = the Kewajiban row minus the Aset row of the
    same component; net assets ('aset neto') = Aset minus Kewajiban. Name both cells and write the
@@ -108,6 +116,41 @@ no values, on purpose.
    row that is the whole named total (the ULN pemerintah total, often a 'Total' or 'Jumlah' row of
    that table), never another member of the breakdown. When the table has no row for that total,
    the claim is not_in_tables.
+
+14. QUANTIFIED GROUPS. A sentence about a share of a breakdown's members names EVERY member's cells
+   and says how many must hold:
+     'seluruh' / 'semua' kota naik      -> the trend over every member, all_members = true.
+     'sebagian besar' / 'mayoritas' Sub-LU berada pada fase ekspansi
+                                         -> operation formula over every member's cell, a count that
+                                            must exceed half: '(c1>50)+(c2>50)+...+(c14>50) > 7',
+                                            all_members = true, claimed_value_raw null. Never a
+                                            threshold claim on every member.
+     'naik di seluruh tingkat pendidikan, kecuali SMA yang turun menjadi 118,6'
+                                         -> (1) the trend over every member EXCEPT SMA,
+                                            all_members = false; (2) SMA's own trend, the opposite
+                                            one when the text gives none; (3) a value claim 118,6.
+     'A dan B naik, sedangkan kelompok lainnya turun'
+                                         -> (1) A and B; (2) every member other than A and B.
+   'beberapa kota, terutama A dan B' is just A and B (rule 6).
+
+15. TWO GROWTH RATES. 'tabungan tumbuh 8,9% (yoy), meningkat dibandingkan bulan sebelumnya sebesar
+   8,4% (yoy)' compares two GROWTH RATES: two growth claims (this month 8,9 and the month before
+   8,4), never a trend over the levels — a level can dip while its growth rises.
+
+16. THE REPORT'S OWN PERIOD. A number or a trend whose sentence names no period belongs to the period
+   the report is about (its latest period). Only a phrase that puts the number directly after an
+   earlier period ('pada Maret 2026 sebesar 8,4%', 'bulan sebelumnya sebesar 8,4%') dates it there.
+
+17. ONE NUMBER FOR TWO NAMED ACCOUNTS. 'transaksi modal dan finansial mencatat surplus 12,0 miliar
+   dolar AS' gives one number for two rows the table keeps apart: operation sum over both rows on the
+   same date. Two numbers are two claims.
+
+18. RANKINGS. 'indeks tertinggi pada A (54,94%), B, dan C' also says A, B and C are the highest of
+   their breakdown. Besides each value claim, write one formula over EVERY member's cell (the named
+   ones first), all_members = true: the lowest of the named is at least the highest of the rest,
+   'min(c1,c2,c3) >= max(c4,c5,...,c14)'. For the largest moves ('penurunan terbesar di A dan B')
+   compare the changes: each member's two periods in order, 'min(c1-c2,c3-c4) >= max(c5-c6,...)'
+   for falls (c2-c1 for rises). 'terendah' turns the comparison around.
 """
 
 HUMAN_TEMPLATE = """\

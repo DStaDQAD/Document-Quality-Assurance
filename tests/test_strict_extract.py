@@ -137,3 +137,17 @@ def test_the_prompt_carries_the_lessons_of_the_second_measurement():
                  "Tahun 2025"):
         assert rule in SYSTEM_PROMPT, rule
     assert "A figure for a whole year on a table with no annual column is not_in_tables" not in SYSTEM_PROMPT
+
+
+def test_the_old_prompts_lessons_are_ported():
+    # docs/superpowers/specs/2026-10-26-strict-prompt-port.md: quantifiers (old rule 9), two growth
+    # rates (2c), the report's own period (2d), one number for two accounts (2g), the paragraph's
+    # population (4b/4c), mtm/qtq are never yoy (2e), and rankings (old _check_ranking).
+    from strict.prompt import SYSTEM_PROMPT
+
+    for rule in ("QUANTIFIED GROUPS", "sebagian besar", "kecuali", "kelompok lainnya",
+                 "TWO GROWTH RATES", "THE REPORT'S OWN PERIOD", "ONE NUMBER FOR TWO NAMED ACCOUNTS",
+                 "THE PARAGRAPH'S POPULATION", "never yoy_growth", "RANKINGS", "max("):
+        assert rule in SYSTEM_PROMPT, rule
+    # Round 3's phase rule without a quantifier made the model test every Sub-LU.
+    assert "for every row the sentence itself covers" in SYSTEM_PROMPT
