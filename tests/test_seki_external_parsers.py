@@ -155,6 +155,31 @@ def test_afln_and_kfln_are_the_totals_only_as_a_whole_claim():
         assert table.lookup_fuzzy(other, 2026, "Q1") == (None, None)
 
 
+def test_a_component_named_by_its_side_abbreviation_is_that_side_row():
+    # PII Tw IV-2025: "peningkatan posisi AFLN maupun KFLN investasi lainnya sebesar 233 juta dolar
+    # AS dan 178 juta dolar AS" resolved to 'Aset > Investasi Lainnya', and the one-group guard
+    # then read 'Aset' as a group the claim never named: Tidak Cukup Data on two report errors.
+    from paired_verifier import _answers_one_group_of_it
+    from structured_extractor import ExtractedFact, PeriodPoint
+
+    rows = ["Aset", "Aset > Investasi Lainnya", "Kewajiban", "Kewajiban > Investasi Lainnya"]
+    table = TableData(title="V.39", unit="Juta USD", row_labels=list(rows))
+    table._data = {(row, 2025, "Q4"): 1000.0 + i for i, row in enumerate(rows)}
+    table.term_aliases = dict(pii.TERM_ALIASES)
+    table.label_aliases = {name: row for name, row in {**pii.LABEL_ALIASES, **pii.COMPONENT_ALIASES}.items()
+                           if row in table.row_labels}
+
+    for claim, row in (("AFLN investasi lainnya", "Aset > Investasi Lainnya"),
+                       ("AIFLN investasi lainnya", "Aset > Investasi Lainnya"),
+                       ("posisi KFLN investasi lainnya", "Kewajiban > Investasi Lainnya")):
+        assert table.lookup_fuzzy(claim, 2025, "Q4")[0] == row
+        fact = ExtractedFact(operation="diff", periods=[PeriodPoint(claim, 2025, "Q4")],
+                             claimed_value=233.0, unit="juta dolar AS", context_quote=claim)
+        assert not _answers_one_group_of_it(fact, [(row, 1.0)], table)
+    # A sector V.39 does not have keeps finding no row.
+    assert table.lookup_fuzzy("AFLN sektor lainnya", 2025, "Q4") == (None, None)
+
+
 def test_npi_reads_still_in_surplus_as_a_level():
     # NPI Tw I-2026: "Investasi langsung tetap mencatatkan surplus" came back as a rise on
     # 3,15 -> 2,02 — still a surplus, a smaller one.

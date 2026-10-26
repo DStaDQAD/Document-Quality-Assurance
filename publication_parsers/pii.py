@@ -55,6 +55,18 @@ LABEL_ALIASES = {
     **{name: ULN_ROW for name in ("utang kfln", "kfln utang")},
 }
 
+# A component named by its side's abbreviation, whole claims only like LABEL_ALIASES. Tw IV-2025:
+# "peningkatan posisi AFLN maupun KFLN investasi lainnya sebesar 233 juta dolar AS dan 178 juta
+# dolar AS" resolved to 'Aset > Investasi Lainnya', and the one-group guard read 'Aset' as a group
+# the claim never named — Tidak Cukup Data on two report errors. Only the components the sheet
+# has: "AFLN sektor lainnya" (a sector V.39 lacks) still finds no row.
+_SIDE_ABBREVIATIONS = {"Aset": ("afln", "aifln"), "Kewajiban": ("kfln",)}
+COMPONENT_ALIASES = {
+    f"{lead}{abbreviation} {component.lower()}": f"{side}{QUAL_SEP}{component}"
+    for side, abbreviations in _SIDE_ABBREVIATIONS.items() for abbreviation in abbreviations
+    for component in NET_COMPONENTS for lead in ("", "posisi ")
+}
+
 
 # Rows that are already a net position, and the gross rows that stand for them. The memorandum
 # nets direct investment by direction ('Ke luar negeri' − 'Di Indonesia (PMA)'); reserve assets
@@ -76,7 +88,8 @@ def parse(data: bytes, sheet_name: str) -> TableData:
     table.net_rows.update({key: row for key, row in NET_ALIASES.items() if row in table.row_labels})
     if _add_sum_row(table, ULN_ROW, ULN_PARTS):
         table.term_aliases = dict(TERM_ALIASES)
-    table.label_aliases = {name: row for name, row in LABEL_ALIASES.items() if row in table.row_labels}
+    table.label_aliases = {name: row for name, row in {**LABEL_ALIASES, **COMPONENT_ALIASES}.items()
+                           if row in table.row_labels}
     table.positions = True   # "Posisi" Investasi Internasional: stocks at the end of each quarter
     return table
 
