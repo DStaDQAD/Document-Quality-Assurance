@@ -340,3 +340,36 @@ def test_a_size_claim_is_unsigned_whatever_sign_the_ai_wrote(claimed, verdict):
                    claimed, "miliar USD", formula="c1-c2", formula_unit="tabel", size_of_negative=True)
 
     assert evaluate_claim(claim, views).verdict == verdict
+
+
+def test_an_annual_cell_is_read_from_the_tables_annual_columns():
+    # NPI Tw IV-2025: "Transaksi berjalan tahun 2025 mencatat defisit 1,5 miliar dolar AS".
+    views = _views(("Juta USD", {("Transaksi Berjalan", 2025, "Q4"): -900.0}))
+    views[0].table.annual = {("Transaksi Berjalan", 2025): -1453.74}
+    claim = _claim("value", [_cell("Transaksi Berjalan", 2025, "FY")], 1.5, "miliar USD",
+                   quote="Transaksi berjalan tahun 2025 mencatat defisit 1,5 miliar dolar AS.", size_of_negative=True)
+
+    result = evaluate_claim(claim, views)
+
+    assert result.verdict == "Entailed" and "S1 · Transaksi Berjalan · Tahun 2025 = -1453.74" in result.reasoning
+
+
+def test_all_members_are_the_level_where_the_cited_rows_differ():
+    # SHPR Tw IV-2025 "dari 18 kota ..., 12 kota ... melambat": the AI cited every city's TOTAL row;
+    # the check wanted each city's KECIL/MENENGAH/BESAR too, the siblings of TOTAL.
+    data = {}
+    for city in ("BANDUNG", "MEDAN", "BATAM"):
+        for kind in ("TOTAL", "KECIL", "MENENGAH"):
+            for period, v in (("Q3", 1.0), ("Q4", 2.0)):
+                data[(f"TAHUNAN (YOY) > {city} > {kind}", 2025, period)] = v
+    views = _views(("persen", data))
+    every_city = [_cell(f"TAHUNAN (YOY) > {c} > TOTAL", 2025, p) for c in ("BANDUNG", "MEDAN", "BATAM")
+                  for p in ("Q3", "Q4")]
+    two_cities = every_city[:4]
+
+    complete = evaluate_claim(_claim("is_increasing", every_city, all_members=True), views)
+    missing = evaluate_claim(_claim("is_increasing", two_cities, all_members=True), views)
+
+    assert complete.verdict == "Entailed"
+    assert missing.reason_code == "klaim_tidak_lengkap" and "BATAM > TOTAL" in missing.reasoning
+    assert "KECIL" not in missing.reasoning

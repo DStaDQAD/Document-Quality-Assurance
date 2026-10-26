@@ -20,7 +20,7 @@ from paired_verifier import (
 )
 from schemas import FactVerificationResult, PeriodResult
 from strict.claims import Cell, Claim
-from strict.tables import TableView, period_header
+from strict.tables import ANNUAL, TableView, period_header
 
 _TRENDS = {"is_increasing", "is_decreasing", "is_stable"}
 _SEP = " > "
@@ -48,7 +48,10 @@ def _read(claim: Claim, views: Dict[str, TableView]) -> List[Read]:
             raise _Undecided("tidak_ditemukan", f"Sel yang disebut AI tidak ada di tabel: '{written}'.")
         if cell.key is None:
             raise _Undecided("periode", f"Periode yang disebut AI tidak dikenali: '{written}'.")
-        value = view.table._data.get((cell.row, *cell.key))
+        if cell.key[1] == ANNUAL:
+            value = (view.table.annual or {}).get((cell.row, cell.key[0]))
+        else:
+            value = view.table._data.get((cell.row, *cell.key))
         if value is None:
             raise _Undecided("periode", f"Tabel tidak memuat sel '{cell.code} · {cell.row} · "
                                         f"{period_header(*cell.key)}'.")
@@ -57,15 +60,26 @@ def _read(claim: Claim, views: Dict[str, TableView]) -> List[Read]:
 
 
 def _missing_members(read: List[Read]) -> List[str]:
-    """Rows of a breakdown the claim says it covers whole but does not cite: same table, same
-    parent, same depth. Rows without a parent name no breakdown and are not checked."""
+    """Rows of a breakdown the claim says it covers whole but does not cite. The breakdown is the
+    one level where the cited rows differ ('TAHUNAN (YOY) > <kota> > TOTAL': the city); its members
+    are the table's rows that match the cited ones on every other level. Nothing is checked when
+    the rows differ on no level or on several, or when they are flat (no level to hold fixed)."""
     missing = []
     for view in {id(v): v for _, v, _ in read}.values():
-        cited = {c.row for c, v, _ in read if v is view}
-        for parent, depth in {(r.rsplit(_SEP, 1)[0], r.count(_SEP)) for r in cited if _SEP in r}:
-            missing += [r for r in view.table.row_labels
-                        if r not in cited and _SEP in r and r.rsplit(_SEP, 1)[0] == parent
-                        and r.count(_SEP) == depth]
+        cited = list(dict.fromkeys(c.row for c, v, _ in read if v is view))
+        parts = [row.split(_SEP) for row in cited]
+        depth = len(parts[0])
+        if len(cited) < 2 or depth < 2 or any(len(p) != depth for p in parts):
+            continue
+        varying = [i for i in range(depth) if len({p[i] for p in parts}) > 1]
+        if len(varying) != 1:
+            continue
+        fixed = {i: parts[0][i] for i in range(depth) if i != varying[0]}
+        for row in view.table.row_labels:
+            levels = row.split(_SEP)
+            if (row not in cited and len(levels) == depth
+                    and all(levels[i] == text for i, text in fixed.items())):
+                missing.append(row)
     return list(dict.fromkeys(missing))
 
 

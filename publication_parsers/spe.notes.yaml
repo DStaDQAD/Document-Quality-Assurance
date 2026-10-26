@@ -14,6 +14,7 @@ phrases:
 periods:
   - 'Laporan "Juni" berisi realisasi Juni dan prakiraan bulan berikutnya (bertanda *).'
   - 'IEP/IEH dicatat per bulan target (3 dan 6 bulan ke depan): "IEH November 2026 dan Februari 2027 ... 149,9 dan 177,9" → dua titik pada bulan target masing-masing; "periode sebelumnya" adalah nilai bulan target sebelumnya.'
+  - 'Baris "Ekspektasi Harga Umum" dan "Ekspektasi Penjualan" (tanpa "> 3/6 bulan yang akan datang") memakai bulan TARGET: "IEH Agustus 2026 sebesar 178,0" → baris Ekspektasi Harga Umum, Aug 2026. Baris "... > 3 bulan yang akan datang" memakai bulan SURVEI.'
   - 'Tabel 4 dan 8 berisi pertumbuhan triwulanan (yoy).'
 units_signs:
   - 'Indeks tanpa satuan; pertumbuhan dalam persen.'

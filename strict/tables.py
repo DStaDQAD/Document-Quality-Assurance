@@ -33,6 +33,8 @@ _QUARTER_TOKEN = re.compile(r"^q([1-4])[\s\-./]*(\d{4})$")
 _SEMESTER_TOKEN = re.compile(r"^s([12])[\s\-./]*(\d{4})$")
 _ROMAN_PERIOD = re.compile(r"^(triwulan|tw|semester|smt)\.?\s*(iv|iii|ii|i)[\s\-./]*(\d{4})$")
 _MONTH_PERIOD = re.compile(r"^([a-z]+)\.?[\s\-./']*(\d{4})$")
+_YEAR_PERIOD = re.compile(r"^(?:tahun\s+|th\.?\s*|fy\s*|total\s+)?(\d{4})$")
+ANNUAL = "FY"  # the token of a year's annual column (TableData.annual)
 
 
 @dataclass
@@ -63,6 +65,9 @@ class TableView:
             axis = "periode campuran"
         (first_year, first), (last_year, last) = periods[0], periods[-1]
         shape = f"{axis}, {first} {first_year} s.d. {last} {last_year}"
+        years = sorted({year for _, year in (self.table.annual or {})})
+        if years:
+            shape += f", juga kolom tahunan {period_header(years[0], ANNUAL)} s.d. {period_header(years[-1], ANNUAL)}"
         return f"{shape}, satuan {self.table.unit}" if self.table.unit else shape
 
 
@@ -75,8 +80,8 @@ def build_views(sources: List[_ExcelSource]) -> List[TableView]:
 
 
 def period_header(year: int, month: str) -> str:
-    """The period as the extractor is shown it and cites it: 'Q4 2025', 'Jun 2026'."""
-    return f"{month} {year}"
+    """The period as the extractor is shown it and cites it: 'Q4 2025', 'Jun 2026', 'Tahun 2025'."""
+    return f"Tahun {year}" if month == ANNUAL else f"{month} {year}"
 
 
 def parse_period(text: str) -> Optional[Tuple[int, str]]:
@@ -98,6 +103,9 @@ def parse_period(text: str) -> Optional[Tuple[int, str]]:
     match = _MONTH_PERIOD.match(t)
     if match and match.group(1) in _MONTH_NAMES:
         return int(match.group(2)), _MONTH_NAMES[match.group(1)]
+    match = _YEAR_PERIOD.match(t)
+    if match:
+        return int(match.group(1)), ANNUAL
     return None
 
 

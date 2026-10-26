@@ -29,8 +29,12 @@ no values, on purpose.
    about, which may be a forecast: '... pada triwulan II 2026 diprakirakan kembali meningkat ...
    Setelah pada triwulan sebelumnya berada pada fase kontraksi ...' -> the contraction is Q1 2026.
    A paragraph opened with 'Secara keseluruhan tahun 2025' compares the end of 2025 with the end of
-   2024 (Q4 2024 and Q4 2025) until a sentence names another period. A figure for a whole year on a
-   table with no annual column is not_in_tables — never quietly Q4.
+   2024 (Q4 2024 and Q4 2025) until a sentence names another period.
+   A POSITION AT THE END OF A YEAR (posisi, cadangan, utang, aset, kewajiban 'pada akhir tahun' or
+   'keseluruhan tahun 2025') is the year's last period: Q4 2025 on a quarterly table, Dec 2025 on a
+   monthly one. A FLOW or ratio for the whole year (transaksi berjalan, ekspor, defisit 'tahun 2025',
+   '% dari PDB' for the year) is the table's annual column when its shape lists one ('Tahun 2025');
+   when it lists none, that figure is not_in_tables — never quietly Q4.
 
 5. OPERATIONS AND THE CELLS EACH NEEDS (cells in this order):
    value            1 cell: a level, or a rate printed in its own table (mtm, qtq, a '%, yoy' table).
@@ -54,9 +58,13 @@ no values, on purpose.
                     'kontraksi yang lebih rendah' 'c2<0 and abs(c2)<abs(c1)'.
 
 6. SEVERAL ROWS IN ONE SENTENCE. List every cell of every row the sentence is about. Set
-   all_members = true only when the sentence covers EVERY member of a breakdown ('seluruh', 'semua',
-   '12 dari 18 kota'); then list every member. Rows the sentence names one by one ('terutama di
-   Bandung, Pontianak, dan Samarinda') are just those rows, all_members = false.
+   all_members ONLY WHEN THIS CLAIM covers EVERY member of a breakdown ('seluruh', 'semua', '12 dari
+   18 kota'); then list every member. Rows the sentence names one by one ('terutama di Bandung,
+   Pontianak, dan Samarinda') are just those rows, all_members = false. A sentence that contrasts
+   groups ('usia 20-40 tahun optimis, sedangkan usia >41 tahun pesimis') is one claim per side, each
+   on its own groups, all_members = false.
+   MASING-MASING: 'X dan Y ... masing-masing sebesar 52,60% dan 50,74%' is one value claim per row,
+   each with its own number and its one cell — never one claim over two cells.
 
 7. NUMBERS. claimed_value_raw is the digits exactly as printed, with a MINUS SIGN for a fall,
    decline or contraction even when the text prints none ('terkontraksi sebesar 9,0%' -> '-9,0').

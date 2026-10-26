@@ -205,3 +205,35 @@ def test_ppkom_names_each_city_row_and_its_property_types():
 
     assert table.row_labels == ["MEDAN", "MEDAN > Sewa", "SEMARANG", "SEMARANG > Sewa"]
     assert table._data[("SEMARANG > Sewa", 2026, "Q2")] == 118.02
+
+
+def test_the_npi_workbook_keeps_its_annual_totals_apart():
+    # NPI Tw IV-2025: "Transaksi berjalan tahun 2025 mencatat defisit 1,5 miliar dolar AS (0,1% dari
+    # PDB)" is the 'Total' column after Q4; the reader dropped it. Kept in table.annual only, so no
+    # old-engine lookup ever sees a new period.
+    import io
+    import openpyxl
+    from publication_parsers import npi
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "ID"
+    rows = [
+        [None, "TABEL 1"], [None, "NERACA PEMBAYARAN INDONESIA"], [None, "RINGKASAN"], [None, "(Juta USD)"], [],
+        [None, "ITEMS", "ITEMS", 2024, 2024, 2024, 2024, 2024, None, 2025, 2025, 2025, 2025, 2025],
+        [None, "ITEMS", "ITEMS", "Q1", "Q2", "Q3", "Q4", "Total", None, "Q1", "Q2", "Q3", "Q4", "Total"],
+        [],
+        [None, "I. Transaksi Berjalan", None, -2419.91, -2998.73, -2022.76, -1142.09, -8583.49, 0,
+         -100.0, -200.0, -300.0, -900.0, -1500.0],
+    ]
+    for row in rows:
+        ws.append(row)
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    table = npi.parse(buf.getvalue(), "ID")
+
+    [row] = [r for r in table.row_labels if "Transaksi Berjalan" in r]
+    assert table.annual[(row, 2024)] == pytest.approx(-8583.49)
+    assert table.annual[(row, 2025)] == pytest.approx(-1500.0)
+    assert {k[2] for k in table._data if k[0] == row} == {"Q1", "Q2", "Q3", "Q4"}

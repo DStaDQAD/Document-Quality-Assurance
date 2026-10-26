@@ -216,6 +216,9 @@ class SheetSpec:
     unit: Optional[str] = None
     end_at_forecast: bool = False
     sum_missing_leaves: Tuple[str, ...] = ()
+    # The period-row text of a year's annual column (NPI 'Total' after Q4): its figures go to
+    # TableData.annual, keyed by the year of the periods just before it, never into the series.
+    annual_header: Optional[str] = None
 
 
 _FOOTER = re.compile(r"\s*(\*|(keterangan|catatan|sumber|note|source)\s*:)", re.IGNORECASE)
@@ -342,6 +345,27 @@ def _period_columns(
         seen.add(key)
         columns[c] = key
     return columns
+
+
+def _annual_columns(
+    grid: List[List], spec: SheetSpec, header_row: int, columns: Dict[int, Tuple[str, int, str]]
+) -> Dict[int, int]:
+    """{column: year} for the annual columns of a two-row header (SheetSpec.annual_header): each
+    takes the year of the nearest period column to its left; the leftmost copy of a year only."""
+    if not spec.annual_header or spec.header != "two_rows" or header_row + 1 >= len(grid):
+        return {}
+    below = grid[header_row + 1]
+    wanted = spec.annual_header.strip().lower()
+    out: Dict[int, int] = {}
+    for c in range(len(below)):
+        if clean_label(_cell(below, c)).lower() != wanted:
+            continue
+        left = [col for col in columns if col < c]
+        if left:
+            year = columns[max(left)][1]
+            if year not in out.values():
+                out[c] = year
+    return out
 
 
 def _title_and_unit(rows: List[List]) -> Tuple[str, str]:
@@ -524,6 +548,7 @@ def parse_series_sheet(
     first_col = max(spec.label_cols) + 1
     header_rows = _header_rows(grid, spec, first_col)
     blocks = {r: _period_columns(grid, spec, r, first_col) for r in header_rows}
+    annual_blocks = {r: _annual_columns(grid, spec, r, blocks[r]) for r in header_rows}
     header_like = set(header_rows)
     if spec.header == "two_rows":
         header_like |= {r + 1 for r in header_rows}
@@ -537,6 +562,8 @@ def parse_series_sheet(
 
     entries: List[Tuple[List[str], Dict[Tuple[int, str], float]]] = []
     columns: Dict[int, Tuple[str, int, str]] = {}
+    annual_columns: Dict[int, int] = {}
+    annual_by_path: Dict[Tuple[str, ...], Dict[int, float]] = {}
     stack: List[Tuple[int, str]] = []
     group: Optional[Tuple[str, ...]] = None
     last_numbered: Optional[Tuple[int, int]] = None  # (depth, first label column)
@@ -549,6 +576,7 @@ def parse_series_sheet(
     for r in range(header_rows[0], len(grid)):
         if r in blocks:
             columns, stack, group, last_numbered, levels = blocks[r], [], None, None, []
+            annual_columns = annual_blocks[r]
             if footer_at is not None:
                 block_title = _block_title(grid[footer_at:r], spec.label_cols)
                 prefix = [block_title] if block_title else []
@@ -593,6 +621,9 @@ def parse_series_sheet(
         stack.append((depth, texts[own]))
         for band, values in by_band.items():
             entries.append(([band] + path if band else path, values))
+        annual = {year: v for c, year in annual_columns.items() if (v := _number(_cell(row, c))) is not None}
+        if annual and "" in by_band:
+            annual_by_path[tuple(path)] = annual
     if not entries:
         raise PublicationParseError("tidak ada baris berisi angka di bawah baris tahun")
     entries += _summed_missing_leaves(entries, spec.sum_missing_leaves)
@@ -604,7 +635,7 @@ def parse_series_sheet(
             if match:
                 table.row_units[name] = match.group(1).strip()
                 break
-    for name, (_, values) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
+    for name, (path, values) in zip(_shortest_unique_names([p for p, _ in entries]), entries):
         if name in table.row_labels:
             # Two rows the hierarchy could not tell apart. Keeping the first would answer the
             # second's claims with the first's figures, silently — the generic cascade instead.
@@ -612,6 +643,8 @@ def parse_series_sheet(
         table.row_labels.append(name)
         for (year, period), value in values.items():
             table._data[(name, year, period)] = value
+        for year, value in annual_by_path.get(tuple(path), {}).items():
+            table.annual[(name, year)] = value
     return table
 
 

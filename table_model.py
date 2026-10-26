@@ -343,6 +343,10 @@ class TableData:
     # 'Jumlah pelawat (ribuan orang)' in a 'Juta USD' table. Set by the series parser from the
     # row's full path, which the (shortened) row name may no longer show.
     row_units: Dict[str, str] = field(default_factory=dict, repr=False)
+    # A sheet's annual columns, {(row, year): value}: NPI's 'Total' after each year's Q4 ("defisit
+    # tahun 2025 sebesar 1,5 miliar"). Kept out of _data on purpose — no lookup of the default
+    # path ever meets a period it does not know; only strict extraction reads them.
+    annual: Dict[Tuple[str, int], float] = field(default_factory=dict, repr=False)
     # Report sections about data this table does not hold, as {heading regex: what the section
     # is about}: UB's 'PERKEMBANGAN DANA PIHAK KETIGA (DPK)' is not answered by SEKI I.1A, whose
     # 'Simpanan Berjangka' is M2's. Set by the publication parser; a claim under such a heading

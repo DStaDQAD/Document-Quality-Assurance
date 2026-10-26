@@ -125,3 +125,15 @@ def test_the_prompt_carries_the_lessons_of_the_first_measurement():
     for rule in ("NEVER CONVERT UNITS IN A FORMULA", "EVERY PRINTED NUMBER IS A value CLAIM",
                  "THE BOUND IS NEVER THE CLAIM'S OWN NUMBER", "NET POSITIONS", "A SHARE OF A TOTAL"):
         assert rule in SYSTEM_PROMPT, rule
+
+
+def test_the_prompt_carries_the_lessons_of_the_second_measurement():
+    # DeepSeek strict + review 2026-10-26: "masing-masing sebesar 52,60% dan 50,74%" as one value
+    # claim over two cells; KFLN "keseluruhan tahun 2025" positions refused for lack of an annual
+    # column; "usia >41 tahun pesimis" flagged as covering every age group.
+    from strict.prompt import SYSTEM_PROMPT
+
+    for rule in ("MASING-MASING", "A POSITION AT THE END OF A YEAR", "all_members ONLY WHEN THIS CLAIM",
+                 "Tahun 2025"):
+        assert rule in SYSTEM_PROMPT, rule
+    assert "A figure for a whole year on a table with no annual column is not_in_tables" not in SYSTEM_PROMPT

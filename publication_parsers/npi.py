@@ -14,7 +14,7 @@ from table_model import TableData
 SPECS = (
     (r"5\.1", SheetSpec(label_cols=(2,), hierarchy="indent")),
     (r"Id", SheetSpec(label_cols=(1, 2), hierarchy="outline",
-                      sum_missing_leaves=("Penerimaan", "Pembayaran"))),
+                      sum_missing_leaves=("Penerimaan", "Pembayaran"), annual_header="Total")),
 )
 SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 

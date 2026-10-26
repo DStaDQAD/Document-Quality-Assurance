@@ -47,15 +47,16 @@ def test_a_monthly_table_without_unit():
     ("Q4 2025", (2025, "Q4")), ("Triwulan IV 2025", (2025, "Q4")), ("Tw IV 2025", (2025, "Q4")),
     ("TW I-2026", (2026, "Q1")), ("Dec 2025", (2025, "Dec")), ("Desember 2025", (2025, "Dec")),
     ("Des 2025", (2025, "Dec")), ("Mei 2026", (2026, "May")), ("Agustus 2026", (2026, "Aug")),
-    ("S1 2026", (2026, "S1")), ("Semester I 2026", (2026, "S1")), ("akhir tahun", None), ("2025", None),
+    ("S1 2026", (2026, "S1")), ("Semester I 2026", (2026, "S1")), ("akhir tahun", None),
+    ("Tahun 2025", (2025, "FY")), ("2025", (2025, "FY")), ("tahun 2024", (2024, "FY")),
 ])
 def test_parse_period(text, key):
     assert parse_period(text) == key
 
 
 def test_period_header():
-    assert [period_header(2025, "Q4"), period_header(2026, "Jun"), period_header(2026, "S1")] == \
-        ["Q4 2025", "Jun 2026", "S1 2026"]
+    assert [period_header(2025, "Q4"), period_header(2026, "Jun"), period_header(2026, "S1"),
+            period_header(2025, "FY")] == ["Q4 2025", "Jun 2026", "S1 2026", "Tahun 2025"]
 
 
 def test_find_row_folds_case_and_spaces_only():
@@ -92,3 +93,12 @@ def test_row_units_are_listed_under_the_header():
     block = table_block(build_views([src]), chunk="x")
 
     assert "Satuan khusus: 'Ke dalam negeri' = ribuan orang" in block
+
+
+def test_a_table_with_annual_columns_says_so():
+    src = _source(["Transaksi Berjalan"], QUARTERS)
+    src.table.annual = {("Transaksi Berjalan", 2024): -8583.49, ("Transaksi Berjalan", 2025): -1453.74}
+    [view] = build_views([src])
+
+    assert view.shape == ("per triwulan, Q1 2015 s.d. Q4 2025, juga kolom tahunan Tahun 2024 s.d. "
+                          "Tahun 2025, satuan Juta USD")
