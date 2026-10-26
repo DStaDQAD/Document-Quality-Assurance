@@ -205,3 +205,53 @@ def test_a_quantified_result_is_rebuilt_on_its_series():
 def test_a_chart_label_result_is_not_replayed():
     from eval.regression import fact_from_result
     assert fact_from_result({"checked_item": "chart", "operation": "value", "periods": []}) is None
+
+
+# --- replay of a strict run ---------------------------------------------------------------------
+
+def test_replay_rejudges_strict_claims(tmp_path: Path, monkeypatch):
+    import json
+
+    from eval import run_regression
+    from excel_parser_bi import BITableData
+    from paired_verifier import _ExcelSource
+    from strict.claims import Cell, Claim, claim_to_dict
+
+    manifest = tmp_path / "m.yaml"
+    manifest.write_text("- id: pii-sp\n  publication: pii\n  doc: d.docx\n  sources:\n    - {file: t.xls}\n",
+                        encoding="utf-8")
+    table = BITableData(title="PII", unit="Juta USD", row_labels=["Aset"])
+    table._data[("Aset", 2025, "Q4")] = 558496.4949
+    monkeypatch.setattr(run_regression, "_parsed_sources",
+                        lambda doc, root: [_ExcelSource(table=table, filename="t.xls", sheet="5.39")])
+    monkeypatch.setattr(run_regression, "_narrative_of", lambda doc, root: None)
+    claim = Claim(operation="value", subject="Posisi AFLN",
+                  cells=[Cell("S1", "Aset", "Q4 2025", "Aset", (2025, "Q4"))],
+                  context_quote="Posisi AFLN tercatat 558,5 miliar dolar AS.", claimed_value=558.5,
+                  unit="miliar USD")
+    run_dir, out = tmp_path / "run", tmp_path / "out"
+    run_dir.mkdir()
+    (run_dir / "pii-sp.json").write_text(json.dumps({"results": [], "strict_claims": [claim_to_dict(claim)]}),
+                                         encoding="utf-8")
+
+    run_regression.main(["replay", str(run_dir), "--manifest", str(manifest), "--out", str(out)])
+
+    [result] = json.loads((out / "pii-sp.json").read_text(encoding="utf-8"))["results"]
+    assert (result["verdict"], result["resolved_via"]) == ("Entailed", "strict")
+
+
+def test_run_has_a_strict_switch():
+    from eval import run_regression
+    import argparse
+
+    seen = {}
+    real = argparse.ArgumentParser.parse_args
+
+    def _capture(self, argv=None, namespace=None):
+        seen["args"] = real(self, argv, namespace)
+        raise SystemExit(0)
+
+    import unittest.mock as um
+    with um.patch.object(argparse.ArgumentParser, "parse_args", _capture), pytest.raises(SystemExit):
+        run_regression.main(["run", "--manifest", "m.yaml", "--out", "o", "--strict"])
+    assert seen["args"].strict is True

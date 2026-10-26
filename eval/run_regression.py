@@ -70,6 +70,7 @@ def cmd_run(args) -> int:
     os.environ["AI_REVIEW"] = "" if args.no_ai_review else "1"
     os.environ["PUBLICATION_NOTES"] = "1" if args.publication_notes else ""
     os.environ["AI_REVIEW_SECOND_LOOK"] = "1" if args.second_look else ""
+    os.environ["STRICT_EXTRACTION"] = "1" if args.strict else ""
     if args.thinking is not None:   # llm_provider reads it at import, so before main is imported
         os.environ["GEMINI_THINKING_BUDGET"] = str(args.thinking)
     out = Path(args.out)
@@ -262,6 +263,18 @@ def cmd_replay(args) -> int:
         if not path.exists():
             continue
         body = json.loads(path.read_text(encoding="utf-8"))
+        if body.get("strict_claims"):
+            # A strict run (STRICT_EXTRACTION): its claims name their cells; judge them again.
+            from strict.claims import claim_from_dict
+            from strict.evaluate import evaluate_claim
+            from strict.tables import build_views
+            views = build_views(_parsed_sources(doc, data_root))
+            judged = [evaluate_claim(claim_from_dict(c), views) for c in body["strict_claims"]]
+            (out / f"{doc.id}.json").write_text(json.dumps(
+                {"results": [r.model_dump() for r in judged], "_replay": {"strict": True}},
+                ensure_ascii=False, indent=1), encoding="utf-8")
+            print(f"[{doc.id}] {len(judged)} klaim strict dinilai ulang")
+            continue
         if body.get("_facts"):
             facts, rebuilt = [fact_from_dict(f) for f in body["_facts"]], False
         else:
@@ -346,6 +359,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                    help="Tinjauan AI's prior and sign rule (AI_REVIEW_SECOND_LOOK=1)")
     p.add_argument("--thinking", type=int, default=None,
                    help="thinking token cap for extraction and the other get_llm calls (GEMINI_THINKING_BUDGET)")
+    p.add_argument("--strict", action="store_true",
+                   help="strict extraction: the extractor names the cells (STRICT_EXTRACTION=1)")
     p = sub.add_parser("diff")
     p.add_argument("base")
     p.add_argument("new")
