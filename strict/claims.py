@@ -31,6 +31,9 @@ class StrictClaim(BaseModel):
     operation: Operation = Field(description="Operasi klaim; 'formula' bila menu tidak bisa mengatakannya")
     cells: List[CellRef] = Field(default_factory=list, description="Sel yang dibutuhkan klaim, urut sesuai operasinya")
     all_members: bool = Field(False, description="True bila kalimat membahas SETIAP anggota rincian (seluruh/semua/12 dari 18)")
+    size_of_negative: bool = Field(
+        False, description="True bila kalimat menyebut BESARNYA saldo yang di tabel tercatat negatif (defisit, impor, "
+                           "pembayaran, kewajiban neto): angkanya tanpa minus, dibandingkan dengan besar sel")
     formula: Optional[str] = Field(None, description="Hanya untuk operation='formula': rumus atas c1..cn")
     formula_unit: Optional[Literal["tabel", "persen", "jumlah"]] = Field(
         None, description="Satuan hasil rumus: 'tabel', 'persen', atau 'jumlah' (hitungan)")
@@ -66,6 +69,7 @@ class Claim:
     formula: Optional[str] = None
     formula_unit: Optional[str] = None
     all_members: bool = False
+    size_of_negative: bool = False
     not_in_tables: bool = False
     reason: Optional[str] = None
 

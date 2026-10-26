@@ -106,3 +106,18 @@ def test_the_flag(monkeypatch, value, on):
     monkeypatch.setenv("STRICT_EXTRACTION", value)
 
     assert enabled() is on
+
+
+def test_charts_or_a_category_sheet_keep_the_old_path():
+    from paired_verifier import _ExcelSource
+    from strict.pipeline import applies
+
+    series = _ExcelSource(table=_table(), filename="t.xls", sheet="5.39")
+    items = BITableData(title="Barang", unit="Rp", row_labels=["Laptop"])
+    items.axis_type, items.col_labels = "categorical", ["Harga"]
+    items._data[("Laptop", "Harga")] = 7.5
+    category = _ExcelSource(table=items, filename="b.xlsx", sheet="Barang")
+
+    assert applies([series], "excel", has_pdf_tables=False, has_charts=False)
+    assert not applies([series], "excel", has_pdf_tables=False, has_charts=True)
+    assert not applies([series, category], "excel", has_pdf_tables=False, has_charts=False)

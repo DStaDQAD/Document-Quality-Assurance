@@ -87,7 +87,8 @@ def _finish(raw: StrictClaim, normalized: str, views: Dict[str, TableView]) -> O
     return Claim(
         operation=raw.operation, subject=raw.subject, cells=[] if raw.not_in_tables else _cells(raw, views),
         context_quote=quote, page_number=page, claimed_value=value, unit=raw.unit, formula=raw.formula,
-        formula_unit=raw.formula_unit, all_members=raw.all_members, not_in_tables=raw.not_in_tables,
+        formula_unit=raw.formula_unit, all_members=raw.all_members, size_of_negative=raw.size_of_negative,
+        not_in_tables=raw.not_in_tables,
         reason=raw.reason,
     )
 

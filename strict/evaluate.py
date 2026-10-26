@@ -8,8 +8,12 @@ from cell_formula import FormulaError, evaluate
 from paired_verifier import (
     MATCH_TOLERANCE,
     _growth_tolerance,
+    _is_growth_series,
+    _is_percent_unit,
+    _is_plain_index,
     _numeric_verdict,
     _parse_scale_unit,
+    _period_ordinal,
     _stable_band,
     _unit_factor,
     _value_verdict,
@@ -65,25 +69,45 @@ def _missing_members(read: List[Read]) -> List[str]:
     return list(dict.fromkeys(missing))
 
 
-def _common(read: List[Read]) -> List[float]:
-    """Every cell's value in the first cell's table unit (a ratio of ULN in Juta USD to PDB in
-    Miliar USD). Units with no common scale cannot be combined."""
-    unit = read[0][1].table.unit
+def _unit(view: TableView, row: str) -> str:
+    """A cell's unit: its row's own (NPI 'Transaksi Berjalan (% PDB)') or the table's."""
+    return (view.table.row_units or {}).get(row) or view.table.unit
+
+
+def _ordered(read: List[Read]) -> List[Read]:
+    """Cells of one row, oldest first: the sign of a change must not hang on the order the model
+    happened to list them in. Cells of several rows keep the model's order (numerator, denominator)."""
+    if len({cell.row for cell, _, _ in read}) != 1:
+        return read
+    return sorted(read, key=lambda r: (r[0].key[0], _period_ordinal(r[0].key[1])))
+
+
+def _common(read: List[Read], claim: Claim) -> List[float]:
+    """Every cell's value in the first cell's unit (a ratio of ULN in Juta USD to PDB in Miliar
+    USD), as a size when the claim states the size of a negative balance. Units with no common
+    scale cannot be combined."""
+    unit = _unit(read[0][1], read[0][0].row)
     base = _parse_scale_unit(unit)
     values = []
-    for _, view, value in read:
-        if view.table.unit == unit:
-            values.append(value)
-            continue
-        other = _parse_scale_unit(view.table.unit)
-        if base is None or other is None or base[1] != other[1]:
-            raise _Undecided("jenis", f"Satuan sel tidak bisa digabung: '{unit}' dan '{view.table.unit}'.")
-        values.append(value * other[0] / base[0])
+    for cell, view, value in read:
+        own = _unit(view, cell.row)
+        if own != unit:
+            other = _parse_scale_unit(own)
+            if base is None or other is None or base[1] != other[1]:
+                raise _Undecided("jenis", f"Satuan sel tidak bisa digabung: '{unit}' dan '{own}'.")
+            value = value * other[0] / base[0]
+        values.append(abs(value) if claim.size_of_negative else value)
     return values
 
 
 def _factor(claim: Claim, table_unit: str) -> float:
-    """What a number in the claim's unit is multiplied by to be in the table's unit."""
+    """What a number in the claim's unit is multiplied by to be in the table's unit. A level claim
+    on a growth table, or a percent claim on an index read as a level, compares different kinds
+    of number (15,7 / 1e12; 0,40 against 114,01): that is `jenis`, as in the old engine."""
+    if _is_growth_series(table_unit) and claim.unit and _parse_scale_unit(claim.unit) is not None:
+        raise _Undecided("jenis", f"Tabel bersatuan '{table_unit}' (pertumbuhan), klaim nilai dalam '{claim.unit}'.")
+    if _is_percent_unit(claim.unit) and _is_plain_index(table_unit):
+        raise _Undecided("jenis", f"Tabel berisi level indeks ('{table_unit}'); klaim dalam persen.")
     factor = _unit_factor(claim.unit, table_unit)
     if factor is not None:
         return factor
@@ -113,14 +137,20 @@ def _per_row(read: List[Read], values: List[float]) -> Dict[str, List[float]]:
 
 def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[float], str, str]:
     """(computed value, delta, verdict, explanation) for the claim's operation."""
-    op, unit = claim.operation, read[0][1].table.unit
+    op, unit = claim.operation, _unit(read[0][1], read[0][0].row)
     if op == "value" or (op == "yoy_growth" and len(read) == 1):
         if len(read) != 1:
             raise _Undecided("klaim_tidak_lengkap", "Klaim nilai harus menyebut tepat satu sel.")
-        computed = read[0][2] / _factor(claim, unit)
+        cell_value = abs(read[0][2]) if claim.size_of_negative else read[0][2]
+        computed = cell_value / _factor(claim, unit)
         delta, verdict, tail = _value_verdict(_claimed(claim), computed, claim.context_quote)
         return round(computed, 4), delta, verdict, tail
-    values = _common(read)
+    if op in ("diff", "yoy_growth"):
+        read = _ordered(read)
+    elif op in _TRENDS:
+        first_seen = {row: i for i, row in reversed(list(enumerate(c.row for c, _, _ in read)))}
+        read = sorted(read, key=lambda r: (first_seen[r[0].row], r[0].key[0], _period_ordinal(r[0].key[1])))
+    values = _common(read, claim)
     if op == "yoy_growth":
         if len(values) != 2 or values[0] == 0:
             raise _Undecided("klaim_tidak_lengkap", "Pertumbuhan yoy butuh dua sel: tahun lalu, lalu sekarang.")
@@ -175,7 +205,10 @@ def evaluate_claim(claim: Claim, views: List[TableView]) -> FactVerificationResu
     """The claim's verdict from the cells it names, with those cells in `periods` and the reasoning."""
     base = dict(operation=claim.operation, metric_label=claim.subject or "-", claimed_value=claim.claimed_value,
                 claimed_unit=claim.unit, context_quote=claim.context_quote, page_number=claim.page_number,
-                resolved_via="strict")
+                resolved_via="strict",
+                # A claim about every member: the Tinjauan AI must not re-judge it on members it picks
+                # (ai_review.review_candidates leaves group-scoped claims alone).
+                group_scope="all" if claim.all_members else None)
     by_code = {v.code: v for v in views}
     try:
         if claim.not_in_tables:

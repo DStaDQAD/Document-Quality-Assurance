@@ -5873,7 +5873,7 @@ async def verify_paired(
     # on this module.
     from strict import pipeline as strict_pipeline
     if strict_pipeline.enabled() and strict_pipeline.applies(
-            parsed_sources, mode, bool(pdf_tables or reference_tables)):
+            parsed_sources, mode, bool(pdf_tables or reference_tables), bool(chart_readings)):
         return await strict_pipeline.run_check(
             narrative_text, parsed_sources, llm, pdf_filename=pdf_filename, vision_llm=vision_llm,
             publication=publication, team_aliases=team_aliases, team_notes=team_notes,

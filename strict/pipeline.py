@@ -27,9 +27,14 @@ def enabled() -> bool:
     return os.getenv("STRICT_EXTRACTION", "").strip().lower() in ("1", "on", "true", "yes")
 
 
-def applies(sources: List[_ExcelSource], mode: str, has_pdf_tables: bool) -> bool:
-    """Strict covers uploaded Excel time-series tables only: an Excel-only check with at least one."""
-    return mode == "excel" and not has_pdf_tables and bool(build_views(sources))
+def applies(sources: List[_ExcelSource], mode: str, has_pdf_tables: bool, has_charts: bool) -> bool:
+    """Strict covers uploaded Excel time-series tables only: an Excel-only check with at least one,
+    no chart readings to check and no category (non-time-series) sheet, which keep the old path."""
+    if mode != "excel" or has_pdf_tables or has_charts:
+        return False
+    if any(s.origin == "excel" and not s.pointer_only and s.table.axis_type == "categorical" for s in sources):
+        return False
+    return bool(build_views(sources))
 
 
 def _hints(team_aliases: Dict[str, str]) -> str:

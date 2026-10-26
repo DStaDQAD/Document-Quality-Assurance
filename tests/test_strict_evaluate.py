@@ -212,7 +212,9 @@ def test_reasoning_lists_the_cells():
 
 def test_strict_imports_no_matching_or_guards():
     allowed = {"_ExcelSource", "MATCH_TOLERANCE", "_unit_factor", "_parse_scale_unit", "_numeric_verdict",
-               "_value_verdict", "_growth_tolerance", "_stable_band", "_period_ordinal"}
+               "_value_verdict", "_growth_tolerance", "_stable_band", "_period_ordinal",
+               # unit kinds, not row matching (review 2026-10-26: level on a growth table = jenis)
+               "_is_growth_series", "_is_percent_unit", "_is_plain_index"}
     imported = set()
     for path in (ROOT / "strict").glob("*.py"):
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
@@ -222,3 +224,80 @@ def test_strict_imports_no_matching_or_guards():
                 assert all(alias.name != "paired_verifier" for alias in node.names), path
 
     assert imported <= allowed, imported - allowed
+
+
+# --- fixes from the whole-branch review ----------------------------------------------------------
+
+NPI = ("Juta USD", {("Transaksi Berjalan", 2025, "Q3"): -9500.0, ("Transaksi Berjalan", 2025, "Q4"): -12490.0,
+                    ("Impor", 2025, "Q3"): -48487.0, ("Impor", 2025, "Q4"): -58323.0})
+
+
+@pytest.mark.parametrize("size, verdict", [(True, "Entailed"), (False, "Refuted")])
+def test_a_deficit_stated_by_its_size(size, verdict):
+    # npi.notes.yaml: "defisit transaksi berjalan 12,5 miliar dolar AS" is 12,5 on a negative balance.
+    claim = _claim("value", [_cell("Transaksi Berjalan", 2025, "Q4")], 12.5, "miliar USD",
+                   quote="Transaksi berjalan mencatat defisit 12,5 miliar dolar AS.", size_of_negative=size)
+
+    assert evaluate_claim(claim, _views(NPI)).verdict == verdict
+
+
+@pytest.mark.parametrize("size, verdict", [(True, "Entailed"), (False, "Refuted")])
+def test_imports_rising_in_size_on_negative_levels(size, verdict):
+    claim = _claim("is_increasing", [_cell("Impor", 2025, "Q3"), _cell("Impor", 2025, "Q4")], size_of_negative=size)
+
+    assert evaluate_claim(claim, _views(NPI)).verdict == verdict
+
+
+def test_a_widening_deficit_is_a_rise_in_its_size():
+    claim = _claim("diff", [_cell("Transaksi Berjalan", 2025, "Q3"), _cell("Transaksi Berjalan", 2025, "Q4")],
+                   3.0, "miliar USD", size_of_negative=True)
+
+    assert evaluate_claim(claim, _views(NPI)).verdict == "Entailed"
+
+
+def test_a_level_claim_on_a_growth_table_is_jenis():
+    views = _views(("%, yoy", {("M2", 2026, "Jul"): 15.7}))
+    claim = _claim("value", [_cell("M2", 2026, "Jul")], 1000.0, "triliun Rp", quote="M2 sebesar Rp1.000 triliun.")
+
+    result = evaluate_claim(claim, views)
+
+    assert (result.verdict, result.reason_code) == ("Inconclusive", "jenis")
+
+
+@pytest.mark.parametrize("operation", ["value", "yoy_growth"])
+def test_a_percent_claim_on_a_plain_index_cell_is_jenis(operation):
+    views = _views(("Indeks (2018=100)", {("MENENGAH", 2025, "Q4"): 114.01}))
+    claim = _claim(operation, [_cell("MENENGAH", 2025, "Q4")], 0.4, "persen",
+                   quote="Harga rumah tipe menengah tumbuh 0,40% (qtq).")
+
+    result = evaluate_claim(claim, views)
+
+    assert (result.verdict, result.reason_code) == ("Inconclusive", "jenis")
+
+
+def test_a_row_with_its_own_unit_is_judged_on_it():
+    views = _views(("Juta USD", {("Transaksi Berjalan (% PDB)", 2025, "Q4"): -0.61}))
+    views[0].table.row_units = {"Transaksi Berjalan (% PDB)": "% PDB"}
+    claim = _claim("value", [_cell("Transaksi Berjalan (% PDB)", 2025, "Q4")], 0.6, "persen",
+                   quote="defisit 0,6% dari PDB.", size_of_negative=True)
+
+    assert evaluate_claim(claim, views).verdict == "Entailed"
+
+
+def test_an_all_members_claim_is_marked_for_the_review():
+    data = {(f"Kota > {c}", 2025, period): v for c in "AB" for period, v in (("Q3", 1.0), ("Q4", 2.0))}
+    cells = [_cell(f"Kota > {c}", 2025, p) for c in "AB" for p in ("Q3", "Q4")]
+
+    result = evaluate_claim(_claim("is_increasing", cells, all_members=True), _views(("Indeks", data)))
+
+    assert result.group_scope == "all"
+
+
+@pytest.mark.parametrize("operation, value", [("diff", -16.8), ("yoy_growth", -5.6)])
+def test_cells_of_one_row_are_read_oldest_first(operation, value):
+    views = _views(("Miliar USD", {("Modal Ekuitas", 2026, "Q1"): 300.0, ("Modal Ekuitas", 2026, "Q2"): 283.2}))
+    reversed_cells = [_cell("Modal Ekuitas", 2026, "Q2"), _cell("Modal Ekuitas", 2026, "Q1")]
+    claim = _claim(operation, reversed_cells, value, "miliar USD" if operation == "diff" else "persen",
+                   quote=f"turun {abs(value)}".replace(".", ","))
+
+    assert evaluate_claim(claim, views).verdict == "Entailed"

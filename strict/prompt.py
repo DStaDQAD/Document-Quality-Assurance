@@ -63,6 +63,14 @@ no values, on purpose.
    unit is the number's unit as printed ('miliar USD', 'triliun Rp', 'persen').
    anchor_quote is 3-8 consecutive words copied exactly from the text, containing the number (for a
    claim with no number: its key phrase).
+
+8. SIZES OF NEGATIVE BALANCES. Balance-of-payments and investment-position tables record debits and
+   deficits as NEGATIVE numbers (impor, pembayaran, defisit, kewajiban neto). When the sentence states
+   the SIZE of such a balance — 'defisit 12,5 miliar dolar AS', 'impor meningkat', 'defisit melebar',
+   'kewajiban neto 197,4' — set size_of_negative = true and write the number without a minus; the
+   program then compares sizes. 'meningkat/melebar' is is_increasing on the size, 'menyempit/menurun'
+   is_decreasing. A rise or fall of the signed value itself keeps size_of_negative = false. This rule
+   is how a publication note saying 'tulis angkanya tanpa tanda minus' is applied here.
 """
 
 HUMAN_TEMPLATE = """\
