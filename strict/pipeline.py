@@ -17,7 +17,7 @@ from strict.claims import claim_to_dict
 from strict.evaluate import evaluate_claim
 from strict.extract import extract_claims
 from strict.tables import build_views
-from structured_extractor import drop_sections
+from structured_extractor import drop_sections, extraction_llms
 
 logger = logging.getLogger("fact-checker")
 
@@ -66,10 +66,10 @@ async def run_check(
     def _on_progress(done: int, total: int) -> None:
         emit("extract", "running", current=done, total=total, detail=f"{total} bagian teks")
 
+    primary, fallback = extraction_llms(llm, vision_llm)
     claims = await extract_claims(
-        drop_sections(narrative_text, skipped_sections(publication)), views,
-        vision_llm if vision_llm is not None else llm,
-        fallback_llm=llm if vision_llm is not None else None,
+        drop_sections(narrative_text, skipped_sections(publication)), views, primary,
+        fallback_llm=fallback,
         notes=notes_for(publication), hints=_hints(team_aliases),
         on_progress=_on_progress, on_chunk_failed=on_extract_gap,
     )

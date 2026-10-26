@@ -39,14 +39,23 @@ GEMINI_VISION_MAX_OUTPUT_TOKENS = int(os.getenv("GEMINI_VISION_MAX_OUTPUT_TOKENS
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
+# OpenScale: open-weight DeepSeek V4.1 Flash served from Singapore over an OpenAI-compatible API
+# (smoke test 2026-10-26: structured output works). Thinking is a reasoning_effort level, off for
+# extraction like GEMINI_THINKING_BUDGET=0, a little for the Tinjauan AI.
+OPENSCALE_API_KEY = os.getenv("OPENSCALE_API_KEY")
+OPENSCALE_MODEL = os.getenv("OPENSCALE_MODEL", "deepseek/deepseek-v4.1-flash")
+OPENSCALE_BASE_URL = os.getenv("OPENSCALE_BASE_URL", "https://api.openscale.so/v1")
+OPENSCALE_REASONING_EFFORT = os.getenv("OPENSCALE_REASONING_EFFORT", "none")
+OPENSCALE_REVIEW_REASONING_EFFORT = os.getenv("OPENSCALE_REVIEW_REASONING_EFFORT", "low")
+
 # Controls which provider handles vision/image tasks (PDF pages).
 # "google" → Gemini (default), "groq" → llama-4-scout via Groq API.
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "google").lower()
 
-_PROVIDER_KEYS = {"google": GOOGLE_API_KEY, "groq": GROQ_API_KEY, "ollama": None}
+_PROVIDER_KEYS = {"google": GOOGLE_API_KEY, "groq": GROQ_API_KEY, "openscale": OPENSCALE_API_KEY, "ollama": None}
 
 if LLM_PROVIDER not in _PROVIDER_KEYS:
-    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', or 'ollama'.")
+    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', 'openscale', or 'ollama'.")
 
 if VISION_PROVIDER not in ("google", "groq"):
     raise RuntimeError(f"Unsupported VISION_PROVIDER '{VISION_PROVIDER}'. Use 'google' or 'groq'.")
@@ -86,7 +95,23 @@ def _callback_kwargs(callbacks: Callbacks) -> dict:
     return {"callbacks": callbacks} if callbacks else {}
 
 
+def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
+    # Imported here: only this provider needs langchain-openai.
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(
+        model=OPENSCALE_MODEL,
+        base_url=OPENSCALE_BASE_URL,
+        api_key=OPENSCALE_API_KEY,
+        temperature=temperature,
+        reasoning_effort=reasoning_effort,
+        timeout=180,
+        **_callback_kwargs(callbacks),
+    )
+
+
 def get_llm(temperature: float = 0.0, callbacks: Callbacks = None) -> BaseChatModel:
+    if LLM_PROVIDER == "openscale":
+        return _openscale(temperature, OPENSCALE_REASONING_EFFORT, callbacks)
     if LLM_PROVIDER == "groq":
         return ChatGroq(
             model=GROQ_MODEL,
@@ -116,6 +141,8 @@ def get_review_llm(thinking_budget: Optional[int] = None, callbacks: Callbacks =
     thinking_budget overrides AI_REVIEW_THINKING_BUDGET (the eval runner compares budgets).
     Other providers have no such knob and get the ordinary model.
     """
+    if LLM_PROVIDER == "openscale":
+        return _openscale(0.0, OPENSCALE_REVIEW_REASONING_EFFORT, callbacks)
     if LLM_PROVIDER != "google":
         return get_llm(temperature=0.0, callbacks=callbacks)
     budget = AI_REVIEW_THINKING_BUDGET if thinking_budget is None else thinking_budget

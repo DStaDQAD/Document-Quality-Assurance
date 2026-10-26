@@ -49,6 +49,15 @@ logger = logging.getLogger("fact-checker")
 # it, to make fewer and larger calls.
 EXTRACTION_CHUNK_CHARS = int(os.getenv("EXTRACTION_CHUNK_CHARS", "6000"))
 
+
+def extraction_llms(llm, vision_llm):
+    """(primary, fallback) model for claim extraction. By default the vision model (Gemini) reads
+    the claims too, with the text model as fallback. EXTRACTION_LLM=text puts extraction on the
+    text model (LLM_PROVIDER, e.g. OpenScale) while PDF pages stay with the vision model."""
+    if vision_llm is None or os.getenv("EXTRACTION_LLM", "").strip().lower() == "text":
+        return llm, None
+    return vision_llm, llm
+
 # Maps full month names (English and Indonesian) to 3-letter abbreviations.
 # The LLM occasionally ignores the "3-letter only" instruction and outputs
 # full names like "April" instead of "Apr".

@@ -66,6 +66,7 @@ from structured_extractor import (
     drop_sections,
     extract_structured_facts,
     extract_structured_facts_async,
+    extraction_llms,
 )
 
 logger = logging.getLogger("fact-checker")
@@ -5958,8 +5959,7 @@ async def verify_paired(
 
     # Step 2: Extract structured facts.
     logger.info("Running structured fact extraction (combined row labels from %d source(s))", len(parsed_sources))
-    extraction_primary = vision_llm if vision_llm is not None else llm
-    extraction_fallback = llm if vision_llm is not None else None
+    extraction_primary, extraction_fallback = extraction_llms(llm, vision_llm)
 
     def _on_chunk_progress(done: int, total: int) -> None:
         emit("extract", "running", current=done, total=total, detail=f"{total} bagian teks")
