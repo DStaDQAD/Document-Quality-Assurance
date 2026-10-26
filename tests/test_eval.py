@@ -80,6 +80,9 @@ def test_every_operation_the_engine_can_return_is_covered_by_the_seed_dataset():
     # operations and passed while the engine could return eleven, so the two threshold ops
     # went unmeasured without anything saying so.
     engine_ops = set(get_args(FactVerificationResult.model_fields["operation"].annotation))
+    # Only the strict path returns these (the old engine has no such operation); its own tests
+    # cover them (tests/test_strict_evaluate.py).
+    engine_ops -= {"formula"}
     cases = load_cases(_discover_case_files(_DEFAULT_CASES_DIR))
     ops = {c.fact.operation for c in cases}
     assert engine_ops <= ops, f"missing coverage for: {sorted(engine_ops - ops)}"

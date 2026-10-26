@@ -1,7 +1,7 @@
 """Shared Pydantic request/response models for the fact-checking API."""
 
 from datetime import datetime
-from typing import Any, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -254,6 +254,9 @@ class PairedVerificationResponse(BaseModel):
     chart_checks: List[ChartCheck] = Field(default_factory=list)
     chart_label_count: int = 0
     chart_pages_unread: List[int] = Field(default_factory=list)
+    # A strict check's claims with the cells they name (strict.claims.claim_to_dict), so a replay
+    # can judge them again. Empty on the default path.
+    strict_claims: List[Dict[str, Any]] = Field(default_factory=list)
     # The id this check was stored under in the history (Riwayat), or None when storing it
     # failed — the check itself still succeeded. See check_history.
     history_id: Optional[str] = None
