@@ -126,7 +126,8 @@ def _factor(claim: Claim, table_unit: str) -> float:
 def _claimed(claim: Claim) -> float:
     if claim.claimed_value is None:
         raise _Undecided("klaim_tidak_lengkap", "Klaim tidak memuat angka untuk dibandingkan.")
-    return claim.claimed_value
+    # The size of a negative balance has no sign, whatever sign the model wrote on it.
+    return abs(claim.claimed_value) if claim.size_of_negative else claim.claimed_value
 
 
 def _derived(claim: Claim, computed: float) -> Tuple[float, float, str, str]:

@@ -114,3 +114,14 @@ def test_notes_and_hints_reach_every_chunk():
     assert len(seen) == 2
     assert all("PUBLIKASI: PII" in m[1].content and "\"ipr\" → 'INDEKS TOTAL'" in m[1].content for m in seen)
     assert "RELATIVE PERIODS" in seen[0][0].content
+
+
+def test_the_prompt_carries_the_lessons_of_the_first_measurement():
+    # DeepSeek/Gemini strict runs 2026-10-26: /1000 inside formulas, "naik dari 73,15%" read as a
+    # diff of 73,15, a threshold written as the claim's own number, a PMI contraction judged as a
+    # growth rate, a share "dari total ULN pemerintah" over a sibling row.
+    from strict.prompt import SYSTEM_PROMPT
+
+    for rule in ("NEVER CONVERT UNITS IN A FORMULA", "EVERY PRINTED NUMBER IS A value CLAIM",
+                 "THE BOUND IS NEVER THE CLAIM'S OWN NUMBER", "NET POSITIONS", "A SHARE OF A TOTAL"):
+        assert rule in SYSTEM_PROMPT, rule

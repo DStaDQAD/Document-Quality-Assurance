@@ -327,3 +327,16 @@ def test_a_sum_of_mixed_signs_compares_the_size_of_the_total(value, verdict):
                    value, "miliar USD", size_of_negative=True)
 
     assert evaluate_claim(claim, views).verdict == verdict
+
+
+@pytest.mark.parametrize("claimed, verdict", [(-252.9, "Entailed"), (252.9, "Entailed"), (-253.5, "Refuted")])
+def test_a_size_claim_is_unsigned_whatever_sign_the_ai_wrote(claimed, verdict):
+    # DeepSeek strict run 2026-10-26: "kewajiban neto 252,9" written as -252,9 with size_of_negative;
+    # the engine's size was right (252,9) and the verdict came back Tidak Sesuai on the sign alone.
+    views = _views(("Juta USD", {("Aset > Investasi Portofolio", 2025, "Q4"): 40571.1759,
+                                 ("Kewajiban > Investasi Portofolio", 2025, "Q4"): 293454.6688}))
+    claim = _claim("formula", [_cell("Kewajiban > Investasi Portofolio", 2025, "Q4"),
+                               _cell("Aset > Investasi Portofolio", 2025, "Q4")],
+                   claimed, "miliar USD", formula="c1-c2", formula_unit="tabel", size_of_negative=True)
+
+    assert evaluate_claim(claim, views).verdict == verdict

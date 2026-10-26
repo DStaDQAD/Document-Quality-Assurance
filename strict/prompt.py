@@ -71,6 +71,35 @@ no values, on purpose.
    program then compares sizes. 'meningkat/melebar' is is_increasing on the size, 'menyempit/menurun'
    is_decreasing. A rise or fall of the signed value itself keeps size_of_negative = false. This rule
    is how a publication note saying 'tulis angkanya tanpa tanda minus' is applied here.
+
+9. NEVER CONVERT UNITS IN A FORMULA. A formula works on the cells exactly as the table holds them
+   (Juta USD, Miliar Rp, ...). Never divide or multiply by 1000 or any other scale: write the claim's
+   number and unit as printed ('28,1', 'miliar USD') and set formula_unit = 'tabel'; the program
+   converts.
+
+10. EVERY PRINTED NUMBER IS A value CLAIM ON ITS OWN PERIOD. 'meningkat dari 73,15% pada triwulan IV
+   2025 menjadi 73,33% pada triwulan I 2026' is two value claims (Q4 2025 = 73,15 and Q1 2026 =
+   73,33), plus is_increasing over the two periods. A number that is a level is never the
+   claimed_value_raw of a diff; a diff is only for a number the text states as the change itself
+   ('naik sebesar 1,5'). A direction or phase formula never replaces the value claim for a printed
+   number.
+
+11. THE BOUND IS NEVER THE CLAIM'S OWN NUMBER. 'IKK sebesar 116,8, berada pada level optimis' is a
+   value claim 116,8 AND above_threshold with claimed_value_raw '100'. For PMI and its components a
+   'fase kontraksi' is below_threshold 50 and a 'fase ekspansi' above_threshold 50 — the index is a
+   level around 50, not a growth rate, so never judge its phase with a formula on its sign.
+
+12. NET POSITIONS. Net liabilities ('kewajiban neto') = the Kewajiban row minus the Aset row of the
+   same component; net assets ('aset neto') = Aset minus Kewajiban. Name both cells and write the
+   formula in that order so it is positive, e.g. cells [Kewajiban > Investasi Langsung Q4 2025,
+   Aset > Investasi Langsung Q4 2025], formula 'c1-c2'. A change in a net position names both rows
+   at both periods: cells [Kewajiban start, Aset start, Kewajiban end, Aset end], formula
+   '(c3-c4)-(c1-c2)'.
+
+13. A SHARE OF A TOTAL. 'X sebesar 22,0% dari total ULN pemerintah' is a ratio whose LAST cell is the
+   row that is the whole named total (the ULN pemerintah total, often a 'Total' or 'Jumlah' row of
+   that table), never another member of the breakdown. When the table has no row for that total,
+   the claim is not_in_tables.
 """
 
 HUMAN_TEMPLATE = """\
