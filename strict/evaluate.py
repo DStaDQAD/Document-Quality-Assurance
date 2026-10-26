@@ -82,10 +82,9 @@ def _ordered(read: List[Read]) -> List[Read]:
     return sorted(read, key=lambda r: (r[0].key[0], _period_ordinal(r[0].key[1])))
 
 
-def _common(read: List[Read], claim: Claim) -> List[float]:
+def _common(read: List[Read], claim: Claim, sizes: bool) -> List[float]:
     """Every cell's value in the first cell's unit (a ratio of ULN in Juta USD to PDB in Miliar
-    USD), as a size when the claim states the size of a negative balance. Units with no common
-    scale cannot be combined."""
+    USD); with `sizes`, each cell as its size. Units with no common scale cannot be combined."""
     unit = _unit(read[0][1], read[0][0].row)
     base = _parse_scale_unit(unit)
     values = []
@@ -96,8 +95,15 @@ def _common(read: List[Read], claim: Claim) -> List[float]:
             if base is None or other is None or base[1] != other[1]:
                 raise _Undecided("jenis", f"Satuan sel tidak bisa digabung: '{unit}' dan '{own}'.")
             value = value * other[0] / base[0]
-        values.append(abs(value) if claim.size_of_negative else value)
+        values.append(abs(value) if sizes else value)
     return values
+
+
+# Where the size of a negative balance is taken. Per cell when the claim is about that one balance
+# over time ("impor meningkat", "defisit melebar 3,0"); of the result when the cells are combined
+# first ("kewajiban neto 252,9" = Kewajiban − Aset, "transaksi modal dan finansial defisit 8,0" =
+# 68,8 + −8.031,3), where a size per cell changes the sum itself.
+_SIZE_OF_RESULT = {"sum", "average", "ratio", "formula"}
 
 
 def _factor(claim: Claim, table_unit: str) -> float:
@@ -150,7 +156,12 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
     elif op in _TRENDS:
         first_seen = {row: i for i, row in reversed(list(enumerate(c.row for c, _, _ in read)))}
         read = sorted(read, key=lambda r: (first_seen[r[0].row], r[0].key[0], _period_ordinal(r[0].key[1])))
-    values = _common(read, claim)
+    of_result = claim.size_of_negative and op in _SIZE_OF_RESULT
+    values = _common(read, claim, sizes=claim.size_of_negative and not of_result)
+
+    def size(x: float) -> float:
+        return abs(x) if of_result else x
+
     if op == "yoy_growth":
         if len(values) != 2 or values[0] == 0:
             raise _Undecided("klaim_tidak_lengkap", "Pertumbuhan yoy butuh dua sel: tahun lalu, lalu sekarang.")
@@ -164,11 +175,11 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
         return _derived(claim, (values[1] - values[0]) / _factor(claim, unit))
     if op in ("sum", "average"):
         total = sum(values) / (len(values) if op == "average" else 1)
-        return _derived(claim, total / _factor(claim, unit))
+        return _derived(claim, size(total) / _factor(claim, unit))
     if op == "ratio":
         if len(values) < 2 or values[-1] == 0:
             raise _Undecided("klaim_tidak_lengkap", "Rasio butuh pembilang dan penyebut.")
-        return _derived(claim, sum(values[:-1]) / values[-1] * 100)
+        return _derived(claim, size(sum(values[:-1]) / values[-1] * 100))
     if op in _TRENDS:
         rows = _per_row(read, values)
         if any(len(series) < 2 for series in rows.values()):
@@ -194,6 +205,7 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
             raise _Undecided("klaim_tidak_lengkap", f"Rumus AI tidak bisa dihitung: {claim.formula!r} ({exc}).")
         if isinstance(result, bool):
             return None, None, "Entailed" if result else "Refuted", f"rumus {claim.formula} = {'benar' if result else 'salah'}"
+        result = size(result)
         if claim.formula_unit == "tabel":
             result = result / _factor(claim, unit)
         computed, delta, verdict, tail = _derived(claim, result)

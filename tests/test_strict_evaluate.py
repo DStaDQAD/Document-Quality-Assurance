@@ -301,3 +301,29 @@ def test_cells_of_one_row_are_read_oldest_first(operation, value):
                    quote=f"turun {abs(value)}".replace(".", ","))
 
     assert evaluate_claim(claim, views).verdict == "Entailed"
+
+
+# --- the size of a negative balance is taken of the RESULT for formulas, sums and ratios ----------
+
+@pytest.mark.parametrize("value, verdict", [(252.9, "Entailed"), (253.5, "Refuted")])
+def test_a_net_position_formula_compares_the_size_of_its_result(value, verdict):
+    # PII Tw IV-2025 strict run: "investasi portofolio mencatat kewajiban neto sebesar 252,9 miliar
+    # dolar AS" as c1-c2 over Aset and Kewajiban, flagged as a size; the engine took each cell's
+    # size (both already positive) and compared -252,9 with 252,9.
+    views = _views(("Juta USD", {("Aset > Investasi Portofolio", 2025, "Q4"): 40571.1759,
+                                 ("Kewajiban > Investasi Portofolio", 2025, "Q4"): 293454.6688}))
+    claim = _claim("formula", [_cell("Aset > Investasi Portofolio", 2025, "Q4"),
+                               _cell("Kewajiban > Investasi Portofolio", 2025, "Q4")],
+                   value, "miliar USD", formula="c1-c2", formula_unit="tabel", size_of_negative=True)
+
+    assert evaluate_claim(claim, views).verdict == verdict
+
+
+@pytest.mark.parametrize("value, verdict", [(8.0, "Entailed"), (8.1, "Refuted")])
+def test_a_sum_of_mixed_signs_compares_the_size_of_the_total(value, verdict):
+    # NPI Tw IV-2025: "transaksi modal dan finansial ... defisit 8,0" = 68,8 + (-8.031,3) = -7.962,5.
+    views = _views(("Juta USD", {("Transaksi Modal", 2025, "Q3"): 68.8, ("Transaksi Finansial", 2025, "Q3"): -8031.26}))
+    claim = _claim("sum", [_cell("Transaksi Modal", 2025, "Q3"), _cell("Transaksi Finansial", 2025, "Q3")],
+                   value, "miliar USD", size_of_negative=True)
+
+    assert evaluate_claim(claim, views).verdict == verdict
