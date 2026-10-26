@@ -77,3 +77,13 @@ def test_verify_paired_extracts_with_the_text_model_when_told(mock_parse, mock_e
 
     assert mock_extract.call_args.args[2] is text
     assert mock_extract.call_args.kwargs["fallback_llm"] is None
+
+
+def test_each_model_gets_its_own_async_connection(openscale):
+    # Regression run 2026-10-26: langchain-openai shared one async HTTP client across requests;
+    # the test client runs each request on a new event loop, so later documents lost chunks to
+    # "Event loop is closed" and came back with half their claims.
+    first, second = openscale.get_llm(), openscale.get_llm()
+
+    assert first.root_async_client is not second.root_async_client
+    assert first.root_async_client._client is not second.root_async_client._client

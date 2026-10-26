@@ -97,6 +97,7 @@ def _callback_kwargs(callbacks: Callbacks) -> dict:
 
 def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
     # Imported here: only this provider needs langchain-openai.
+    import httpx
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(
         model=OPENSCALE_MODEL,
@@ -105,6 +106,10 @@ def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) 
         temperature=temperature,
         reasoning_effort=reasoning_effort,
         timeout=180,
+        # Its own async connection pool: langchain-openai otherwise shares one across every model,
+        # and a pool opened on an event loop that has since closed fails with "Event loop is
+        # closed" (the regression runner's test client runs each request on a new loop).
+        http_async_client=httpx.AsyncClient(timeout=180),
         **_callback_kwargs(callbacks),
     )
 
