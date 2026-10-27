@@ -1142,7 +1142,7 @@ def _settings_snapshot() -> dict:
             {
                 "key": key,
                 "hidden": key in hidden,
-                "builtin_aliases": [{"phrase": p, "row": r} for p, r in team_settings.builtin_aliases(key)],
+                "builtin": team_settings.builtin_view(key),
                 "team_aliases": team_settings.list_team_aliases(key),
                 "notes": team_settings.notes(key),
                 "known_rows": team_settings.known_rows(key),
@@ -1156,7 +1156,7 @@ def _settings_snapshot() -> dict:
 
 @app.get("/api/settings")
 async def get_settings_endpoint() -> JSONResponse:
-    """Every publication's visibility, aliases (built-in and the team's), notes and known rows."""
+    """Every publication's visibility, built-in notes per section (the Catatan tab), the team's phrases and conventions, and known rows."""
     return JSONResponse(await _settings_call(_settings_snapshot))
 
 
@@ -1174,6 +1174,12 @@ async def put_visibility_endpoint(publication: str, body: _VisibilityBody) -> JS
 @app.post("/api/settings/{publication}/aliases")
 async def post_alias_endpoint(publication: str, body: _AliasBody) -> JSONResponse:
     return JSONResponse(await _settings_call(team_settings.add_alias, publication, body.phrase, body.row, body.by))
+
+
+@app.put("/api/settings/{publication}/aliases/{alias_id}")
+async def put_alias_endpoint(publication: str, alias_id: int, body: _AliasBody) -> JSONResponse:
+    return JSONResponse(await _settings_call(
+        team_settings.update_alias, publication, alias_id, body.phrase, body.row, body.by))
 
 
 @app.delete("/api/settings/{publication}/aliases/{alias_id}")

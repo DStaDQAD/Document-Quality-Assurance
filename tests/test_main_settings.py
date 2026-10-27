@@ -13,9 +13,22 @@ def test_get_settings_lists_all_thirteen_with_aliases_notes_and_visibility():
     assert keys == list(team_settings.PUBLICATIONS)
     pii = next(p for p in body["publications"] if p["key"] == "pii")
     assert pii["hidden"] is False
-    assert {"phrase": "afln indonesia", "row": "Aset"} in pii["builtin_aliases"]
-    assert pii["team_aliases"] == [] and pii["notes"]           # notes seeded from the YAML
+    assert any(g.get("row") == "Aset" and "afln indonesia" in g["phrases"] for g in pii["builtin"]["phrases"])
+    assert pii["builtin"]["conventions"] and "builtin_aliases" not in pii
+    assert pii["team_aliases"] == [] and pii["notes"] == []      # the team's additions only
     assert body["notes_max_words"] == team_settings.NOTES_MAX_WORDS
+
+
+def test_a_team_phrase_is_edited_and_a_missing_one_is_422():
+    alias = client.post("/api/settings/spe/aliases", json={"phrase": "penjualan riil", "row": "INDEKS TOTAL", "by": "Ani"}).json()
+    edited = client.put(f"/api/settings/spe/aliases/{alias['id']}",
+                        json={"phrase": "Penjualan Riil Total", "row": "INDEKS TOTAL", "by": "Budi"})
+    assert edited.status_code == 200 and edited.json()["phrase"] == "penjualan riil total"
+    spe = next(p for p in client.get("/api/settings").json()["publications"] if p["key"] == "spe")
+    assert [a["phrase"] for a in spe["team_aliases"]] == ["penjualan riil total"]
+    missing = client.put(f"/api/settings/spe/aliases/{alias['id'] + 99}",
+                         json={"phrase": "x", "row": "INDEKS TOTAL", "by": "Budi"})
+    assert missing.status_code == 422 and "tidak ditemukan" in missing.json()["detail"]
 
 
 def test_hide_add_alias_note_reorder_delete_and_reset_round_trip():
