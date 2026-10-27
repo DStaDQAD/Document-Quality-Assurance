@@ -27,6 +27,10 @@ no values, on purpose.
    or kind of figure the tables do not have (sales when the tables hold prices, a sector the table
    does not split out) — set not_in_tables = true with a short reason and name no cells. Never pick
    a row that only looks similar.
+   A FIGURE MADE OF SEVERAL ROWS IS IN THE TABLES. A category the table splits over several rows (all
+   equity instruments across components, 'instrumen lainnya' = two rows), or a share of such a sum,
+   is answered by a formula over those rows — never not_in_tables. The publication notes say which
+   rows make up such a category when the report uses one.
 
 4. RELATIVE PERIODS COUNT FROM THE PARAGRAPH, NOT FROM THE REPORT'S EDITION. 'triwulan sebelumnya',
    'bulan sebelumnya', 'periode sebelumnya' count back from the period the text was just talking

@@ -151,3 +151,11 @@ def test_the_old_prompts_lessons_are_ported():
         assert rule in SYSTEM_PROMPT, rule
     # Round 3's phase rule without a quantifier made the model test every Sub-LU.
     assert "for every row the sentence itself covers" in SYSTEM_PROMPT
+
+
+def test_a_figure_made_of_several_rows_is_in_the_tables():
+    # Owner 2026-10-27 (OPEN_QUESTIONS 5): "pangsa instrumen utang 78,2% dari total AFLN" — a sum of
+    # rows over a total — is in the table, not not_in_tables.
+    from strict.prompt import SYSTEM_PROMPT
+
+    assert "A FIGURE MADE OF SEVERAL ROWS IS IN THE TABLES" in SYSTEM_PROMPT

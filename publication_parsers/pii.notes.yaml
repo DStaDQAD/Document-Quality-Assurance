@@ -7,6 +7,7 @@ conventions:
   - '"mencatat kewajiban neto" tanpa angka = posisi neto di bawah 0; "mencatat aset neto" = di atas 0.'
   - '"kewajiban neto ... menurun sebesar X" berarti besarnya kewajiban neto mengecil sebesar X.'
   - '"sebesar X" setelah kata menurun/meningkat di kalimat tentang perubahan biasanya adalah perubahannya (diff), bukan level.'
+  - 'Komposisi per instrumen adalah gabungan baris (rumus): ekuitas = Modal Ekuitas investasi langsung + Modal Ekuitas investasi portofolio (sisi Aset untuk AFLN, Kewajiban untuk KFLN); instrumen lainnya AFLN = Emas Moneter + Aset Derivatif Finansial, KFLN = Kewajiban Derivatif Finansial; utang AFLN = Aset − ekuitas − instrumen lainnya, utang KFLN = baris Utang Luar Negeri (ULN); pinjaman KFLN (termasuk utang afiliasi) = Kewajiban Investasi Lainnya > Pinjaman + Kewajiban Investasi Langsung > Instrumen Utang. Pangsa = gabungan itu dibagi Aset (AFLN) atau Kewajiban (KFLN).'
 phrases:
   - '"Posisi AFLN Indonesia" → Aset; "Posisi KFLN" → Kewajiban; "PII" → Posisi Investasi Internasional, bersih.'
   - '"investasi langsung asing (PMA)" → sisi Kewajiban investasi langsung; "cadangan devisa" → baris Cadangan Devisa di Aset.'
