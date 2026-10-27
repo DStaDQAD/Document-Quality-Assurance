@@ -171,17 +171,26 @@ def _ranking(claim: Claim, read: List[Read], values: List[float]) -> Tuple[None,
     two cells its change (later minus earlier, whatever order they were listed in). The comparison
     is built here, never written by the model: the lowest of the named is at least the highest of
     the rest ('highest'), or the other way round ('lowest')."""
-    members: Dict[Tuple[str, str], List[Tuple[Cell, float]]] = {}
-    for (cell, _, _), value in zip(read, values):
-        members.setdefault((cell.code, cell.row), []).append((cell, value))
-    sizes = {len(cells) for cells in members.values()}
-    if len(sizes) != 1 or sizes.pop() not in (1, 2):
-        raise _Undecided("klaim_tidak_lengkap", "Peringkat butuh satu sel (level) atau dua sel (perubahan) "
-                                                "untuk setiap anggota, sama untuk semuanya.")
-    measure = {}
-    for key, cells in members.items():
-        cells = sorted(cells, key=lambda cv: (cv[0].key[0], _period_ordinal(cv[0].key[1])))
-        measure[key] = cells[0][1] if len(cells) == 1 else cells[1][1] - cells[0][1]
+    measure: Dict[Tuple[str, str], float] = {}
+    if claim.rank_pairs:
+        # A net position per member: two rows at one period, the first minus the second
+        # (Kewajiban − Aset), in the order the model listed them.
+        if len(read) % 2 or any(read[i][0].key != read[i + 1][0].key for i in range(0, len(read), 2)):
+            raise _Undecided("klaim_tidak_lengkap", "Peringkat selisih butuh dua sel pada periode yang sama "
+                                                    "untuk setiap anggota.")
+        for i in range(0, len(read), 2):
+            measure[(read[i][0].code, f"{read[i][0].row} − {read[i + 1][0].row}")] = values[i] - values[i + 1]
+    else:
+        members: Dict[Tuple[str, str], List[Tuple[Cell, float]]] = {}
+        for (cell, _, _), value in zip(read, values):
+            members.setdefault((cell.code, cell.row), []).append((cell, value))
+        sizes = {len(cells) for cells in members.values()}
+        if len(sizes) != 1 or sizes.pop() not in (1, 2):
+            raise _Undecided("klaim_tidak_lengkap", "Peringkat butuh satu sel (level) atau dua sel (perubahan) "
+                                                    "untuk setiap anggota, sama untuk semuanya.")
+        for key, cells in members.items():
+            cells = sorted(cells, key=lambda cv: (cv[0].key[0], _period_ordinal(cv[0].key[1])))
+            measure[key] = cells[0][1] if len(cells) == 1 else cells[1][1] - cells[0][1]
     ordered = list(measure)
     named, rest = ordered[:claim.ranked or 0], ordered[claim.ranked or 0:]
     if not named or not rest or claim.rank not in ("highest", "lowest"):

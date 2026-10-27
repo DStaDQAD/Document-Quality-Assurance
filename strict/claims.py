@@ -39,6 +39,9 @@ class StrictClaim(BaseModel):
     rank: Optional[Literal["highest", "lowest"]] = Field(
         None, description="Hanya untuk operation='ranking': yang disebut 'highest' (tertinggi/terbesar naik) atau "
                           "'lowest' (terendah/penurunan terbesar)")
+    rank_pairs: bool = Field(
+        False, description="Hanya untuk operation='ranking': True bila tiap anggota adalah selisih dua baris pada "
+                           "periode yang sama (kewajiban neto = Kewajiban lalu Aset)")
     formula: Optional[str] = Field(None, description="Hanya untuk operation='formula': rumus atas c1..cn")
     formula_unit: Optional[Literal["tabel", "persen", "jumlah"]] = Field(
         None, description="Satuan hasil rumus: 'tabel', 'persen', atau 'jumlah' (hitungan)")
@@ -75,6 +78,7 @@ class Claim:
     formula_unit: Optional[str] = None
     ranked: Optional[int] = None
     rank: Optional[str] = None
+    rank_pairs: bool = False
     all_members: bool = False
     size_of_negative: bool = False
     not_in_tables: bool = False

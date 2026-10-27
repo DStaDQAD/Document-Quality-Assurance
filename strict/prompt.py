@@ -163,6 +163,8 @@ workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
    'penurunan terbesar di A dan B' is rank 'lowest' (the largest fall is the lowest change).
    'terendah' on a level is rank 'lowest'. A sentence ranking two things ('penurunan terbesar di A,
    sementara peningkatan tertinggi di B') is two ranking claims.
+   NET POSITIONS ('kewajiban neto tertinggi pada investasi portofolio') rank a difference of two rows:
+   rank_pairs = true and two cells per member at the same period, Kewajiban then Aset (rule 12).
 """
 
 HUMAN_TEMPLATE = """\

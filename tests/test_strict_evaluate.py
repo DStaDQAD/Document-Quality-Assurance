@@ -474,3 +474,25 @@ def test_a_ranking_needs_named_members_and_others():
     uneven = _ranking(["Bandung"], "lowest")
     uneven.cells = uneven.cells[:-1]                       # the last member has one period only
     assert evaluate_claim(uneven, _sk_views()).verdict == "Inconclusive"
+
+
+# PII Tw IV 2025: 'investasi portofolio yang mencatat kewajiban neto tertinggi'. Gross liabilities
+# put direct investment first (347,6 > 293,5); net of assets, portfolio leads (252,9 > 203,9).
+PII_NET = ("Juta USD", {
+    ("Kewajiban > Investasi Portofolio", 2025, "Q4"): 293454.67, ("Aset > Investasi Portofolio", 2025, "Q4"): 40571.18,
+    ("Kewajiban > Investasi Langsung", 2025, "Q4"): 347640.46, ("Aset > Investasi Langsung", 2025, "Q4"): 143739.43,
+    ("Kewajiban > Investasi Lainnya", 2025, "Q4"): 188842.60, ("Aset > Investasi Lainnya", 2025, "Q4"): 216897.82,
+})
+
+
+@pytest.mark.parametrize("named, verdict", [("Investasi Portofolio", "Entailed"), ("Investasi Langsung", "Refuted")])
+def test_a_ranking_of_net_positions_ranks_each_pair_of_rows(named, verdict):
+    components = [named] + [c for c in ("Investasi Portofolio", "Investasi Langsung", "Investasi Lainnya") if c != named]
+    cells = [cell for c in components
+             for cell in (_cell(f"Kewajiban > {c}", 2025, "Q4"), _cell(f"Aset > {c}", 2025, "Q4"))]
+    claim = _claim("ranking", cells, ranked=1, rank="highest", rank_pairs=True, all_members=True)
+
+    result = evaluate_claim(claim, _views(PII_NET))
+
+    assert result.verdict == verdict
+    assert "Investasi Portofolio − Aset > Investasi Portofolio 252883,49" in result.reasoning
