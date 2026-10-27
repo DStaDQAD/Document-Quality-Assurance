@@ -356,6 +356,9 @@ select { cursor: pointer; }
 .hints-form { display: grid; gap: 12px; max-width: 70ch; }
 .hints-form label { font-size: 12px; font-weight: 600; color: var(--text-500); display: grid; gap: 5px; }
 .hints-form input:disabled { opacity: 0.6; cursor: not-allowed; }
+.hint-field { display: grid; gap: 5px; }
+.hint-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.hint-state { display: inline-flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-400); }
 .hints-actions { display: flex; justify-content: flex-end; }
 .change-list { list-style: none; margin: 0; padding: 0; }
 .change-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
@@ -1724,6 +1727,20 @@ body.auth-locked .app {
     "ppkom":           { label: "Survei Properti Komersial (PPKom)", report: true, press: false, rules: REPORT_ONLY_RULES },
   };
 
+  // Which documents the upload card offers per publication: the team's choice (Pengaturan ›
+  // Format nama dokumen, /api/settings `documents`), else what the publication has. The rules
+  // follow: a second document brings the cross-check, a hidden Excel drops the Excel rule.
+  let uploadDocuments = {};
+  function docsOf(key) {
+    const pub = PUBLICATIONS[key];
+    return uploadDocuments[key] || { press: pub?.press !== false, report: !!pub?.report, excel: true };
+  }
+  function rulesOf(key) {
+    const d = docsOf(key);
+    const rules = d.press && d.report ? WITH_REPORT_RULES : d.press ? PRESS_ONLY_RULES : REPORT_ONLY_RULES;
+    return d.excel ? rules : rules.filter((rule) => rule !== "excel");
+  }
+
   const publicationSelect = document.getElementById("publication-select");
   publicationSelect.insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
     .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
@@ -1762,15 +1779,16 @@ body.auth-locked .app {
   // rule on, the other one rides along as reference_pdf. A Laporan picked under a publication
   // that has one stays picked, but is not sent, when a publication without one is chosen.
   function activeReportSources() {
-    const pub = PUBLICATIONS[currentPublication()];
-    return [...(pub?.press === false ? [] : [pressSlot]), ...(pub?.report ? [reportSlot] : [])];
+    const docs = docsOf(currentPublication());
+    return [...(docs.press ? [pressSlot] : []), ...(docs.report ? [reportSlot] : [])];
   }
 
   function applyPublication() {
-    const pub = PUBLICATIONS[currentPublication()];
-    document.getElementById("publication-report-field").hidden = !pub?.report;
-    document.getElementById("press-upload-field").hidden = pub?.press === false;
-    document.getElementById("upload-row").classList.toggle("has-three", !!pub?.report && pub?.press !== false);
+    const docs = docsOf(currentPublication());
+    document.getElementById("publication-report-field").hidden = !docs.report;
+    document.getElementById("press-upload-field").hidden = !docs.press;
+    document.getElementById("excel-upload-field").hidden = !docs.excel;
+    document.getElementById("upload-row").classList.toggle("has-three", docs.press && docs.report && docs.excel);
     showUploadHints();
     syncRules();
   }
@@ -1858,7 +1876,7 @@ body.auth-locked .app {
     for (const [key, id] of Object.entries(RULE_BOXES)) {
       const box = document.getElementById(id);
       const label = box.closest(".rule-check");
-      const used = !!pub && pub.rules.includes(key);
+      const used = !!pub && rulesOf(currentPublication()).includes(key);
       const runs = used && ready[key] !== false;
       const optional = key === "charts";
       label.hidden = !used;
@@ -1875,7 +1893,7 @@ body.auth-locked .app {
       pub ? `Aturan untuk ${pub.label}` : "Aturan pemeriksaan";
     document.getElementById("rules-fixed-note").textContent = !pub
       ? "Pilih jenis publikasi untuk melihat aturannya."
-      : pub.rules.includes("charts")
+      : rulesOf(currentPublication()).includes("charts")
         ? "Ditetapkan untuk publikasi ini. Cek grafik boleh dimatikan."
         : "Ditetapkan untuk publikasi ini, tidak perlu dicentang.";
   }
@@ -2919,7 +2937,7 @@ body.auth-locked .app {
   const ACTION_WORDS = { tambah: "menambah", ubah: "mengubah", hapus: "menghapus", urutkan: "mengurutkan",
                          sembunyikan: "menyembunyikan", tampilkan: "menampilkan" };
   const KIND_WORDS = { alias: "frasa", note: "konvensi", visibility: "publikasi", hint: "format nama dokumen",
-                       reset: "pengaturan" };
+                       document: "dokumen", reset: "pengaturan" };
 
   function settingsName() {
     return settingsNameEl.value.trim();
@@ -3142,18 +3160,23 @@ body.auth-locked .app {
   }
 
   function hintsHtml(pub) {
-    const has = { press: PUBLICATIONS[pub.key]?.press !== false, report: !!PUBLICATIONS[pub.key]?.report, excel: true };
+    const shown = pub.documents || docsOf(pub.key);
     const labels = { press: "Siaran Pers", report: "Laporan", excel: "Tabel Excel" };
     const hints = pub.upload_hints || {};
+    // Each document has a switch: hidden, it leaves the upload card and its name box greys out.
     return `
       <p class="settings-help">Contoh nama file yang muncul di bawah kotak unggah, mengikuti penamaan di folder
         SharePoint tim. Hanya petunjuk: file dengan nama lain tetap bisa diperiksa.</p>
       <form class="hints-form" id="hints-form" autocomplete="off">
         ${["press", "report", "excel"].map((slot) => `
-          <label>${labels[slot]}
-            <input type="text" id="hint-${slot}" maxlength="300" value="${escapeHtml(hints[slot] || "")}"
-                   ${has[slot] ? "" : "disabled"} placeholder="${has[slot] ? "Contoh nama file" : "Publikasi ini tidak punya " + labels[slot].toLowerCase()}">
-          </label>`).join("")}
+          <div class="hint-field">
+            <div class="hint-head"><label for="hint-${slot}">${labels[slot]}</label>
+              <span class="hint-state">${shown[slot] ? "Tampil" : "Disembunyikan"}
+                <span class="switch"><input type="checkbox" role="switch" data-doc="${slot}" ${shown[slot] ? "checked" : ""}
+                      aria-label="Tampilkan ${labels[slot]} di formulir unggah"></span></span></div>
+            <input type="text" id="hint-${slot}" maxlength="300" value="${escapeHtml(hints[slot] || "").replaceAll('"', "&quot;")}"
+                   ${shown[slot] ? "" : "disabled"} placeholder="${shown[slot] ? "Contoh nama file" : "Disembunyikan dari formulir unggah"}">
+          </div>`).join("")}
         <div class="hints-actions">
           <button type="submit" class="run-btn"><span class="material-symbols-outlined">save</span>Simpan contoh</button>
         </div>
@@ -3272,6 +3295,25 @@ body.auth-locked .app {
     }
   });
 
+  // A document's switch (Format nama dokumen). Siaran Pers and Laporan never both go hidden: the
+  // server refuses it too, this only spares the round trip.
+  document.getElementById("settings-detail").addEventListener("change", (e) => {
+    const toggle = e.target.closest("input[data-doc]");
+    if (!toggle) return;
+    const slot = toggle.dataset.doc;
+    const docs = currentPub().documents || docsOf(settingsSelected);
+    const other = { press: "report", report: "press" }[slot];
+    if (!toggle.checked && other && !docs[other]) {
+      toggle.checked = true;
+      setFeedback("hints-feedback", "error", "Siaran Pers dan Laporan tidak bisa disembunyikan dua-duanya; minimal satu dokumen diperiksa.");
+      return;
+    }
+    if (!requireName()) { toggle.checked = !toggle.checked; return; }
+    settingsAction(toggle, () => settingsSend("PUT", `/api/settings/${settingsSelected}/documents/${slot}`,
+        { shown: toggle.checked, by: settingsName() }), "hints-feedback",
+      toggle.checked ? "Dokumen ditampilkan di formulir unggah." : "Dokumen disembunyikan dari formulir unggah.");
+  });
+
   document.getElementById("settings-detail").addEventListener("submit", (e) => {
     e.preventDefault();
     const pub = settingsSelected;
@@ -3296,7 +3338,9 @@ body.auth-locked .app {
   // The upload card's "Jenis publikasi": a hidden publication leaves the choices, except the one
   // already chosen (a running form keeps its value).
   function applyHiddenPublications(publications) {
+    uploadDocuments = Object.fromEntries(publications.filter((p) => p.documents).map((p) => [p.key, p.documents]));
     applyUploadHints(publications);
+    applyPublication();
     const hidden = new Set(publications.filter((p) => p.hidden).map((p) => p.key));
     const chosen = publicationSelect.value;
     publicationSelect.querySelectorAll("option[value]").forEach((opt) => {

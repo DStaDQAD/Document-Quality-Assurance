@@ -283,3 +283,32 @@ def test_upload_hints_are_edited_logged_and_reset():
 def test_an_overlong_upload_hint_is_refused():
     with pytest.raises(SettingsError):
         team_settings.set_upload_hints("pii", press="x" * 400, report="", excel="", by="Ani")
+
+
+# --- which documents each publication checks (Pengaturan › Format nama dokumen) -------------------
+
+def test_documents_start_as_the_publication_has_them():
+    assert team_settings.documents("uang-beredar") == {"press": True, "report": True, "excel": True}
+    assert team_settings.documents("uang-primer-m0") == {"press": True, "report": False, "excel": True}
+    assert team_settings.documents("ppkom") == {"press": False, "report": True, "excel": True}
+
+
+def test_a_document_is_hidden_shown_logged_and_reset():
+    team_settings.set_document("sk", "report", False, by="Ani")
+    team_settings.set_document("uang-primer-m0", "report", True, by="Ani")
+    assert team_settings.documents("sk")["report"] is False
+    assert team_settings.documents("uang-primer-m0")["report"] is True
+    assert [(c["kind"], c["action"], c["after"]) for c in team_settings.changes("sk")][0] == (
+        "document", "sembunyikan", "Laporan")
+    team_settings.reset("sk", by="Budi")
+    assert team_settings.documents("sk")["report"] is True
+
+
+def test_press_release_and_report_cannot_both_be_hidden():
+    team_settings.set_document("npi", "press", False, by="Ani")
+    with pytest.raises(SettingsError, match="dua-duanya"):
+        team_settings.set_document("npi", "report", False, by="Ani")
+    with pytest.raises(SettingsError, match="dua-duanya"):
+        team_settings.set_document("ppkom", "report", False, by="Ani")   # its press is hidden from the start
+    with pytest.raises(SettingsError):
+        team_settings.set_document("npi", "lampiran", False, by="Ani")

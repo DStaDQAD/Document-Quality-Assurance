@@ -1116,6 +1116,10 @@ class _NoteOrderBody(_ByBody):
     ids: List[int]
 
 
+class _DocumentBody(_ByBody):
+    shown: bool
+
+
 class _UploadHintsBody(_ByBody):
     press: str = ""
     report: str = ""
@@ -1147,6 +1151,7 @@ def _settings_snapshot() -> dict:
                 "notes": team_settings.notes(key),
                 "known_rows": team_settings.known_rows(key),
                 "upload_hints": team_settings.upload_hints(key),
+                "documents": team_settings.documents(key),
             }
             for key in team_settings.PUBLICATIONS
         ],
@@ -1215,6 +1220,12 @@ async def put_upload_hints_endpoint(publication: str, body: _UploadHintsBody) ->
     """The example file names shown under each upload area for this publication."""
     return JSONResponse(await _settings_call(
         team_settings.set_upload_hints, publication, body.press, body.report, body.excel, body.by))
+
+
+@app.put("/api/settings/{publication}/documents/{slot}")
+async def put_document_endpoint(publication: str, slot: str, body: _DocumentBody) -> JSONResponse:
+    """Show or hide one of the publication's documents (press, report, excel) on the upload card."""
+    return JSONResponse(await _settings_call(team_settings.set_document, publication, slot, body.shown, body.by))
 
 
 @app.post("/api/settings/{publication}/reset")

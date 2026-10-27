@@ -89,13 +89,21 @@ upload_hint_table = Table(
     Column("updated_by", String(check_history.CHECKER_NAME_MAX_CHARS), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
 )
+document_table = Table(
+    "settings_document", _metadata,
+    Column("publication", String(32), primary_key=True),
+    Column("slot", String(8), primary_key=True),          # press | report | excel
+    Column("shown", Boolean, nullable=False),
+    Column("updated_by", String(check_history.CHECKER_NAME_MAX_CHARS), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+)
 change_log = Table(
     "settings_change", _metadata,
     Column("id", Integer, primary_key=True, autoincrement=True),
     Column("at", DateTime(timezone=True), nullable=False, index=True),
     Column("by", String(check_history.CHECKER_NAME_MAX_CHARS), nullable=False),
     Column("publication", String(32), nullable=False, index=True),
-    Column("kind", String(16), nullable=False),      # visibility | alias | note | hint | reset
+    Column("kind", String(16), nullable=False),      # visibility | alias | note | hint | document | reset
     Column("action", String(16), nullable=False),    # tambah | ubah | hapus | urutkan | sembunyikan | tampilkan
     Column("before", Text),
     Column("after", Text),
@@ -476,11 +484,46 @@ def set_upload_hints(publication: str, press: str, report: str, excel: str, by: 
     return values
 
 
+# --- which documents a publication checks --------------------------------------------------
+
+DOCUMENT_LABELS = {"press": "Siaran Pers", "report": "Laporan", "excel": "Tabel Excel"}
+
+
+def documents(publication: str) -> Dict[str, bool]:
+    """{press, report, excel}: whether the upload card offers each. A document starts shown when
+    the publication has it (a SharePoint default name), until the team switches it."""
+    publication = _publication(publication)
+    shown = {slot: bool(UPLOAD_HINT_DEFAULTS[publication][slot]) for slot in DOCUMENT_LABELS}
+    with _engine().connect() as conn:
+        for r in conn.execute(select(document_table).where(document_table.c.publication == publication)):
+            shown[r.slot] = bool(r.shown)
+    return shown
+
+
+def set_document(publication: str, slot: str, shown: bool, by: str) -> Dict[str, bool]:
+    """Show or hide one document of a publication. A check needs a Siaran Pers or a Laporan."""
+    publication, by = _publication(publication), _editor(by)
+    if slot not in DOCUMENT_LABELS:
+        raise SettingsError("Dokumen itu tidak dikenal.")
+    after = {**documents(publication), slot: bool(shown)}
+    if not (after["press"] or after["report"]):
+        raise SettingsError("Siaran Pers dan Laporan tidak bisa disembunyikan dua-duanya; "
+                            "minimal satu dokumen diperiksa.")
+    with _engine().begin() as conn:
+        conn.execute(delete(document_table).where((document_table.c.publication == publication)
+                                                  & (document_table.c.slot == slot)))
+        conn.execute(insert(document_table).values(publication=publication, slot=slot, shown=bool(shown),
+                                                   updated_by=by, updated_at=_now()))
+        _log(conn, by, publication, "document", "tampilkan" if shown else "sembunyikan",
+             after=DOCUMENT_LABELS[slot])
+    return after
+
+
 # --- reset, log, a check's view ------------------------------------------------------------
 
 def reset(publication: str, by: str) -> None:
-    """Back to the start: no team phrases or conventions, the default upload hints, visible. The
-    built-in notes are code and are not touched."""
+    """Back to the start: no team phrases or conventions, the default upload hints and documents,
+    visible. The built-in notes are code and are not touched."""
     publication, by = _publication(publication), _editor(by)
     with _engine().begin() as conn:
         conn.execute(delete(aliases).where(aliases.c.publication == publication))
@@ -488,6 +531,7 @@ def reset(publication: str, by: str) -> None:
         conn.execute(delete(notes_seeded).where(notes_seeded.c.publication == publication))
         conn.execute(delete(publication_state).where(publication_state.c.publication == publication))
         conn.execute(delete(upload_hint_table).where(upload_hint_table.c.publication == publication))
+        conn.execute(delete(document_table).where(document_table.c.publication == publication))
         _log(conn, by, publication, "reset", "ubah")
 
 

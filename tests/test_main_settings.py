@@ -81,3 +81,12 @@ def test_upload_hints_are_listed_and_edited():
     assert cadev["upload_hints"] == {"press": "SP Cadev.docx", "report": "", "excel": "ORA.xlsx"}
     assert client.put("/api/settings/cadangan-devisa/upload-hints",
                       json={"press": "x", "report": "", "excel": "", "by": ""}).status_code == 422
+
+
+def test_documents_are_listed_and_switched():
+    spe = next(p for p in client.get("/api/settings").json()["publications"] if p["key"] == "spe")
+    assert spe["documents"] == {"press": True, "report": True, "excel": True}
+    hidden = client.put("/api/settings/spe/documents/excel", json={"shown": False, "by": "Ani"})
+    assert hidden.status_code == 200 and hidden.json() == {"press": True, "report": True, "excel": False}
+    both = client.put("/api/settings/ppkom/documents/report", json={"shown": False, "by": "Ani"})
+    assert both.status_code == 422 and "dua-duanya" in both.json()["detail"]
