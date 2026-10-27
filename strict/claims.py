@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 Operation = Literal[
     "value", "yoy_growth", "diff", "ratio", "sum", "average",
     "is_increasing", "is_decreasing", "is_stable",
-    "above_threshold", "below_threshold", "formula",
+    "above_threshold", "below_threshold", "ranking", "formula",
 ]
 
 
@@ -34,6 +34,11 @@ class StrictClaim(BaseModel):
     size_of_negative: bool = Field(
         False, description="True bila kalimat menyebut BESARNYA saldo yang di tabel tercatat negatif (defisit, impor, "
                            "pembayaran, kewajiban neto): angkanya tanpa minus, dibandingkan dengan besar sel")
+    ranked: Optional[int] = Field(
+        None, description="Hanya untuk operation='ranking': berapa anggota yang disebut kalimat (selnya di depan)")
+    rank: Optional[Literal["highest", "lowest"]] = Field(
+        None, description="Hanya untuk operation='ranking': yang disebut 'highest' (tertinggi/terbesar naik) atau "
+                          "'lowest' (terendah/penurunan terbesar)")
     formula: Optional[str] = Field(None, description="Hanya untuk operation='formula': rumus atas c1..cn")
     formula_unit: Optional[Literal["tabel", "persen", "jumlah"]] = Field(
         None, description="Satuan hasil rumus: 'tabel', 'persen', atau 'jumlah' (hitungan)")
@@ -68,6 +73,8 @@ class Claim:
     unit: Optional[str] = None
     formula: Optional[str] = None
     formula_unit: Optional[str] = None
+    ranked: Optional[int] = None
+    rank: Optional[str] = None
     all_members: bool = False
     size_of_negative: bool = False
     not_in_tables: bool = False

@@ -60,7 +60,10 @@ workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
    above_threshold, below_threshold
                     1 or more cells; claimed_value_raw = the fixed reference point: PMI and its
                     components 50, saldo bersih / SBT 0, IKK / IEK / IKE 100.
-   formula          anything the menu cannot say: name the cells and write a formula over c1..cn
+   ranking          EVERY member of the breakdown, the named ones first: one cell each (its level)
+                    or two cells each (earlier, later: its change); ranked = how many are named;
+                    rank = 'highest' or 'lowest' (rule 18). No number.
+   formula         anything the menu cannot say: name the cells and write a formula over c1..cn
                     (in the order of 'cells') using only numbers, c1..cn, + - * /, comparisons,
                     and / or / not, abs sum min max round. formula_unit = 'tabel' (the table's
                     unit), 'persen' or 'jumlah' (a count). claimed_value_raw = the number the
@@ -151,12 +154,15 @@ workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
    dolar AS' gives one number for two rows the table keeps apart: operation sum over both rows on the
    same date. Two numbers are two claims.
 
-18. RANKINGS. 'indeks tertinggi pada A (54,94%), B, dan C' also says A, B and C are the highest of
-   their breakdown. Besides each value claim, write one formula over EVERY member's cell (the named
-   ones first), all_members = true: the lowest of the named is at least the highest of the rest,
-   'min(c1,c2,c3) >= max(c4,c5,...,c14)'. For the largest moves ('penurunan terbesar di A dan B')
-   compare the changes: each member's two periods in order, 'min(c1-c2,c3-c4) >= max(c5-c6,...)'
-   for falls (c2-c1 for rises). 'terendah' turns the comparison around.
+18. RANKINGS ARE operation ranking, NEVER A FORMULA. 'indeks tertinggi pada A (54,94%), B, dan C'
+   also says A, B and C are the highest of their breakdown. Besides each value claim, write one
+   ranking claim: cells of EVERY member, the named ones first (A, B, C, then all the others),
+   ranked = 3, rank = 'highest', all_members = true. The program compares them.
+   Levels ('indeks tertinggi', 'pangsa terbesar') take one cell per member. Moves take two cells per
+   member, the two periods compared: 'peningkatan tertinggi/terbesar di A' is rank 'highest',
+   'penurunan terbesar di A dan B' is rank 'lowest' (the largest fall is the lowest change).
+   'terendah' on a level is rank 'lowest'. A sentence ranking two things ('penurunan terbesar di A,
+   sementara peningkatan tertinggi di B') is two ranking claims.
 """
 
 HUMAN_TEMPLATE = """\

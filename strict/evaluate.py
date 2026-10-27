@@ -159,6 +159,47 @@ def _per_row(read: List[Read], values: List[float]) -> Dict[str, List[float]]:
     return rows
 
 
+def _number(x: float) -> str:
+    text = str(round(x, 2))
+    text = text[:-2] if text.endswith(".0") else text
+    return text.replace("-", "−").replace(".", ",")
+
+
+def _ranking(claim: Claim, read: List[Read], values: List[float]) -> Tuple[None, None, str, str]:
+    """'tertinggi pada A, B dan C' / 'penurunan terbesar di A dan B': the named members (listed
+    first, `ranked` of them) against every other member. A member is one row: one cell is its level,
+    two cells its change (later minus earlier, whatever order they were listed in). The comparison
+    is built here, never written by the model: the lowest of the named is at least the highest of
+    the rest ('highest'), or the other way round ('lowest')."""
+    members: Dict[Tuple[str, str], List[Tuple[Cell, float]]] = {}
+    for (cell, _, _), value in zip(read, values):
+        members.setdefault((cell.code, cell.row), []).append((cell, value))
+    sizes = {len(cells) for cells in members.values()}
+    if len(sizes) != 1 or sizes.pop() not in (1, 2):
+        raise _Undecided("klaim_tidak_lengkap", "Peringkat butuh satu sel (level) atau dua sel (perubahan) "
+                                                "untuk setiap anggota, sama untuk semuanya.")
+    measure = {}
+    for key, cells in members.items():
+        cells = sorted(cells, key=lambda cv: (cv[0].key[0], _period_ordinal(cv[0].key[1])))
+        measure[key] = cells[0][1] if len(cells) == 1 else cells[1][1] - cells[0][1]
+    ordered = list(measure)
+    named, rest = ordered[:claim.ranked or 0], ordered[claim.ranked or 0:]
+    if not named or not rest or claim.rank not in ("highest", "lowest"):
+        raise _Undecided("klaim_tidak_lengkap", "Peringkat butuh anggota yang disebut, anggota lainnya, "
+                                                "dan arahnya (tertinggi atau terendah).")
+    if claim.rank == "highest":
+        edge, other = min(named, key=measure.get), max(rest, key=measure.get)
+        holds = measure[edge] >= measure[other]
+    else:
+        edge, other = max(named, key=measure.get), min(rest, key=measure.get)
+        holds = measure[edge] <= measure[other]
+    word = "tertinggi" if claim.rank == "highest" else "terendah"
+    listed = "; ".join(f"{key[1]} {_number(measure[key])}" for key in named)
+    tail = (f"disebut ({word}): {listed} | {word} di antara lainnya: {other[1]} {_number(measure[other])} "
+            f"→ {'sesuai' if holds else 'tidak sesuai'} dengan klaim")
+    return None, None, "Entailed" if holds else "Refuted", tail
+
+
 def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[float], str, str]:
     """(computed value, delta, verdict, explanation) for the claim's operation."""
     op, unit = claim.operation, _unit(read[0][1], read[0][0].row)
@@ -216,6 +257,8 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
         holds = all((v > bound) if op == "above_threshold" else (v < bound) for v in values)
         side = "di atas" if op == "above_threshold" else "di bawah"
         return None, None, "Entailed" if holds else "Refuted", f"setiap sel {side} {bound}: {'ya' if holds else 'tidak'}"
+    if op == "ranking":
+        return _ranking(claim, read, values)
     if op == "formula":
         try:
             result = evaluate(claim.formula or "", values)

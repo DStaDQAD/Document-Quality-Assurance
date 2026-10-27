@@ -148,7 +148,7 @@ def test_the_old_prompts_lessons_are_ported():
 
     for rule in ("QUANTIFIED GROUPS", "sebagian besar", "kecuali", "kelompok lainnya",
                  "TWO GROWTH RATES", "THE REPORT'S OWN PERIOD", "ONE NUMBER FOR TWO NAMED ACCOUNTS",
-                 "THE PARAGRAPH'S POPULATION", "never yoy_growth", "RANKINGS", "max("):
+                 "THE PARAGRAPH'S POPULATION", "never yoy_growth", "RANKINGS ARE operation ranking"):
         assert rule in SYSTEM_PROMPT, rule
     # Round 3's phase rule without a quantifier made the model test every Sub-LU.
     assert "for every row the sentence itself covers" in SYSTEM_PROMPT
@@ -160,3 +160,17 @@ def test_a_figure_made_of_several_rows_is_in_the_tables():
     from strict.prompt import SYSTEM_PROMPT
 
     assert "A FIGURE MADE OF SEVERAL ROWS IS IN THE TABLES" in SYSTEM_PROMPT
+
+
+def test_a_ranking_keeps_its_named_count_and_direction_and_needs_no_number():
+    ranking = _diff(anchor_quote="peningkatan posisi AFLN investasi lainnya", operation="ranking",
+                    claimed_value_raw=None, unit=None, ranked=1, rank="highest", all_members=True)
+    claims, _ = _run([ranking])
+
+    assert [(c.operation, c.ranked, c.rank, c.claimed_value) for c in claims] == [("ranking", 1, "highest", None)]
+
+
+def test_the_prompt_says_rankings_are_never_formulas():
+    from strict.prompt import SYSTEM_PROMPT
+
+    assert "ranking" in SYSTEM_PROMPT and "NEVER A FORMULA" in SYSTEM_PROMPT

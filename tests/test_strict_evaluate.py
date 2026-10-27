@@ -415,3 +415,62 @@ def test_a_total_row_is_not_a_member_of_its_breakdown():
     result = evaluate_claim(_claim("is_decreasing", cells, all_members=True), views)
 
     assert result.verdict == "Entailed"
+
+
+# --- rankings: the code builds the comparison (the model wrote '<=' for '>=' once, put a named
+# member among 'the rest', and swapped min for max) ------------------------------------------------
+
+# SK Juli 2026: 'penurunan terbesar di Bandung, Pontianak, dan Samarinda'. Pangkal Pinang fell
+# 2,1, just less than Samarinda's 2,3; the rest rose or fell less.
+SK_CITIES = {"Bandung": (109.3, 99.4), "Pontianak": (112.1, 104.3), "Samarinda": (142.3, 140.0),
+             "Pangkal Pinang": (121.5, 119.4), "Semarang": (114.1, 113.4), "Banten": (117.7, 127.1)}
+
+
+def _sk_views():
+    data = {}
+    for city, (jun, jul) in SK_CITIES.items():
+        data[(city, 2026, "Jun")] = jun
+        data[(city, 2026, "Jul")] = jul
+    return _views(("Indeks", data))
+
+
+def _ranking(named, rank, two_periods=True, order=None):
+    members = named + [c for c in (order or SK_CITIES) if c not in named]
+    cells = [cell for city in members
+             for cell in ([_cell(city, 2026, "Jul"), _cell(city, 2026, "Jun")] if two_periods
+                          else [_cell(city, 2026, "Jul")])]
+    return _claim("ranking", cells, ranked=len(named), rank=rank, all_members=True)
+
+
+@pytest.mark.parametrize("named, rank, verdict", [
+    (["Bandung", "Pontianak", "Samarinda"], "lowest", "Entailed"),         # the three biggest falls
+    (["Bandung", "Pontianak", "Semarang"], "lowest", "Refuted"),           # Samarinda fell more than Semarang
+    (["Banten"], "highest", "Entailed"),                                   # the biggest rise
+    (["Bandung", "Pontianak", "Samarinda"], "highest", "Refuted"),
+])
+def test_a_ranking_of_changes_is_built_by_the_code(named, rank, verdict):
+    # The cells of each member come later-first on purpose: the change is still later minus earlier.
+    result = evaluate_claim(_ranking(named, rank), _sk_views())
+
+    assert result.verdict == verdict
+    assert ("Bandung −9,9" in result.reasoning) == ("Bandung" in named)
+
+
+@pytest.mark.parametrize("named, verdict", [(["Samarinda", "Banten"], "Entailed"),
+                                             (["Samarinda", "Pangkal Pinang"], "Refuted")])
+def test_a_ranking_of_levels(named, verdict):
+    # July levels: Samarinda 140,0, Banten 127,1, Pangkal Pinang 119,4, Semarang 113,4, ...
+    result = evaluate_claim(_ranking(named, "highest", two_periods=False), _sk_views())
+
+    assert result.verdict == verdict
+
+
+def test_a_ranking_needs_named_members_and_others():
+    for ranked in (0, len(SK_CITIES)):
+        claim = _ranking(["Bandung"], "lowest")
+        claim.ranked = ranked
+        result = evaluate_claim(claim, _sk_views())
+        assert result.verdict == "Inconclusive" and result.reason_code == "klaim_tidak_lengkap"
+    uneven = _ranking(["Bandung"], "lowest")
+    uneven.cells = uneven.cells[:-1]                       # the last member has one period only
+    assert evaluate_claim(uneven, _sk_views()).verdict == "Inconclusive"

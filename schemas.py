@@ -92,11 +92,12 @@ class SourceValue(BaseModel):
 
 
 class FactVerificationResult(BaseModel):
-    # "formula": a strict claim judged on a formula over its cited cells (strict/evaluate.py).
+    # "formula": a strict claim judged on a formula over its cited cells; "ranking": the named
+    # members against the rest, the comparison built by the code (strict/evaluate.py).
     operation: Literal[
         "value", "yoy_growth", "average", "sum", "diff", "ratio",
         "is_increasing", "is_decreasing", "is_stable",
-        "above_threshold", "below_threshold", "formula",
+        "above_threshold", "below_threshold", "ranking", "formula",
     ]
     metric_label: str  # display label - shared metric name, or "A / B" for cross-metric ops
     matched_excel_source: Optional[str] = None  # "filename / sheet" of the source that matched
