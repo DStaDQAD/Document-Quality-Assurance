@@ -723,8 +723,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .stat-card.inconclusive .stat-num { color: #D97706; }
 .stat-card.total .stat-num        { color: var(--navy-900); }
 .stat-label { font-size: 11px; color: var(--text-500); font-weight: 500; line-height: 1.4; }
-.stat-num-text { font-size: 18px; letter-spacing: -0.01em; }
-.stat-hint { display: block; font-weight: 400; color: var(--text-400); margin-top: 2px; }
 /* Read by screen readers, not drawn. */
 .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden;
   clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -2021,13 +2019,6 @@ body.auth-locked .app {
   function renderPairedResponse(data) {
     const e = data.entailed_count, r = data.refuted_count, i = data.inconclusive_count;
     const total = data.total_facts;
-    // Support both old single-value fields and new list fields
-    const units = data.excel_units || (data.excel_unit ? [data.excel_unit] : []);
-    const uniqueUnits = [...new Set(units)].filter(Boolean);
-    // Internal mode contributes one unit per transcribed table, so cap the list: a dozen
-    // units would push the "Total Fakta" stat card out of shape.
-    const shownUnits = uniqueUnits.slice(0, 3).map(escapeHtml).join(", ")
-      + (uniqueUnits.length > 3 ? ", …" : "");
 
     const mode = data.mode || "excel";
     const conflicts = data.conflict_count || 0;
@@ -2098,10 +2089,8 @@ body.auth-locked .app {
           <div class="stat-card entailed"><div class="stat-num">${e}</div><div class="stat-label">Sesuai</div></div>
         </div>
         <div class="stat-row">
-          <div class="stat-card inconclusive"><div class="stat-num">${i}</div><div class="stat-label">Tidak Cukup Data<span class="stat-hint">Tabel tidak bisa memastikan klaimnya; alasannya ada di Rincian tiap klaim.</span></div></div>
-          ${uniqueUnits.length
-            ? `<div class="stat-card total"><div class="stat-num stat-num-text">${shownUnits}</div><div class="stat-label">Satuan tabel referensi</div></div>`
-            : `<div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Total fakta</div></div>`}
+          <div class="stat-card inconclusive"><div class="stat-num">${i}</div><div class="stat-label">Tidak Cukup Data</div></div>
+          <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Jumlah klaim</div></div>
         </div>
       </div>
     </div>${gapStrip}${unreadStrip}${formatStrip}`;
