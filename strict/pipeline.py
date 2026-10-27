@@ -27,10 +27,12 @@ def enabled() -> bool:
     return os.getenv("STRICT_EXTRACTION", "").strip().lower() in ("1", "on", "true", "yes")
 
 
-def applies(sources: List[_ExcelSource], mode: str, has_pdf_tables: bool, has_charts: bool) -> bool:
-    """Strict covers uploaded Excel time-series tables only: an Excel-only check with at least one,
-    no chart readings to check and no category (non-time-series) sheet, which keep the old path."""
-    if mode != "excel" or has_pdf_tables or has_charts:
+def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
+    """Strict reads the uploaded Excel time-series tables. It runs for "excel" and for "both" — the
+    team's usual check, press release and report together — where the document's own tables and
+    the other document's are left out (not yet measured as strict sources). Chart readings and a
+    category (non-time-series) sheet keep the old path, as do "internal" and "none"."""
+    if mode not in ("excel", "both") or has_charts:
         return False
     if any(s.origin == "excel" and not s.pointer_only and s.table.axis_type == "categorical" for s in sources):
         return False
@@ -56,6 +58,7 @@ async def run_check(
     progress_cb: Optional[Callable[[dict], None]],
     on_extract_gap: Optional[Callable],
     excel_parsers: List[str],
+    mode: str = "excel",
 ) -> PairedVerificationResponse:
     def emit(stage: str, status: str, **extra) -> None:
         if progress_cb is not None:
@@ -97,7 +100,7 @@ async def run_check(
         excel_sheets=[s.sheet for s in sources],
         excel_units=[s.table.unit for s in sources],
         excel_parsers=excel_parsers,
-        mode="excel",
+        mode=mode,
         total_facts=len(results),
         entailed_count=entailed,
         refuted_count=refuted,

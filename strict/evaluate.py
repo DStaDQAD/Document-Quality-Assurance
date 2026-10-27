@@ -24,6 +24,8 @@ from strict.tables import ANNUAL, TableView, period_header
 
 _TRENDS = {"is_increasing", "is_decreasing", "is_stable"}
 _SEP = " > "
+# A breakdown's total is not one of its members (SKDU 'TOTAL > Saldo Bersih' beside each LU's).
+_AGGREGATES = {"total", "jumlah"}
 
 
 class _Undecided(Exception):
@@ -78,7 +80,8 @@ def _missing_members(read: List[Read]) -> List[str]:
         for row in view.table.row_labels:
             levels = row.split(_SEP)
             if (row not in cited and len(levels) == depth
-                    and all(levels[i] == text for i, text in fixed.items())):
+                    and all(levels[i] == text for i, text in fixed.items())
+                    and levels[varying[0]].strip().lower() not in _AGGREGATES):
                 missing.append(row)
     return list(dict.fromkeys(missing))
 

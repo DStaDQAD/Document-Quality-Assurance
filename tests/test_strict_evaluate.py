@@ -401,3 +401,17 @@ def test_a_ranking_is_the_named_lowest_against_the_rest_highest(named, verdict):
     claim = _claim("formula", cells, formula="min(c1,c2,c3) >= max(c4,c5)", all_members=True)
 
     assert evaluate_claim(claim, _views(SUB_LU)).verdict == verdict
+
+
+def test_a_total_row_is_not_a_member_of_its_breakdown():
+    # SKDU Tw III-2026 "seluruh LU terindikasi melambat ... (Lampiran Tabel 8)": the AI cited every
+    # LU's 'Saldo Bersih'; the check also wanted 'TOTAL > Saldo Bersih', which is no LU.
+    data = {(f"{lu} > Saldo Bersih", 2026, p): v for lu in ("Industri Pengolahan", "Jasa Lainnya", "TOTAL")
+            for p, v in (("S1", 50.0), ("S2", 9.0))}
+    views = _views(("%, Saldo Bersih", data))
+    cells = [_cell(f"{lu} > Saldo Bersih", 2026, p) for lu in ("Industri Pengolahan", "Jasa Lainnya")
+             for p in ("S1", "S2")]
+
+    result = evaluate_claim(_claim("is_decreasing", cells, all_members=True), views)
+
+    assert result.verdict == "Entailed"

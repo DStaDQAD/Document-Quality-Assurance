@@ -68,6 +68,22 @@ def test_on_a_check_goes_strict(mock_parse, mock_extract, monkeypatch):
 
 @patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
 @patch("paired_verifier.parse_bi_table")
+def test_on_and_both_mode_goes_strict_on_the_excel_tables(mock_parse, mock_extract, monkeypatch):
+    # Render 2026-10-27: the team checks the press release and the report together (mode "both",
+    # the other document as a reference), and strict was skipped for every such check.
+    from pdf_table_extraction import PdfTable
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    reference = ("Laporan.docx", [PdfTable(page_number=1, caption="Tabel 1", unit="", grid=[["Aset", 1.0]])])
+
+    response = _verify(llm=_llm([]), mode="both", reference_tables=[reference])
+
+    assert not mock_extract.called
+    assert response.mode == "both" and response.results[0].resolved_via == "strict"
+
+
+@patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
+@patch("paired_verifier.parse_bi_table")
 def test_on_but_internal_mode_stays_old(mock_parse, mock_extract, monkeypatch):
     monkeypatch.setenv("STRICT_EXTRACTION", "1")
     mock_parse.return_value = _table()
@@ -118,6 +134,6 @@ def test_charts_or_a_category_sheet_keep_the_old_path():
     items._data[("Laptop", "Harga")] = 7.5
     category = _ExcelSource(table=items, filename="b.xlsx", sheet="Barang")
 
-    assert applies([series], "excel", has_pdf_tables=False, has_charts=False)
-    assert not applies([series], "excel", has_pdf_tables=False, has_charts=True)
-    assert not applies([series, category], "excel", has_pdf_tables=False, has_charts=False)
+    assert applies([series], "excel", has_charts=False)
+    assert not applies([series], "excel", has_charts=True)
+    assert not applies([series, category], "excel", has_charts=False)
