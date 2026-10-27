@@ -1283,7 +1283,7 @@ body.auth-locked .app {
             <span class="material-symbols-outlined">person</span>
             <input type="text" id="settings-name" maxlength="80" autocomplete="name" placeholder="Nama Anda">
           </label>
-          <span id="settings-who-help">Perubahan berlaku untuk seluruh tim dan dicatat dengan nama Anda.</span>
+          <span id="settings-who-help"></span>
         </div>
         <div class="error-banner" id="settings-error" hidden></div>
         <div class="settings-layout">
@@ -2929,11 +2929,11 @@ body.auth-locked .app {
     checkerNameEl.value = value;
     try { localStorage.setItem(CHECKER_NAME_KEY, value); } catch (_) {}
   }
-  const SETTINGS_WHO_HELP = "Perubahan berlaku untuk seluruh tim dan dicatat dengan nama Anda.";
+  // The line beside the name field is empty until a change is tried without a name.
   settingsNameEl.addEventListener("input", () => {
     if (!settingsName()) return;
     settingsWho.classList.remove("is-missing");
-    document.getElementById("settings-who-help").textContent = SETTINGS_WHO_HELP;
+    document.getElementById("settings-who-help").textContent = "";
   });
   settingsNameEl.addEventListener("change", () => syncNameFields(settingsName()));
   checkerNameEl.addEventListener("change", () => { settingsNameEl.value = checkerNameEl.value.trim(); });
