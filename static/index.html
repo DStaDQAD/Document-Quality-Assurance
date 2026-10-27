@@ -2156,12 +2156,26 @@ body.auth-locked .app {
           const sourceBadge = item.matched_excel_source ? `<span class="source-badge" title="${escapeHtml(item.matched_excel_source)}">${escapeHtml(item.matched_excel_source)}</span>` : "";
           const quote    = item.context_quote ? `<div class="fact-quote">"${escapeHtml(item.context_quote)}"</div>` : "";
 
+          // A claim over several rows (a strict formula, a group) names each chip's row, by the
+          // shortest tail of its 'A > B > C' label that still tells the rows apart.
+          const chipRows = [...new Set(periods.map((p) => p.metric_label || ""))];
+          const rowName = (label) => {
+            if (chipRows.length < 2) return "";
+            const parts = label.split(" > ");
+            for (let k = 1; k <= parts.length; k++) {
+              const tail = parts.slice(-k).join(" > ");
+              if (chipRows.filter((r) => r.split(" > ").slice(-k).join(" > ") === tail).length === 1) return tail;
+            }
+            return label;
+          };
           const periodChips = periods.length > 1
             ? `<div class="fact-periods">${periods.map((p) => {
                 const v = p.excel_value !== null && p.excel_value !== undefined
                   ? p.excel_value.toLocaleString("id-ID", { minimumFractionDigits: 1, maximumFractionDigits: 4 })
                   : "—";
-                return `<span class="fact-period-chip">${escapeHtml(pLabel(p))}: ${v}</span>`;
+                const row = rowName(p.metric_label || "");
+                const text = row ? `${row} · ${pLabel(p)}: ${v}` : `${pLabel(p)}: ${v}`;
+                return `<span class="fact-period-chip" title="${escapeHtml(p.metric_label || "")}">${escapeHtml(text)}</span>`;
               }).join("")}</div>`
             : "";
 
@@ -2182,7 +2196,8 @@ body.auth-locked .app {
           } else if (verdict === "Inconclusive") {
             comparison = `<span class="na">Tidak ditemukan di data</span>`;
           } else {
-            comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">terhadap klaim tren</span>`;
+            const against = item.operation === "formula" ? "terhadap rumus klaim" : "terhadap klaim tren";
+            comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">${against}</span>`;
           }
 
           // Sources that disagreed. The headline verdict above still comes from the
