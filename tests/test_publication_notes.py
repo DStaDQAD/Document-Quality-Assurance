@@ -162,6 +162,16 @@ def test_a_team_phrase_replaces_the_built_in_line_of_the_same_phrase():
     assert "\"ipr\" → baris 'Ekspektasi Penjualan'" in block
 
 
+def test_a_team_phrase_named_in_a_yaml_line_says_it_wins():
+    # NPI's YAML line lists "investasi lainnya" among other phrases; the team's own row for it must
+    # not read as a second, equal hint beside that line.
+    block = notes_for("npi", team_phrases={"investasi lainnya": "Investasi Lainnya"})
+    line = next(l for l in block.splitlines() if l.startswith("- \"investasi lainnya\" → baris"))
+    assert "padanan tim" in line and "di atas" in line
+    other = notes_for("npi", team_phrases={"wisman total": "Ke dalam negeri"})
+    assert "- \"wisman total\" → baris 'Ke dalam negeri'" in other.splitlines()
+
+
 def test_without_team_additions_the_block_is_unchanged():
     assert notes_for("spe", {}, []) == notes_for("spe")
 

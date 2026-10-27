@@ -13,7 +13,8 @@ def test_get_settings_lists_all_thirteen_with_aliases_notes_and_visibility():
     assert keys == list(team_settings.PUBLICATIONS)
     pii = next(p for p in body["publications"] if p["key"] == "pii")
     assert pii["hidden"] is False
-    assert any(g.get("row") == "Aset" and "afln indonesia" in g["phrases"] for g in pii["builtin"]["phrases"])
+    assert any(g.get("row") == "Utang Luar Negeri (ULN)" and "utang luar negeri" in g["phrases"]
+               for g in pii["builtin"]["phrases"])
     assert pii["builtin"]["conventions"] and "builtin_aliases" not in pii
     assert pii["team_aliases"] == [] and pii["notes"] == []      # the team's additions only
     assert body["notes_max_words"] == team_settings.NOTES_MAX_WORDS

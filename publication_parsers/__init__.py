@@ -7,6 +7,7 @@ publication the checker picked before its generic cascade (see _parse_table_with
 Design: docs/superpowers/specs/2026-10-07-publication-parsers-design.md
 """
 import os
+import re
 from pathlib import Path
 from types import ModuleType
 from typing import Dict, List, Optional, Sequence
@@ -48,6 +49,8 @@ NOTES_SECTIONS = (
 )
 # They go into every chunk's prompt: ~600 words is ~800 tokens a call.
 NOTES_MAX_WORDS = 600
+# A quoted phrase in a YAML phrase line: '"IPR", "penjualan eceran" → INDEKS TOTAL.'
+_QUOTED = re.compile(r'"([^"]+)"')
 
 
 def covers(publication: str, sheet_name: str) -> bool:
@@ -135,7 +138,12 @@ def notes_for(publication: str, team_phrases: Optional[Dict[str, str]] = None,
         if key == "phrases":
             built_in = {phrase: row for phrase, row in getattr(module, "TERM_ALIASES", {}).items()
                         if phrase not in team_phrases}
-            entries += [f'"{phrase}" → baris \'{row}\'' for phrase, row in {**built_in, **team_phrases}.items()]
+            # A YAML line may name the team's phrase among others: the team's row says it wins.
+            in_yaml = {q.lower() for entry in entries for q in _QUOTED.findall(entry)}
+            entries += [f'"{phrase}" → baris \'{row}\'' for phrase, row in built_in.items()]
+            entries += [f'"{phrase}" → baris \'{row}\'' + (" (padanan tim, berlaku di atas catatan bawaan untuk frasa ini)"
+                                                           if phrase in in_yaml else "")
+                        for phrase, row in team_phrases.items()]
         if entries:
             lines.append(f"{heading}:")
             lines += [f"- {entry}" for entry in entries]

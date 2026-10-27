@@ -120,14 +120,18 @@ def test_editing_an_alias_onto_another_ones_phrase_or_a_missing_one_is_refused()
         team_settings.update_alias("pii", first["id"] + 99, "x", "Aset", by="Ani")
 
 
-def test_builtin_view_groups_aliases_by_row_and_leaves_out_duplicate_yaml_lines():
-    view = team_settings.builtin_view("spe")
-    total = next(g for g in view["phrases"] if g.get("row") == "INDEKS TOTAL")
-    assert "ipr" in total["phrases"] and "penjualan eceran" in total["phrases"]
-    texts = [g["text"] for g in view["phrases"] if "text" in g]
-    assert not any(t.startswith('"IPR", "penjualan eceran"') for t in texts)   # all its phrases are aliases
-    assert any("Sandang" in t for t in texts)                                     # 'sandang' is no alias
-    assert view["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
+def test_builtin_view_shows_exactly_the_phrases_the_prompt_carries():
+    # The tab shows what the AI reads (spec anti-goal): every YAML phrase line, and the parser's
+    # TERM_ALIASES grouped by row. Matcher-only aliases (label_aliases) are not notes.
+    from publication_parsers import PARSERS
+    pii = team_settings.builtin_view("pii")
+    shown = {p for g in pii["phrases"] if "row" in g for p in g["phrases"]}
+    assert shown == set(PARSERS["pii"].TERM_ALIASES)
+    spe = team_settings.builtin_view("spe")
+    assert [g["text"] for g in spe["phrases"]] == team_settings.notes_sections("spe")["phrases"]
+    assert spe["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
+    block = team_settings.for_check("pii")[1]
+    assert all(f'"{p}" → baris' in block for p in shown)
 
 
 def test_notes_are_added_edited_reordered_and_removed():

@@ -3231,12 +3231,17 @@ body.auth-locked .app {
     const editAlias = e.target.closest("[data-edit-alias]");
     if (editAlias) {
       const alias = currentPub().team_aliases.find((a) => a.id === Number(editAlias.dataset.editAlias));
-      editAlias.closest("tr").innerHTML = `<td colspan="4"><div class="add-grid">
-          <input type="text" data-edit-phrase maxlength="200" value="${escapeHtml(alias.phrase)}" aria-label="Frasa di laporan">
+      const row = editAlias.closest("tr");
+      // Values are set as properties, never written into the markup: a quote in the text would
+      // otherwise end the attribute (cutting the text, or worse).
+      row.innerHTML = `<td colspan="4"><div class="add-grid">
+          <input type="text" data-edit-phrase maxlength="200" aria-label="Frasa di laporan">
           <span class="arrow">→</span>
-          <input type="text" data-edit-row maxlength="300" list="alias-rows" value="${escapeHtml(alias.row)}" aria-label="Baris tabel">
+          <input type="text" data-edit-row maxlength="300" list="alias-rows" aria-label="Baris tabel">
           ${editButtons}</div></td>`;
-      document.querySelector("[data-edit-phrase]").focus();
+      row.querySelector("[data-edit-phrase]").value = alias.phrase;
+      row.querySelector("[data-edit-row]").value = alias.row;
+      row.querySelector("[data-edit-phrase]").focus();
       return;
     }
     const editNote = e.target.closest("[data-edit-note]");
@@ -3244,8 +3249,9 @@ body.auth-locked .app {
       const row = editNote.closest("tr");
       const note = currentPub().notes.find((n) => n.id === Number(editNote.dataset.editNote));
       row.innerHTML = `<td class="num">${row.querySelector(".num").textContent}</td><td colspan="2"><div class="add-grid one">
-          <input type="text" data-edit-note-text maxlength="2000" value="${escapeHtml(note.text)}" aria-label="Ubah konvensi">
+          <input type="text" data-edit-note-text maxlength="2000" aria-label="Ubah konvensi">
           ${editButtons}</div></td>`;
+      row.querySelector("input").value = note.text;
       row.querySelector("input").focus();
       return;
     }

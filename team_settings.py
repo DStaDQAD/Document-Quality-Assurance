@@ -36,8 +36,6 @@ ROW_MAX_CHARS = 300
 NOTE_MAX_CHARS = 2000
 CHANGES_SHOWN = 50
 KNOWN_ROWS_KEPT = 3000
-# A quoted phrase in a YAML phrase line: '"IPR", "penjualan eceran" → INDEKS TOTAL.'
-_QUOTED = re.compile(r'"([^"]+)"')
 # Wording that made the extractor drop claims in run notes_1022 (spec: a warning, not a block).
 _RISKY = re.compile(r"tidak (ada di|memuat)|abaikan|jangan diperiksa|belum dipetakan|bisa diperiksa",
                     re.IGNORECASE)
@@ -347,19 +345,18 @@ def known_rows(publication: str) -> List[str]:
 # --- notes ---------------------------------------------------------------------------------
 
 def builtin_view(publication: str) -> Dict[str, list]:
-    """The built-in notes as the Catatan tab shows them, read from code every time: the parsers'
-    aliases grouped by row ({"phrases": [...], "row": ...}), then the YAML phrase lines as text
-    ({"text": ...}) — except a line whose every quoted phrase is already an alias, which would
-    only repeat a group — and the YAML's other sections as they are."""
-    sections = notes_sections(_publication(publication))
-    builtin = builtin_aliases(publication)
+    """The built-in notes as the Catatan tab shows them, read from code every time — exactly what
+    notes_for puts in the prompt: the YAML phrase lines as text ({"text": ...}), the parser's
+    TERM_ALIASES grouped by row ({"phrases": [...], "row": ...}), and the YAML's other sections.
+    The parsers' other aliases (label_aliases) only steer the old path's matcher, never the AI, so
+    they are not notes."""
+    publication = _publication(publication)
+    sections = notes_sections(publication)
     groups: Dict[str, List[str]] = {}
-    for phrase, row in builtin:
+    for phrase, row in getattr(PARSERS[publication], "TERM_ALIASES", {}).items():
         groups.setdefault(row, []).append(phrase)
-    known = {phrase for phrase, _ in builtin}
-    lines = [{"text": line} for line in sections["phrases"]
-             if not (_QUOTED.findall(line) and all(q.lower() in known for q in _QUOTED.findall(line)))]
-    return {"phrases": [{"phrases": phrases, "row": row} for row, phrases in groups.items()] + lines,
+    return {"phrases": [{"text": line} for line in sections["phrases"]]
+                       + [{"phrases": phrases, "row": row} for row, phrases in groups.items()],
             "conventions": sections["conventions"], "periods": sections["periods"],
             "units_signs": sections["units_signs"]}
 
