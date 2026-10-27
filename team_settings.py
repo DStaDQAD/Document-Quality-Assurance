@@ -1,9 +1,12 @@
 """Pengaturan — the team's shared settings per publication (docs/specs/settings-tab.md).
 
 The 13 publications stay the ones in code (check_history.PUBLICATIONS, publication_parsers). Here
-the team can hide one from the upload card, add aliases on top of a parser's built-in ones
-(whole metric name only: TableData.label_aliases), and keep notes that the Tinjauan AI reads.
-Notes are seeded once per publication from its *.notes.yaml. Every change is logged.
+the team can hide one from the upload card and, in the Catatan tab
+(docs/superpowers/specs/2026-10-27-catatan-tab-design.md), add phrases (aliases on top of a
+parser's built-in ones, whole metric name only: TableData.label_aliases) and conventions on top of
+the built-in notes. The built-ins are code (*.notes.yaml, the parsers' *ALIASES), read every time
+and never copied here; settings_note_seeded and seeded rows are what an older version copied.
+Extraction and the Tinjauan AI read the same block (for_check). Every change is logged.
 
 Stored next to Riwayat, through check_history's engine (Neon on Render, SQLite locally). A check
 reads its publication's settings once (for_check); any failure there leaves the check on the
@@ -16,14 +19,13 @@ import threading
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
-import yaml
 from sqlalchemy import (
     Boolean, Column, DateTime, Integer, MetaData, String, Table, Text, delete, func, insert, select,
     update,
 )
 
 import check_history
-from publication_parsers import PARSERS, notes_path
+from publication_parsers import PARSERS, notes_for, notes_sections
 
 logger = logging.getLogger("fact-checker")
 
@@ -34,8 +36,8 @@ ROW_MAX_CHARS = 300
 NOTE_MAX_CHARS = 2000
 CHANGES_SHOWN = 50
 KNOWN_ROWS_KEPT = 3000
-# The YAML sections that become notes. 'phrases' stays out: the parsers' aliases hold those.
-_SEEDED_SECTIONS = ("conventions", "periods", "units_signs")
+# A quoted phrase in a YAML phrase line: '"IPR", "penjualan eceran" → INDEKS TOTAL.'
+_QUOTED = re.compile(r'"([^"]+)"')
 # Wording that made the extractor drop claims in run notes_1022 (spec: a warning, not a block).
 _RISKY = re.compile(r"tidak (ada di|memuat)|abaikan|jangan diperiksa|belum dipetakan|bisa diperiksa",
                     re.IGNORECASE)
@@ -288,6 +290,35 @@ def delete_alias(publication: str, alias_id: int, by: str) -> None:
         _log(conn, by, publication, "alias", "hapus", before=f"{r.phrase} → {r.row}")
 
 
+def update_alias(publication: str, alias_id: int, phrase: str, row: str, by: str) -> dict:
+    """A team alias's phrase or row changed, with add_alias's normalisation and warnings."""
+    publication, by = _publication(publication), _editor(by)
+    phrase, row = _norm(phrase).lower(), _norm(row)
+    if not phrase or not row:
+        raise SettingsError("Frasa di laporan dan baris tabel wajib diisi.")
+    if len(phrase) > PHRASE_MAX_CHARS or len(row) > ROW_MAX_CHARS:
+        raise SettingsError("Frasa atau nama baris terlalu panjang.")
+    warnings = []
+    builtin = dict(builtin_aliases(publication))
+    if phrase in builtin and builtin[phrase] != row:
+        warnings.append(f"Menggantikan padanan bawaan '{phrase}' → '{builtin[phrase]}'.")
+    seen = known_rows(publication)
+    if seen and row not in seen:
+        warnings.append(f"Baris '{row}' belum pernah terlihat di tabel publikasi ini; periksa ejaannya.")
+    with _engine().begin() as conn:
+        r = conn.execute(select(aliases).where((aliases.c.id == alias_id) & (aliases.c.publication == publication))).first()
+        if r is None:
+            raise SettingsError("Padanan itu tidak ditemukan; mungkin sudah dihapus orang lain.")
+        clash = conn.execute(select(aliases.c.id).where((aliases.c.publication == publication)
+                                                        & (aliases.c.phrase == phrase) & (aliases.c.id != alias_id))).first()
+        if clash is not None:
+            raise SettingsError("Frasa itu sudah ada; ubah atau hapus yang lama.")
+        conn.execute(update(aliases).where(aliases.c.id == alias_id).values(phrase=phrase, row=row))
+        _log(conn, by, publication, "alias", "ubah", before=f"{r.phrase} → {r.row}", after=f"{phrase} → {row}")
+        r = conn.execute(select(aliases).where(aliases.c.id == alias_id)).first()
+    return {**_alias_dict(r), "warnings": warnings}
+
+
 def record_known_rows(publication: str, rows: List[str]) -> None:
     """The row names a check parsed for this publication, for the alias form's suggestions."""
     if publication not in PUBLICATIONS:
@@ -315,32 +346,34 @@ def known_rows(publication: str) -> List[str]:
 
 # --- notes ---------------------------------------------------------------------------------
 
-def _seed_entries(publication: str) -> List[str]:
-    path = notes_path(publication)
-    if path is None or not path.exists():
-        return []
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return [str(e).strip() for section in _SEEDED_SECTIONS for e in (data.get(section) or []) if str(e).strip()]
-
-
-def _seed(conn, publication: str) -> None:
-    conn.execute(insert(notes_seeded).values(publication=publication, seeded_at=_now()))
-    entries = _seed_entries(publication)
-    if entries:
-        conn.execute(insert(notes_table), [
-            {"publication": publication, "position": i, "text": text, "seeded": True,
-             "created_by": "catatan awal", "created_at": _now()}
-            for i, text in enumerate(entries)])
+def builtin_view(publication: str) -> Dict[str, list]:
+    """The built-in notes as the Catatan tab shows them, read from code every time: the parsers'
+    aliases grouped by row ({"phrases": [...], "row": ...}), then the YAML phrase lines as text
+    ({"text": ...}) — except a line whose every quoted phrase is already an alias, which would
+    only repeat a group — and the YAML's other sections as they are."""
+    sections = notes_sections(_publication(publication))
+    builtin = builtin_aliases(publication)
+    groups: Dict[str, List[str]] = {}
+    for phrase, row in builtin:
+        groups.setdefault(row, []).append(phrase)
+    known = {phrase for phrase, _ in builtin}
+    lines = [{"text": line} for line in sections["phrases"]
+             if not (_QUOTED.findall(line) and all(q.lower() in known for q in _QUOTED.findall(line)))]
+    return {"phrases": [{"phrases": phrases, "row": row} for row, phrases in groups.items()] + lines,
+            "conventions": sections["conventions"], "periods": sections["periods"],
+            "units_signs": sections["units_signs"]}
 
 
 def notes(publication: str) -> List[dict]:
-    """The publication's notes in order; seeded from its YAML the first time they are read."""
+    """The team's conventions in order. The built-ins are not here: they come from code
+    (builtin_view, notes_for). A row an older version copied from the YAML counts only once the
+    team edited it."""
     publication = _publication(publication)
-    with _engine().begin() as conn:
-        if conn.execute(select(notes_seeded).where(notes_seeded.c.publication == publication)).first() is None:
-            _seed(conn, publication)
-        rows = conn.execute(select(notes_table).where(notes_table.c.publication == publication)
-                            .order_by(notes_table.c.position, notes_table.c.id))
+    with _engine().connect() as conn:
+        rows = conn.execute(select(notes_table).where(
+            (notes_table.c.publication == publication)
+            & ~(notes_table.c.seeded & notes_table.c.updated_by.is_(None)))
+            .order_by(notes_table.c.position, notes_table.c.id))
         return [_note_dict(r) for r in rows]
 
 
@@ -449,7 +482,8 @@ def set_upload_hints(publication: str, press: str, report: str, excel: str, by: 
 # --- reset, log, a check's view ------------------------------------------------------------
 
 def reset(publication: str, by: str) -> None:
-    """Back to the start: no team aliases, the seeded notes, the default upload hints, visible."""
+    """Back to the start: no team phrases or conventions, the default upload hints, visible. The
+    built-in notes are code and are not touched."""
     publication, by = _publication(publication), _editor(by)
     with _engine().begin() as conn:
         conn.execute(delete(aliases).where(aliases.c.publication == publication))
@@ -457,7 +491,6 @@ def reset(publication: str, by: str) -> None:
         conn.execute(delete(notes_seeded).where(notes_seeded.c.publication == publication))
         conn.execute(delete(publication_state).where(publication_state.c.publication == publication))
         conn.execute(delete(upload_hint_table).where(upload_hint_table.c.publication == publication))
-        _seed(conn, publication)
         _log(conn, by, publication, "reset", "ubah")
 
 
@@ -472,13 +505,19 @@ def changes(publication: Optional[str] = None, limit: int = CHANGES_SHOWN) -> Li
 
 
 def for_check(publication: Optional[str]) -> Tuple[Dict[str, str], str]:
-    """(team aliases, notes as '- line' text) for a check of this publication. Never raises: a
-    settings failure is logged and the check runs on the built-ins."""
+    """(team aliases, the notes block every reader gets: built-ins plus the team's phrases and
+    conventions) for a check of this publication. Never raises: a settings failure is logged and
+    the check runs on the built-ins."""
     if publication not in PUBLICATIONS:
         return {}, ""
     try:
-        return team_aliases(publication), "\n".join(f"- {n['text']}" for n in notes(publication))
+        team = team_aliases(publication)
+        return team, notes_for(publication, team, [n["text"] for n in notes(publication)])
     except Exception:
         logger.warning("Pengaturan '%s' tidak terbaca; pemeriksaan memakai bawaan saja", publication,
                        exc_info=True)
+    try:
+        return {}, notes_for(publication)
+    except Exception:
+        logger.warning("Catatan bawaan '%s' tidak terbaca", publication, exc_info=True)
         return {}, ""

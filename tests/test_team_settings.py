@@ -65,16 +65,69 @@ def test_the_editor_name_is_required():
         team_settings.set_hidden("pii", True, by="  ")
 
 
-def test_notes_are_seeded_once_from_the_yaml_without_its_phrases():
-    notes = team_settings.notes("spe")
-    texts = [n["text"] for n in notes]
-    assert notes and all(n["seeded"] for n in notes)
-    assert any("turun X%" in t for t in texts)                      # a convention
-    assert not any(t.startswith('"IPR", "penjualan eceran"') for t in texts)   # phrases stay out
-    for note in notes:
-        team_settings.delete_note("spe", note["id"], by="Ani")
-    # Removing every note does not bring the seed back.
-    assert team_settings.notes("spe") == []
+def test_notes_are_the_teams_conventions_only():
+    assert team_settings.notes("spe") == []          # nothing is copied from the YAML any more
+    team_settings.add_note("spe", '"melambat" berarti yoy turun.', by="Ani")
+    assert [n["text"] for n in team_settings.notes("spe")] == ['"melambat" berarti yoy turun.']
+
+
+@pytest.fixture
+def seed_rows():
+    """Two rows an older version copied from the SPE YAML: one untouched, one the team edited."""
+    from sqlalchemy import insert
+    unedited = team_settings.notes_sections("spe")["conventions"][1]
+    edited = "Diubah tim: \"turun X%\" berarti -X, juga untuk qtq."
+    now = team_settings._now()
+    with team_settings._engine().begin() as conn:
+        conn.execute(insert(team_settings.notes_seeded).values(publication="spe", seeded_at=now))
+        for position, text, editor in ((0, unedited, None), (1, edited, "Budi")):
+            conn.execute(insert(team_settings.notes_table).values(
+                publication="spe", position=position, text=text, seeded=True, created_by="catatan awal",
+                created_at=now, updated_by=editor, updated_at=now if editor else None))
+    return unedited, edited
+
+
+def test_an_edited_seed_row_is_a_team_convention_and_an_unedited_one_is_not(seed_rows):
+    unedited, edited = seed_rows
+    block = team_settings.for_check("spe")[1]
+    assert [n["text"] for n in team_settings.notes("spe")] == [edited]
+    assert edited in block
+    assert block.count(unedited) == 1          # once, from the YAML; the old copy is not added again
+
+
+def test_the_word_limit_counts_the_teams_notes_only(monkeypatch):
+    monkeypatch.setattr(team_settings, "NOTES_MAX_WORDS", 5)     # far below any YAML's length
+    team_settings.add_note("npi", "Satu kalimat pendek.", by="Ani")
+    with pytest.raises(SettingsError):
+        team_settings.add_note("npi", "dua tiga empat", by="Ani")  # 3 + 3 > 5
+
+
+def test_a_team_alias_is_edited_and_logged():
+    added = team_settings.add_alias("pii", "kfln", "Kewajiban", by="Ani")
+    edited = team_settings.update_alias("pii", added["id"], "KFLN  Indonesia", "Kewajiban", by="Budi")
+    assert edited["phrase"] == "kfln indonesia"
+    assert team_settings.team_aliases("pii") == {"kfln indonesia": "Kewajiban"}
+    assert (team_settings.changes("pii")[0]["action"], team_settings.changes("pii")[0]["after"]) == (
+        "ubah", "kfln indonesia → Kewajiban")
+
+
+def test_editing_an_alias_onto_another_ones_phrase_or_a_missing_one_is_refused():
+    first = team_settings.add_alias("pii", "kfln", "Kewajiban", by="Ani")
+    second = team_settings.add_alias("pii", "afln", "Aset", by="Ani")
+    with pytest.raises(SettingsError, match="sudah ada"):
+        team_settings.update_alias("pii", second["id"], "kfln", "Aset", by="Ani")
+    with pytest.raises(SettingsError, match="tidak ditemukan"):
+        team_settings.update_alias("pii", first["id"] + 99, "x", "Aset", by="Ani")
+
+
+def test_builtin_view_groups_aliases_by_row_and_leaves_out_duplicate_yaml_lines():
+    view = team_settings.builtin_view("spe")
+    total = next(g for g in view["phrases"] if g.get("row") == "INDEKS TOTAL")
+    assert "ipr" in total["phrases"] and "penjualan eceran" in total["phrases"]
+    texts = [g["text"] for g in view["phrases"] if "text" in g]
+    assert not any(t.startswith('"IPR", "penjualan eceran"') for t in texts)   # all its phrases are aliases
+    assert any("Sandang" in t for t in texts)                                     # 'sandang' is no alias
+    assert view["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
 
 
 def test_notes_are_added_edited_reordered_and_removed():
@@ -100,14 +153,14 @@ def test_risky_note_wording_is_saved_with_a_warning():
     assert added["warnings"] and "tidak ada di" in added["warnings"][0]
 
 
-def test_reset_removes_team_aliases_restores_the_seed_and_shows_the_publication():
-    seeded = len(team_settings.notes("npi"))
+def test_reset_empties_the_team_lists_seeds_nothing_and_shows_the_publication():
     team_settings.add_alias("npi", "wisman total", "Ke dalam negeri", by="Ani")
     team_settings.add_note("npi", "catatan tim", by="Ani")
     team_settings.set_hidden("npi", True, by="Ani")
     team_settings.reset("npi", by="Budi")
     assert team_settings.team_aliases("npi") == {}
-    assert len(team_settings.notes("npi")) == seeded
+    assert team_settings.notes("npi") == []
+    assert team_settings.builtin_view("npi")["conventions"]           # the built-ins still show
     assert "npi" not in team_settings.hidden_publications()
 
 
@@ -122,22 +175,23 @@ def test_every_change_is_logged_newest_first():
     assert team_settings.changes("pii") == []
 
 
-def test_for_check_gives_the_team_aliases_and_notes_text():
-    for note in team_settings.notes("sulni"):
-        team_settings.delete_note("sulni", note["id"], by="Ani")
-    team_settings.add_alias("sulni", "ULN swasta total", "Swasta", by="Ani")
-    team_settings.add_note("sulni", "Kontraksi pertumbuhan = laju yoy negatif.", by="Ani")
-    aliases, notes = team_settings.for_check("sulni")
-    assert aliases == {"uln swasta total": "Swasta"}
-    assert notes == "- Kontraksi pertumbuhan = laju yoy negatif."
+def test_for_check_gives_the_whole_block_with_the_team_additions():
+    team_settings.add_alias("spe", "penjualan riil", "INDEKS TOTAL", by="Ani")
+    team_settings.add_note("spe", '"melambat" berarti yoy turun.', by="Ani")
+    aliases, block = team_settings.for_check("spe")
+    assert aliases == {"penjualan riil": "INDEKS TOTAL"}
+    assert "Indeks tanpa satuan; pertumbuhan dalam persen." in block      # built-in
+    assert '"penjualan riil" → baris \'INDEKS TOTAL\'' in block             # team phrase
+    assert '- "melambat" berarti yoy turun.' in block                       # team convention
     assert team_settings.for_check(None) == ({}, "")
 
 
-def test_for_check_never_raises(monkeypatch):
+def test_for_check_falls_back_to_the_built_ins_and_never_raises(monkeypatch):
     def broken():
         raise RuntimeError("database down")
     monkeypatch.setattr(team_settings, "_engine", broken)
-    assert team_settings.for_check("pii") == ({}, "")
+    aliases, block = team_settings.for_check("spe")
+    assert aliases == {} and "Indeks tanpa satuan" in block
 
 
 # --- what a check does with them -------------------------------------------------------------

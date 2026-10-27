@@ -130,8 +130,9 @@ def test_verify_paired_passes_the_notes_only_when_the_flag_is_on(
 
 
 def test_only_the_prompt_builder_reads_the_notes():
-    # The notes guide the extractor; verdict code must never depend on them.
-    allowed = {"publication_parsers/__init__.py", "paired_verifier.py"}
+    # The notes guide the extractor; verdict code must never depend on them. team_settings builds
+    # the block every reader gets (built-ins plus the team's additions, for_check).
+    allowed = {"publication_parsers/__init__.py", "paired_verifier.py", "team_settings.py"}
     reads = re.compile(r"\bnotes_for\(|\.notes\.yaml\"")
     readers = {path.relative_to(ROOT).as_posix()
                for path in [*ROOT.glob("*.py"), *(ROOT / "publication_parsers").glob("*.py")]
