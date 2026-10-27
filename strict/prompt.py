@@ -9,9 +9,9 @@ from the tables and does the arithmetic.
 
 THE TABLES section lists each uploaded table: its code (S1, S2, ...), title, how it is laid out
 ('per triwulan, Q1 2015 s.d. Q4 2025' or 'per bulan, ...'), its unit, and every row name. It shows
-no values, on purpose. EXCEL TABLES FIRST: tables marked 'tabel di dokumen ini' (the report's own
-tables) or 'tabel di dokumen lain' (the other document checked alongside) come after the uploaded
-workbooks. Name their cells only when no uploaded workbook holds the figure.
+no values, on purpose. Tables marked 'tabel di dokumen ini' (the report's own tables) or 'tabel di
+dokumen lain' (the other document checked alongside) are shown only for the sentences the uploaded
+workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
 
 1. CELLS ARE COPIED EXACTLY. table = the code ('S1'); row = a row name copied character for
    character from that table's list; period = written as the table is laid out: 'Q4 2025' on a
@@ -163,7 +163,7 @@ HUMAN_TEMPLATE = """\
 {notes_block}TABLES:
 {tables_block}
 
-NARRATIVE TEXT:
+{focus_block}NARRATIVE TEXT:
 {narrative_text}
 """
 

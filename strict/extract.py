@@ -43,6 +43,15 @@ def _notes_block(notes: str, hints: str) -> str:
     return "\n\n".join(parts) + "\n\n" if parts else ""
 
 
+def _focus_block(sentences: List[str]) -> str:
+    if not sentences:
+        return ""
+    listed = "\n".join(f"- {s}" for s in sentences)
+    return ("HANYA KALIMAT INI: the uploaded workbooks do not hold the figures of these sentences. Write "
+            "claims for these sentences only, from the tables above; the rest of the text is context.\n"
+            f"{listed}\n\n")
+
+
 async def _ask(llm, payload: dict, fallback_llm: Optional[BaseChatModel]) -> StrictClaims:
     try:
         return await (PROMPT | llm.with_structured_output(StrictClaims)).ainvoke(payload)
@@ -104,11 +113,19 @@ async def extract_claims(
     max_chars_per_chunk: int = EXTRACTION_CHUNK_CHARS,
     on_progress: Optional[Callable[[int, int], None]] = None,
     on_chunk_failed: Optional[Callable[[List[int], Exception], None]] = None,
+    focus: Optional[List[str]] = None,
 ) -> List[Claim]:
     """Every claim of the narrative, chunk by chunk in parallel, with its cells resolved against
-    `views`. Raises structured_extractor.ExtractionFailedError when every chunk failed."""
+    `views`. With `focus`, only the chunks holding one of those sentences are sent, each with its
+    sentences listed; the model still sees the whole chunk as context. Raises
+    structured_extractor.ExtractionFailedError when every chunk failed."""
     filtered = _filter_narrative(narrative_text)
     chunks = _split_into_page_chunks(filtered, max_chars_per_chunk)
+    focus_of: Dict[str, List[str]] = {chunk: [] for chunk in chunks}
+    if focus is not None:
+        wanted = list(dict.fromkeys(_normalize_ws(s) for s in focus))
+        focus_of = {chunk: [s for s in wanted if s in _normalize_ws(chunk)] for chunk in chunks}
+        chunks = [chunk for chunk in chunks if focus_of[chunk]]
     by_code = {v.code: v for v in views}
     notes_block = _notes_block(notes, hints)
     errors: List[Exception] = []
@@ -119,7 +136,7 @@ async def extract_claims(
     async def _chunk(chunk: str) -> List[StrictClaim]:
         nonlocal done
         payload = {"notes_block": notes_block, "tables_block": table_block(views, chunk),
-                   "narrative_text": chunk}
+                   "focus_block": _focus_block(focus_of[chunk]), "narrative_text": chunk}
         try:
             answer = (await _ask(llm, payload, fallback_llm)).claims
         except Exception as exc:

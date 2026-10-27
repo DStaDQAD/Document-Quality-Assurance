@@ -149,25 +149,81 @@ def test_strict_needs_an_uploaded_workbook_not_only_document_tables():
     assert applies([_ExcelSource(table=_table(), filename="t.xls", sheet="5.39"), own], "both", has_charts=False)
 
 
-@patch("paired_verifier.parse_bi_table")
-def test_a_claim_can_be_read_from_the_reference_documents_table(mock_parse, monkeypatch):
-    from pdf_table_extraction import PdfTable
-    monkeypatch.setenv("STRICT_EXTRACTION", "1")
-    mock_parse.return_value = _table()
-    grid = [["", "Q3 2025", "Q4 2025"], ["Kewajiban neto", 245.1, 272.6]]
-    reference = ("Siaran Pers PII.docx", [PdfTable(page_number=1, caption="Tabel 1. PII", unit="Miliar USD", grid=grid)])
-    seen = []
-    claim = StrictClaim(anchor_quote="tercatat 558,5 miliar dolar AS", subject="kewajiban neto", operation="value",
-                        claimed_value_raw="272,6", unit="miliar USD",
-                        cells=[CellRef(table="S2", row="Kewajiban neto", period="Q4 2025")])
+# --- two stages: the workbooks first, the documents' tables only for what they lack ----------------
 
+TWO_SENTENCES = ("[== Halaman 1 ==]\nPosisi AFLN Indonesia pada triwulan IV 2025 tercatat 558,5 miliar dolar AS. "
+                 "Kewajiban neto tercatat 272,6 miliar dolar AS.\n")
+
+
+def _staged_llm(seen, excel_answer, document_answer):
     def _respond(prompt_value):
-        seen.append(prompt_value.to_messages())
-        return StrictClaims(claims=[claim])
+        messages = prompt_value.to_messages()
+        seen.append(messages)
+        return StrictClaims(claims=document_answer if "HANYA KALIMAT INI" in messages[1].content else excel_answer)
 
     llm = Mock()
     llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
-    response = _verify(llm=llm, mode="both", reference_tables=[reference])
+    return llm
 
-    assert "tabel di dokumen lain (Siaran Pers PII.docx)" in seen[0][1].content
-    assert "Siaran Pers PII.docx" in response.results[0].matched_excel_source
+
+AFLN = StrictClaim(anchor_quote="tercatat 558,5 miliar dolar AS", subject="Posisi AFLN", operation="value",
+                   claimed_value_raw="558,5", unit="miliar USD", cells=[CellRef(table="S1", row="Aset", period="Q4 2025")])
+NETO_ABSENT = StrictClaim(anchor_quote="tercatat 272,6 miliar dolar AS", subject="Kewajiban neto", operation="value",
+                          not_in_tables=True, reason="tidak ada di workbook")
+NETO_IN_DOC = StrictClaim(anchor_quote="tercatat 272,6 miliar dolar AS", subject="Kewajiban neto", operation="value",
+                          claimed_value_raw="272,6", unit="miliar USD",
+                          cells=[CellRef(table="S2", row="Kewajiban neto", period="Q4 2025")])
+AFLN_IN_DOC = StrictClaim(anchor_quote="tercatat 558,5 miliar dolar AS", subject="Posisi AFLN", operation="value",
+                          claimed_value_raw="558,5", unit="miliar USD",
+                          cells=[CellRef(table="S2", row="Kewajiban neto", period="Q4 2025")])
+
+
+def _reference():
+    from pdf_table_extraction import PdfTable
+    grid = [["", "Q3 2025", "Q4 2025"], ["Kewajiban neto", 245.1, 272.6]]
+    return ("Siaran Pers PII.docx", [PdfTable(page_number=1, caption="Tabel 1. PII", unit="Miliar USD", grid=grid)])
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_a_figure_the_workbooks_lack_is_read_from_the_documents_tables(mock_parse, monkeypatch):
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    seen = []
+
+    response = _verify(narrative_text=TWO_SENTENCES, mode="both", reference_tables=[_reference()],
+                       llm=_staged_llm(seen, [AFLN, NETO_ABSENT], [NETO_IN_DOC]))
+
+    assert len(seen) == 2
+    first, second = seen[0][1].content, seen[1][1].content
+    assert "tabel di dokumen" not in first                       # stage 1: the workbooks only
+    assert "tabel di dokumen lain (Siaran Pers PII.docx)" in second and "Posisi Investasi" not in second
+    assert "Kewajiban neto tercatat 272,6 miliar dolar AS." in second
+    verdicts = sorted((r.verdict, r.matched_excel_source.split(" / ")[0]) for r in response.results)
+    assert verdicts == [("Entailed", "Siaran Pers PII.docx"), ("Entailed", "t.xls")]
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_a_figure_the_workbooks_answer_never_goes_to_the_documents(mock_parse, monkeypatch):
+    # Option B as first built let the model check M2 against the report's own table although SEKI
+    # held it: a typo in that table, copied into the narrative, would then pass.
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    seen = []
+
+    response = _verify(narrative_text=TWO_SENTENCES, mode="both", reference_tables=[_reference()],
+                       llm=_staged_llm(seen, [AFLN, NETO_ABSENT], [NETO_IN_DOC, AFLN_IN_DOC]))
+
+    afln = [r for r in response.results if r.claimed_value == 558.5]
+    assert len(afln) == 1 and afln[0].matched_excel_source.startswith("t.xls")
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_no_second_stage_when_the_workbooks_answer_everything(mock_parse, monkeypatch):
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    seen = []
+
+    _verify(narrative_text=TWO_SENTENCES, mode="both", reference_tables=[_reference()],
+            llm=_staged_llm(seen, [AFLN], [NETO_IN_DOC]))
+
+    assert len(seen) == 1

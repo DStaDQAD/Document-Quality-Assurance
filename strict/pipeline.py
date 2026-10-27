@@ -1,8 +1,8 @@
 """A whole strict check: the tables as views, the claims, their verdicts, the Tinjauan AI, the response.
 
-verify_paired hands a check over here when STRICT_EXTRACTION is on and the check is Excel-only
-(`applies`); everything before that point — reading the document, parsing the sheets, the team's
-settings — is shared with the default path.
+verify_paired hands a check over here when STRICT_EXTRACTION is on and the check has an uploaded
+workbook (`applies`); everything before that point — reading the document, parsing the sheets,
+the team's settings — is shared with the default path.
 """
 import logging
 import os
@@ -13,10 +13,10 @@ from langchain_core.language_models import BaseChatModel
 from paired_verifier import _ExcelSource
 from publication_parsers import notes_for, skipped_sections
 from schemas import PairedVerificationResponse
-from strict.claims import claim_to_dict
+from strict.claims import Claim, claim_to_dict
 from strict.evaluate import evaluate_claim
 from strict.extract import extract_claims
-from strict.tables import build_views
+from strict.tables import TableView, build_views
 from structured_extractor import drop_sections, extraction_llms
 
 logger = logging.getLogger("fact-checker")
@@ -30,7 +30,8 @@ def enabled() -> bool:
 def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
     """Strict reads the uploaded Excel time-series tables and, in "both" mode — the team's usual
     check, press release and report together — the document's own tables and the other
-    document's after them. It needs at least one uploaded workbook. Chart readings and a category
+    document's for what the workbooks lack (`_from_documents`). It needs at least one uploaded
+    workbook. Chart readings and a category
     (non-time-series) sheet keep the old path, as do "internal" and "none"."""
     if mode not in ("excel", "both") or has_charts:
         return False
@@ -42,6 +43,38 @@ def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
 
 def _hints(team_aliases: Dict[str, str]) -> str:
     return "\n".join(f"\"{phrase}\" → '{row}'" for phrase, row in team_aliases.items())
+
+
+async def _from_documents(claims: List[Claim], text: str, documents: List[TableView], llm: BaseChatModel,
+                          **extract_kw) -> List[Claim]:
+    """Stage 2 ('both' mode): the sentences the workbooks could not answer, read again against the
+    document's own tables and the other document's. A figure a workbook answers never reaches
+    them, so a typo copied from a document's table into its narrative still meets the workbook."""
+    sentences = list(dict.fromkeys(c.context_quote for c in claims if c.not_in_tables))
+    if not sentences:
+        return claims
+    try:
+        found = await extract_claims(text, documents, llm, focus=sentences, **extract_kw)
+    except Exception:
+        logger.warning("Strict: tabel dokumen tidak terbaca, klaim tetap tidak ada di workbook", exc_info=True)
+        return claims
+    answered = {(c.context_quote, c.claimed_value) for c in claims if not c.not_in_tables}
+    by_sentence: Dict[str, List[Claim]] = {}
+    for c in found:
+        if not c.not_in_tables and c.context_quote in sentences and (c.context_quote, c.claimed_value) not in answered:
+            by_sentence.setdefault(c.context_quote, []).append(c)
+    # An absent claim is answered by a stage-2 claim on its number, or — when it carries no
+    # number — by any stage-2 claim on its sentence.
+    covered = {(c.context_quote, c.claimed_value) for group in by_sentence.values() for c in group}
+    covered |= {(quote, None) for quote in by_sentence}
+    merged: List[Claim] = []
+    for c in claims:
+        if c.not_in_tables:
+            merged.extend(by_sentence.pop(c.context_quote, []))
+            if (c.context_quote, c.claimed_value) in covered:
+                continue
+        merged.append(c)
+    return merged
 
 
 async def run_check(
@@ -66,17 +99,21 @@ async def run_check(
             progress_cb({"type": "stage", "stage": stage, "status": status, **extra})
 
     views = build_views(sources)
+    workbooks = [v for v in views if v.source.origin == "excel"]
+    documents = [v for v in views if v.source.origin != "excel"]
 
     def _on_progress(done: int, total: int) -> None:
         emit("extract", "running", current=done, total=total, detail=f"{total} bagian teks")
 
     primary, fallback = extraction_llms(llm, vision_llm)
-    claims = await extract_claims(
-        drop_sections(narrative_text, skipped_sections(publication)), views, primary,
-        fallback_llm=fallback,
-        notes=notes_for(publication), hints=_hints(team_aliases),
-        on_progress=_on_progress, on_chunk_failed=on_extract_gap,
-    )
+    text = drop_sections(narrative_text, skipped_sections(publication))
+    extract_kw = dict(fallback_llm=fallback, notes=notes_for(publication), hints=_hints(team_aliases),
+                      on_progress=_on_progress, on_chunk_failed=on_extract_gap)
+    # Stage 1 shows the model the uploaded workbooks only: Excel first is the code's rule, not a
+    # request the model may ignore.
+    claims = await extract_claims(text, workbooks, primary, **extract_kw)
+    if documents:
+        claims = await _from_documents(claims, text, documents, primary, **extract_kw)
     emit("extract", "done", detail=f"{len(claims)} klaim ditemukan")
     emit("compare", "running", detail=f"{len(claims)} klaim")
     results = [evaluate_claim(claim, views) for claim in claims]
