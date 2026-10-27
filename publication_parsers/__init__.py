@@ -9,7 +9,7 @@ Design: docs/superpowers/specs/2026-10-07-publication-parsers-design.md
 import os
 from pathlib import Path
 from types import ModuleType
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Sequence
 
 import yaml
 
@@ -34,7 +34,7 @@ PARSERS: Dict[str, ModuleType] = {
 }
 
 __all__ = [
-    "PARSERS", "PublicationParseError", "covers", "load_grid", "notes_enabled", "notes_for",
+    "PARSERS", "PublicationParseError", "covers", "load_grid", "notes_enabled", "notes_for", "notes_sections",
     "parse_for_publication", "skipped_sections",
 ]
 
@@ -86,16 +86,11 @@ def notes_path(publication: str) -> Optional[Path]:
     return Path(module.__file__).with_name(module.__name__.rsplit(".", 1)[-1] + ".notes.yaml")
 
 
-def notes_for(publication: str) -> str:
-    """The publication's notes as a prompt block, ending in a blank line; "" when it has none.
-
-    Guidance only: they tell the extractor what the publication's usual wording means, and nothing
-    reads them to refuse a claim. The parser's TERM_ALIASES are listed under the phrases, so an
-    alias is written once.
-    """
+def _notes_file(publication: str) -> Optional[dict]:
+    """The publication's notes file, checked for unknown sections; None when it has none."""
     path = notes_path(publication)
     if path is None or not path.exists():
-        return ""
+        return None
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     known = {key for key, _ in NOTES_SECTIONS}
     unknown = sorted(set(data) - {"publication", "title"} - known)
@@ -104,17 +99,43 @@ def notes_for(publication: str) -> str:
             f"Catatan publikasi {path.name}: bagian tidak dikenal {unknown}; "
             f"yang boleh: publication, title, {', '.join(sorted(known))}."
         )
+    return data
+
+
+def notes_sections(publication: str) -> Dict[str, List[str]]:
+    """The notes file's entries per section, in NOTES_SECTIONS order; [] for a missing section."""
+    data = _notes_file(publication) or {}
+    return {key: [str(entry) for entry in data.get(key) or []] for key, _ in NOTES_SECTIONS}
+
+
+def notes_for(publication: str, team_phrases: Optional[Dict[str, str]] = None,
+              team_conventions: Sequence[str] = ()) -> str:
+    """The publication's notes as a prompt block, ending in a blank line; "" when it has none.
+
+    Guidance only: they tell the extractor what the publication's usual wording means, and nothing
+    reads them to refuse a claim. The parser's TERM_ALIASES are listed under the phrases, so an
+    alias is written once. The team's phrases and conventions (Pengaturan › Catatan) join their
+    sections; a team phrase replaces the parser's line for the same phrase.
+    """
+    data = _notes_file(publication)
+    team_phrases = {" ".join(p.lower().split()): row for p, row in (team_phrases or {}).items()}
+    if data is None and not (team_phrases or team_conventions):
+        return ""
+    data = data or {}
     lines = [f"PUBLIKASI: {data.get('title') or publication} — catatan analis tentang arti kata-kata "
              "yang biasa dipakai publikasi ini. Pakai hanya sebagai petunjuk membaca kalimat, tidak pernah "
              "sebagai alasan melewatkan klaim. Tetap ekstrak setiap klaim seperti biasa: juga kalimat tren "
              "tanpa angka (naik/turun/stabil), angka yang mungkin tidak ada di tabel, dan klaim yang tidak "
              "disebut di sini."]
-    module = PARSERS[publication]
+    module = PARSERS.get(publication)
     for key, heading in NOTES_SECTIONS:
         entries = [str(entry) for entry in data.get(key) or []]
+        if key == "conventions":
+            entries += [str(text) for text in team_conventions]
         if key == "phrases":
-            entries += [f'"{phrase}" → baris \'{row}\''
-                        for phrase, row in getattr(module, "TERM_ALIASES", {}).items()]
+            built_in = {phrase: row for phrase, row in getattr(module, "TERM_ALIASES", {}).items()
+                        if phrase not in team_phrases}
+            entries += [f'"{phrase}" → baris \'{row}\'' for phrase, row in {**built_in, **team_phrases}.items()]
         if entries:
             lines.append(f"{heading}:")
             lines += [f"- {entry}" for entry in entries]

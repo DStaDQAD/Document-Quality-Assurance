@@ -12,7 +12,7 @@ import yaml
 from langchain_core.runnables import RunnableLambda
 
 import publication_parsers
-from publication_parsers import PARSERS, notes_enabled, notes_for
+from publication_parsers import PARSERS, notes_enabled, notes_for, notes_sections
 from structured_extractor import _EXTRACTION_PROMPT, extract_structured_facts_async
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -140,3 +140,33 @@ def test_only_the_prompt_builder_reads_the_notes():
     assert readers <= allowed
     verifier = (ROOT / "paired_verifier.py").read_text(encoding="utf-8")
     assert len(re.findall(r"\bnotes_for\(", verifier)) == 1
+
+
+# --- the team's additions (Pengaturan › Catatan) join their sections ------------------------------
+
+def test_team_additions_join_their_sections():
+    block = notes_for("spe", team_phrases={"penjualan riil": "INDEKS TOTAL"},
+                      team_conventions=["\"melambat\" tanpa angka berarti yoy turun."])
+    phrases = block.split("Frasa yang biasa dipakai → baris tabel:")[1].split("Periode:")[0]
+    conventions = block.split("Konvensi:")[1].split("Frasa yang biasa dipakai")[0]
+
+    assert "\"penjualan riil\" → baris 'INDEKS TOTAL'" in phrases
+    assert "- \"melambat\" tanpa angka berarti yoy turun." in conventions
+
+
+def test_a_team_phrase_replaces_the_built_in_line_of_the_same_phrase():
+    block = notes_for("spe", team_phrases={"ipr": "Ekspektasi Penjualan"})
+
+    assert "\"ipr\" → baris 'INDEKS TOTAL'" not in block
+    assert "\"ipr\" → baris 'Ekspektasi Penjualan'" in block
+
+
+def test_without_team_additions_the_block_is_unchanged():
+    assert notes_for("spe", {}, []) == notes_for("spe")
+
+
+def test_notes_sections_gives_the_yaml_entries_per_section():
+    sections = notes_sections("spe")
+
+    assert list(sections) == ["conventions", "phrases", "periods", "units_signs"]
+    assert sections["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
