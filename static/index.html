@@ -316,17 +316,31 @@ select { cursor: pointer; }
 .settings-tab .subtab-count { font-variant-numeric: tabular-nums; }
 .settings-body { padding: 18px 22px 22px; }
 .settings-help { font-size: 13px; color: var(--text-500); margin: 0 0 14px; max-width: 70ch; }
-.settings-form { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 8px; align-items: end; margin-bottom: 6px; }
-.settings-form label { font-size: 12px; font-weight: 600; color: var(--text-500); display: grid; gap: 5px; }
-.settings-form .run-btn, .note-add .run-btn { padding: 9px 16px; }
 .settings-feedback { font-size: 12px; margin: 6px 0 0; min-height: 18px; }
 .settings-feedback.is-warning { color: var(--amber-700); }
 .settings-feedback.is-error { color: var(--red-700); }
 .settings-feedback.is-ok { color: var(--green-700); }
-.alias-table { margin-top: 14px; }
-.alias-table td.alias-arrow { color: var(--text-400); width: 1%; padding-left: 0; padding-right: 0; }
-.alias-table td.alias-meta { color: var(--text-400); font-size: 11px; text-align: right; white-space: nowrap; }
-.alias-table td { white-space: normal; }
+/* Catatan tab: one section per part of the notes, each a bordered data-table. Built-in rows are
+   locked (code); the team's rows carry their author and the edit/delete buttons. */
+.catatan-sec + .catatan-sec { margin-top: 22px; }
+.catatan-sec-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+.catatan-sec-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text-900); }
+.tag-builtin.tag-add { color: var(--green-700); background: var(--green-100); border-color: #A7F3D0; }
+.catatan-table { border: 1px solid var(--border); border-radius: var(--r-lg); }
+.catatan-table table.data-table { font-size: 12.5px; }
+.catatan-table td { white-space: normal; vertical-align: top; }
+.catatan-table tr.is-builtin td { color: var(--text-500); }
+.catatan-table td.num { width: 1%; color: var(--text-400); font-variant-numeric: tabular-nums; }
+.catatan-table td.arrow { width: 1%; color: var(--text-400); padding-left: 0; padding-right: 0; }
+.catatan-table td.meta { width: 1%; white-space: nowrap; text-align: right; color: var(--text-400); font-size: 11px; }
+.catatan-table td.meta > .material-symbols-outlined { font-size: 15px; vertical-align: -3px; margin-right: 4px; }
+.catatan-table tr.add-row td, .catatan-table tr.add-row:hover { background: #FAFCFF; }
+.add-grid { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto; gap: 8px; align-items: center; }
+.add-grid.one { grid-template-columns: minmax(0, 1fr) auto; }
+.add-grid .arrow { color: var(--text-400); }
+.add-grid input[type="text"] { padding: 8px 11px; }
+.add-grid .run-btn { padding: 8px 14px; }
+.add-actions { display: flex; gap: 6px; }
 .tag-builtin { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
   color: var(--text-500); background: var(--page-bg); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; }
 .icon-btn {
@@ -338,26 +352,11 @@ select { cursor: pointer; }
 .icon-btn.is-danger:hover:not(:disabled) { color: var(--red-700); background: var(--red-100); }
 .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .icon-btn:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 1px; }
-.builtin-block { margin-top: 18px; }
-.builtin-block summary { cursor: pointer; font-size: 13px; font-weight: 600; color: var(--text-500); padding: 4px 0; }
-.builtin-block summary:focus-visible { outline: 2px solid var(--blue-400); outline-offset: 2px; border-radius: var(--r); }
 .settings-empty { font-size: 13px; color: var(--text-400); padding: 12px 0 4px; }
-.note-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; gap: 8px; }
 .hints-form { display: grid; gap: 12px; max-width: 70ch; }
 .hints-form label { font-size: 12px; font-weight: 600; color: var(--text-500); display: grid; gap: 5px; }
 .hints-form input:disabled { opacity: 0.6; cursor: not-allowed; }
 .hints-actions { display: flex; justify-content: flex-end; }
-.note-item { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px;
-  border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--white); }
-.note-text { flex: 1; min-width: 0; font-size: 13px; color: var(--text-900); white-space: pre-wrap; overflow-wrap: anywhere; }
-.note-meta { display: block; font-size: 11px; color: var(--text-400); margin-top: 4px; }
-.note-actions { display: flex; gap: 2px; flex-shrink: 0; }
-.note-item textarea { min-height: 70px; }
-.note-edit-actions { display: flex; gap: 6px; justify-content: flex-end; margin-top: 6px; }
-.note-add { display: grid; gap: 8px; }
-.note-add-row { display: flex; align-items: center; gap: 10px; }
-.word-count { margin-right: auto; font-size: 12px; color: var(--text-400); font-variant-numeric: tabular-nums; }
-.word-count.is-over { color: var(--red-700); font-weight: 600; }
 .change-list { list-style: none; margin: 0; padding: 0; }
 .change-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 13px; }
 .change-item:last-child { border-bottom: none; }
@@ -378,7 +377,8 @@ select { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { .settings-skeleton span { animation: none; } .switch::after { transition: none; } }
 @media (max-width: 860px) {
   .settings-layout { grid-template-columns: minmax(0, 1fr); }
-  .settings-form { grid-template-columns: minmax(0, 1fr); }
+  .add-grid { grid-template-columns: minmax(0, 1fr); }
+  .add-grid .arrow { display: none; }
   .change-item { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
 .history-back {
@@ -2909,7 +2909,7 @@ body.auth-locked .app {
   // (CHECKER_NAME_KEY); every change is sent with it and logged under it.
   let settingsData = null;
   let settingsSelected = "uang-beredar";
-  let settingsTab = "aliases";
+  let settingsTab = "catatan";
   let settingsResetOpen = false;
   let settingsChanges = null;
   let settingsRequest = 0;
@@ -2918,7 +2918,7 @@ body.auth-locked .app {
   const settingsErrorEl = document.getElementById("settings-error");
   const ACTION_WORDS = { tambah: "menambah", ubah: "mengubah", hapus: "menghapus", urutkan: "mengurutkan",
                          sembunyikan: "menyembunyikan", tampilkan: "menampilkan" };
-  const KIND_WORDS = { alias: "padanan", note: "catatan", visibility: "publikasi", hint: "contoh nama dokumen",
+  const KIND_WORDS = { alias: "frasa", note: "konvensi", visibility: "publikasi", hint: "contoh nama dokumen",
                        reset: "pengaturan" };
 
   function settingsName() {
@@ -3046,8 +3046,7 @@ body.auth-locked .app {
     const pub = currentPub();
     const label = PUBLICATIONS[pub.key]?.label || pub.key;
     const tabs = [
-      ["aliases", "Padanan nama", pub.team_aliases.length],
-      ["notes", "Catatan", pub.notes.length],
+      ["catatan", "Catatan", catatanCount(pub)],
       ["hints", "Dokumen unggahan", null],
       ["changes", "Riwayat perubahan", null],
     ];
@@ -3056,14 +3055,13 @@ body.auth-locked .app {
         <div class="settings-detail-head">
           <div class="settings-title">
             <h2>${escapeHtml(label)}${pub.hidden ? ` <span class="tag-builtin">Disembunyikan</span>` : ""}</h2>
-            <span class="muted-text">Padanan dipakai mesin dan Tinjauan AI; catatan hanya dibaca Tinjauan AI.</span>
           </div>
           <button type="button" class="cancel-btn" id="settings-reset-open">
             <span class="material-symbols-outlined">restart_alt</span>Kembalikan ke awal</button>
         </div>
         ${settingsResetOpen ? `
         <div class="reset-strip" role="alert">
-          <span class="grow">Padanan tim dihapus, catatan kembali ke catatan awal, dan publikasi ini ditampilkan lagi.</span>
+          <span class="grow">Frasa dan konvensi tim dihapus, contoh nama file kembali ke awal, dan publikasi ini ditampilkan lagi.</span>
           <button type="button" class="cancel-btn" id="settings-reset-cancel">Batal</button>
           <button type="button" class="danger-btn" id="settings-reset-confirm">Ya, kembalikan</button>
         </div>` : ""}
@@ -3072,71 +3070,75 @@ body.auth-locked .app {
               data-tab="${key}" aria-selected="${key === settingsTab}">${text}${count === null ? "" : ` <span class="subtab-count">${count}</span>`}</button>`).join("")}
         </div>
       </div>
-      <div class="settings-body" role="tabpanel">${settingsTab === "aliases" ? aliasesHtml(pub)
-        : settingsTab === "notes" ? notesHtml(pub) : settingsTab === "hints" ? hintsHtml(pub)
+      <div class="settings-body" role="tabpanel">${settingsTab === "catatan" ? catatanHtml(pub)
+        : settingsTab === "hints" ? hintsHtml(pub)
         : `<p class="settings-empty">Memuat riwayat perubahan…</p>`}</div>`;
     if (settingsTab === "changes") loadChanges();
   }
 
-  function aliasesHtml(pub) {
-    const rows = pub.known_rows.map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
-    const team = pub.team_aliases.map((a) => `<tr>
-        <td>${escapeHtml(a.phrase)}</td><td class="alias-arrow">→</td><td>${escapeHtml(a.row)}</td>
-        <td class="alias-meta">${escapeHtml(a.by)} · ${escapeHtml(formatWib(a.at).replace(" WIB", ""))}</td>
-        <td style="width:1%"><button type="button" class="icon-btn is-danger" data-delete-alias="${a.id}"
-            aria-label="Hapus padanan ${escapeHtml(a.phrase)}"><span class="material-symbols-outlined">delete</span></button></td>
-      </tr>`).join("");
-    const builtin = pub.builtin_aliases.map((a) => `<tr>
-        <td>${escapeHtml(a.phrase)}</td><td class="alias-arrow">→</td><td>${escapeHtml(a.row)}</td>
-        <td class="alias-meta"><span class="tag-builtin">bawaan</span></td></tr>`).join("");
-    return `
-      <p class="settings-help">Jika laporan menulis nama yang berbeda dari nama baris tabel, tambahkan padanannya.
-        Padanan berlaku bila nama metrik dalam klaim <strong>sama persis</strong> dengan frasanya; untuk variasi lain, tambahkan padanan baru.</p>
-      <form class="settings-form" id="alias-form" autocomplete="off">
-        <label>Frasa di laporan<input type="text" id="alias-phrase" maxlength="200" placeholder="mis. AFLN Indonesia" required></label>
-        <label>Baris tabel<input type="text" id="alias-row" maxlength="300" list="alias-rows" placeholder="mis. Aset" required></label>
-        <datalist id="alias-rows">${rows}</datalist>
-        <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah padanan</button>
-      </form>
-      <p class="settings-feedback" id="alias-feedback" aria-live="polite">${pub.known_rows.length ? ""
-        : "Saran nama baris muncul setelah publikasi ini pernah diperiksa."}</p>
-      ${team ? `<div class="history-table-wrap alias-table"><table class="data-table">
-          <thead><tr><th>Frasa di laporan</th><th></th><th>Baris tabel</th><th></th><th></th></tr></thead>
-          <tbody>${team}</tbody></table></div>`
-        : `<p class="settings-empty">Belum ada padanan dari tim untuk publikasi ini.</p>`}
-      ${builtin ? `<details class="builtin-block"><summary>Padanan bawaan (${pub.builtin_aliases.length})</summary>
-          <div class="history-table-wrap alias-table"><table class="data-table"><tbody>${builtin}</tbody></table></div>
-        </details>` : ""}`;
+  // ── Catatan: the notes the AI reads for this publication, one table per section. Built-in rows
+  // come from code and are locked; the team adds phrases and conventions (team_settings).
+  const CATATAN_LOCK = `<span class="material-symbols-outlined" aria-hidden="true">lock</span><span class="tag-builtin">bawaan</span>`;
+
+  function catatanCount(pub) {
+    const b = pub.builtin;
+    return b.phrases.length + pub.team_aliases.length + b.conventions.length + pub.notes.length
+      + b.periods.length + b.units_signs.length;
   }
 
-  function wordCount(texts) {
-    return texts.reduce((n, t) => n + (t.trim() ? t.trim().split(/\s+/).length : 0), 0);
+  function catatanMeta(item, kind, id, name) {
+    return `${escapeHtml(item.by)}${item.at ? " · " + escapeHtml(formatWib(item.at).replace(" WIB", "")) : ""}
+      <button type="button" class="icon-btn" data-edit-${kind}="${id}" aria-label="Ubah ${name}"><span class="material-symbols-outlined">edit</span></button>
+      <button type="button" class="icon-btn is-danger" data-delete-${kind}="${id}" aria-label="Hapus ${name}"><span class="material-symbols-outlined">delete</span></button>`;
   }
 
-  function notesHtml(pub) {
-    const used = wordCount(pub.notes.map((n) => n.text));
-    const items = pub.notes.map((n, i) => `<li class="note-item" data-note="${n.id}">
-        <div class="note-text">${escapeHtml(n.text)}
-          <span class="note-meta">${n.seeded && n.by === "catatan awal" ? "Catatan awal" : escapeHtml(n.by)}${n.at ? " · " + escapeHtml(formatWib(n.at).replace(" WIB", "")) : ""}</span></div>
-        <div class="note-actions">
-          <button type="button" class="icon-btn" data-move="-1" ${i === 0 ? "disabled" : ""} aria-label="Naikkan catatan"><span class="material-symbols-outlined">arrow_upward</span></button>
-          <button type="button" class="icon-btn" data-move="1" ${i === pub.notes.length - 1 ? "disabled" : ""} aria-label="Turunkan catatan"><span class="material-symbols-outlined">arrow_downward</span></button>
-          <button type="button" class="icon-btn" data-edit-note aria-label="Ubah catatan"><span class="material-symbols-outlined">edit</span></button>
-          <button type="button" class="icon-btn is-danger" data-delete-note aria-label="Hapus catatan"><span class="material-symbols-outlined">delete</span></button>
-        </div></li>`).join("");
-    return `
-      <p class="settings-help">Konvensi cara membaca kalimat publikasi ini, dalam kata-kata tim. Tinjauan AI membacanya
-        saat memeriksa ulang klaim Tidak Sesuai dan Tidak Cukup Data; jawabannya tetap dicek program.
-        Contoh: “secara triwulanan” → tabel %qtq; “secara tahunan” → tabel %yoy.</p>
-      ${items ? `<ol class="note-list">${items}</ol>` : `<p class="settings-empty">Belum ada catatan. Tulis konvensi pertama di bawah.</p>`}
-      <form class="note-add" id="note-form">
-        <textarea id="note-text" maxlength="2000" placeholder="Tulis konvensi baru…" aria-label="Catatan baru"></textarea>
-        <div class="note-add-row">
-          <span class="word-count" id="note-words" data-used="${used}">${used} / ${settingsData.notes_max_words} kata</span>
-          <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah catatan</button>
-        </div>
-        <p class="settings-feedback" id="note-feedback" aria-live="polite"></p>
-      </form>`;
+  function catatanSection(title, editable, table) {
+    return `<div class="catatan-sec">
+      <div class="catatan-sec-head"><h3>${title}</h3>${editable
+        ? `<span class="tag-builtin tag-add">bisa ditambah</span>` : `<span class="tag-builtin">hanya lihat</span>`}</div>
+      <div class="catatan-table history-table-wrap"><table class="data-table">${table}</table></div>
+    </div>`;
+  }
+
+  function numberedRows(texts) {
+    return texts.map((t, i) => `<tr class="is-builtin"><td class="num">${i + 1}</td><td>${escapeHtml(t)}</td>
+      <td class="meta">${CATATAN_LOCK}</td></tr>`).join("");
+  }
+
+  function catatanHtml(pub) {
+    const b = pub.builtin;
+    const rowOptions = pub.known_rows.map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
+    const phrases = b.phrases.map((g) => g.text !== undefined
+      ? `<tr class="is-builtin"><td colspan="3">${escapeHtml(g.text)}</td><td class="meta">${CATATAN_LOCK}</td></tr>`
+      : `<tr class="is-builtin"><td>${g.phrases.map((p) => `"${escapeHtml(p)}"`).join(", ")}</td><td class="arrow">→</td>
+          <td>${escapeHtml(g.row)}</td><td class="meta">${CATATAN_LOCK}</td></tr>`).join("")
+      + pub.team_aliases.map((a) => `<tr data-alias="${a.id}"><td>"${escapeHtml(a.phrase)}"</td><td class="arrow">→</td>
+          <td>${escapeHtml(a.row)}</td><td class="meta">${catatanMeta(a, "alias", a.id, `frasa ${escapeHtml(a.phrase)}`)}</td></tr>`).join("");
+    const conventions = numberedRows(b.conventions)
+      + pub.notes.map((n, i) => `<tr data-note="${n.id}"><td class="num">${b.conventions.length + i + 1}</td>
+          <td>${escapeHtml(n.text)}</td><td class="meta">${catatanMeta(n, "note", n.id, "konvensi")}</td></tr>`).join("");
+    return catatanSection("Frasa → baris tabel", true, `
+        <thead><tr><th>Frasa di kalimat</th><th></th><th>Baris tabel</th><th></th></tr></thead>
+        <tbody>${phrases}
+          <tr class="add-row"><td colspan="4"><form class="add-grid" id="alias-form" autocomplete="off">
+            <input type="text" id="alias-phrase" maxlength="200" placeholder="Frasa di laporan, mis. AFLN Indonesia" aria-label="Frasa di laporan" required>
+            <span class="arrow">→</span>
+            <input type="text" id="alias-row" maxlength="300" list="alias-rows" placeholder="Baris tabel" aria-label="Baris tabel" required>
+            <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah frasa</button>
+          </form><datalist id="alias-rows">${rowOptions}</datalist>
+          <p class="settings-feedback" id="alias-feedback" aria-live="polite">${pub.known_rows.length ? ""
+            : "Saran nama baris muncul setelah publikasi ini pernah diperiksa."}</p></td></tr>
+        </tbody>`)
+      + catatanSection("Konvensi", true, `
+        <thead><tr><th>#</th><th>Catatan</th><th></th></tr></thead>
+        <tbody>${conventions}
+          <tr class="add-row"><td colspan="3"><form class="add-grid one" id="note-form" autocomplete="off">
+            <input type="text" id="note-text" maxlength="2000" placeholder="Tulis konvensi baru…" aria-label="Konvensi baru" required>
+            <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah konvensi</button>
+          </form><p class="settings-feedback" id="note-feedback" aria-live="polite"></p></td></tr>
+        </tbody>`)
+      + (b.periods.length ? catatanSection("Periode", false, `<tbody>${numberedRows(b.periods)}</tbody>`) : "")
+      + (b.units_signs.length ? catatanSection("Satuan dan tanda", false, `<tbody>${numberedRows(b.units_signs)}</tbody>`) : "");
   }
 
   function hintsHtml(pub) {
@@ -3209,46 +3211,58 @@ body.auth-locked .app {
       settingsAction(confirmReset, () => settingsSend("POST", `/api/settings/${pub}/reset`, { by: settingsName() }));
       return;
     }
+    const by = encodeURIComponent(settingsName());
     const delAlias = e.target.closest("[data-delete-alias]");
     if (delAlias) {
-      settingsAction(delAlias, () => settingsSend("DELETE",
-        `/api/settings/${pub}/aliases/${delAlias.dataset.deleteAlias}?by=${encodeURIComponent(settingsName())}`),
-        "alias-feedback", "Padanan dihapus.");
+      settingsAction(delAlias, () => settingsSend("DELETE", `/api/settings/${pub}/aliases/${delAlias.dataset.deleteAlias}?by=${by}`),
+        "alias-feedback", "Frasa dihapus.");
       return;
     }
-    const noteEl = e.target.closest(".note-item");
-    if (!noteEl) return;
-    const id = Number(noteEl.dataset.note);
-    const move = e.target.closest("[data-move]");
-    if (move) {
-      const ids = currentPub().notes.map((n) => n.id);
-      const i = ids.indexOf(id), j = i + Number(move.dataset.move);
-      [ids[i], ids[j]] = [ids[j], ids[i]];
-      settingsAction(move, () => settingsSend("PUT", `/api/settings/${pub}/notes/order`, { ids, by: settingsName() }));
+    const delNote = e.target.closest("[data-delete-note]");
+    if (delNote) {
+      settingsAction(delNote, () => settingsSend("DELETE", `/api/settings/${pub}/notes/${delNote.dataset.deleteNote}?by=${by}`),
+        "note-feedback", "Konvensi dihapus.");
       return;
     }
-    if (e.target.closest("[data-delete-note]")) {
-      settingsAction(e.target.closest("[data-delete-note]"), () => settingsSend("DELETE",
-        `/api/settings/${pub}/notes/${id}?by=${encodeURIComponent(settingsName())}`), "note-feedback", "Catatan dihapus.");
+    // Editing a team row: its cells become the add form's inputs, with Batal / Simpan.
+    const editButtons = `<span class="add-actions">
+        <button type="button" class="cancel-btn" data-cancel-edit>Batal</button>
+        <button type="button" class="run-btn" data-save-edit><span class="material-symbols-outlined">check</span>Simpan</button></span>`;
+    const editAlias = e.target.closest("[data-edit-alias]");
+    if (editAlias) {
+      const alias = currentPub().team_aliases.find((a) => a.id === Number(editAlias.dataset.editAlias));
+      editAlias.closest("tr").innerHTML = `<td colspan="4"><div class="add-grid">
+          <input type="text" data-edit-phrase maxlength="200" value="${escapeHtml(alias.phrase)}" aria-label="Frasa di laporan">
+          <span class="arrow">→</span>
+          <input type="text" data-edit-row maxlength="300" list="alias-rows" value="${escapeHtml(alias.row)}" aria-label="Baris tabel">
+          ${editButtons}</div></td>`;
+      document.querySelector("[data-edit-phrase]").focus();
       return;
     }
-    if (e.target.closest("[data-edit-note]")) {
-      const note = currentPub().notes.find((n) => n.id === id);
-      noteEl.innerHTML = `<div style="flex:1">
-          <textarea aria-label="Ubah catatan" maxlength="2000">${escapeHtml(note.text)}</textarea>
-          <div class="note-edit-actions">
-            <button type="button" class="cancel-btn" data-cancel-edit>Batal</button>
-            <button type="button" class="run-btn" data-save-edit><span class="material-symbols-outlined">check</span>Simpan</button>
-          </div></div>`;
-      noteEl.querySelector("textarea").focus();
+    const editNote = e.target.closest("[data-edit-note]");
+    if (editNote) {
+      const row = editNote.closest("tr");
+      const note = currentPub().notes.find((n) => n.id === Number(editNote.dataset.editNote));
+      row.innerHTML = `<td class="num">${row.querySelector(".num").textContent}</td><td colspan="2"><div class="add-grid one">
+          <input type="text" data-edit-note-text maxlength="2000" value="${escapeHtml(note.text)}" aria-label="Ubah konvensi">
+          ${editButtons}</div></td>`;
+      row.querySelector("input").focus();
       return;
     }
     if (e.target.closest("[data-cancel-edit]")) { renderSettingsDetail(); return; }
     const save = e.target.closest("[data-save-edit]");
     if (save) {
-      const text = noteEl.querySelector("textarea").value;
-      settingsAction(save, () => settingsSend("PUT", `/api/settings/${pub}/notes/${id}`, { text, by: settingsName() }),
-                     "note-feedback", "Catatan disimpan.");
+      const row = save.closest("tr");
+      if (row.dataset.alias) {
+        const phrase = row.querySelector("[data-edit-phrase]").value;
+        const tableRow = row.querySelector("[data-edit-row]").value;
+        settingsAction(save, () => settingsSend("PUT", `/api/settings/${pub}/aliases/${row.dataset.alias}`,
+          { phrase, row: tableRow, by: settingsName() }), "alias-feedback", "Frasa disimpan.");
+      } else {
+        const text = row.querySelector("[data-edit-note-text]").value;
+        settingsAction(save, () => settingsSend("PUT", `/api/settings/${pub}/notes/${row.dataset.note}`,
+          { text, by: settingsName() }), "note-feedback", "Konvensi disimpan.");
+      }
     }
   });
 
@@ -3260,7 +3274,7 @@ body.auth-locked .app {
       const phrase = document.getElementById("alias-phrase").value;
       const row = document.getElementById("alias-row").value;
       settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/aliases`, { phrase, row, by: settingsName() }),
-                     "alias-feedback", "Padanan ditambahkan; berlaku mulai pemeriksaan berikutnya.");
+                     "alias-feedback", "Frasa ditambahkan; berlaku mulai pemeriksaan berikutnya.");
     } else if (e.target.id === "hints-form") {
       const value = (slot) => document.getElementById(`hint-${slot}`).value;
       settingsAction(button, () => settingsSend("PUT", `/api/settings/${pub}/upload-hints`,
@@ -3269,16 +3283,8 @@ body.auth-locked .app {
     } else if (e.target.id === "note-form") {
       const text = document.getElementById("note-text").value;
       settingsAction(button, () => settingsSend("POST", `/api/settings/${pub}/notes`, { text, by: settingsName() }),
-                     "note-feedback", "Catatan ditambahkan; dipakai Tinjauan AI mulai pemeriksaan berikutnya.");
+                     "note-feedback", "Konvensi ditambahkan; berlaku mulai pemeriksaan berikutnya.");
     }
-  });
-
-  document.getElementById("settings-detail").addEventListener("input", (e) => {
-    if (e.target.id !== "note-text") return;
-    const counter = document.getElementById("note-words");
-    const total = Number(counter.dataset.used) + wordCount([e.target.value]);
-    counter.textContent = `${total} / ${settingsData.notes_max_words} kata`;
-    counter.classList.toggle("is-over", total > settingsData.notes_max_words);
   });
 
   // The upload card's "Jenis publikasi": a hidden publication leaves the choices, except the one
