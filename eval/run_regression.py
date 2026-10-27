@@ -60,6 +60,10 @@ def _request_files(doc: Document, data_root: Path):
         for name in names:
             files.append(("excel_file", (path.name, data, "application/octet-stream")))
             sheets.append(name)
+    for reference in doc.references:
+        path = _resolve(reference, data_root)
+        rtype = _WORD if path.suffix.lower() == ".docx" else "application/pdf"
+        files.append(("reference_pdf", (path.name, path.read_bytes(), rtype)))
     return files, sheets
 
 

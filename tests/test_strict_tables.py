@@ -27,8 +27,9 @@ def test_views_get_codes_and_skip_unusable_sources():
 
     views = build_views([a, pointer, categorical, pdf, d])
 
-    assert [v.code for v in views] == ["S1", "S2"]
-    assert views[0].source is a and views[1].source is d
+    # The document's own table comes after the uploaded workbooks (option B).
+    assert [v.code for v in views] == ["S1", "S2", "S3"]
+    assert [v.source for v in views] == [a, d, pdf]
 
 
 def test_shape_names_axis_span_and_unit():
@@ -102,3 +103,20 @@ def test_a_table_with_annual_columns_says_so():
 
     assert view.shape == ("per triwulan, Q1 2015 s.d. Q4 2025, juga kolom tahunan Tahun 2024 s.d. "
                           "Tahun 2025, satuan Juta USD")
+
+
+def test_document_tables_join_after_the_excel_ones_and_say_where_they_come_from():
+    # Option B (2026-10-27): in "both" mode the report's own tables and the other document's are
+    # strict sources too, after the uploaded workbooks, each saying where it comes from.
+    excel = _source(["Aset"], QUARTERS)
+    own = _source(["M2"], QUARTERS, title="Lampiran 1. Uang Beredar", origin="pdf")
+    other = _source(["M2"], QUARTERS, title="Tabel 1", origin="pdf_other")
+    other.filename = "Siaran Pers UB.docx"
+
+    views = build_views([own, other, excel])
+
+    assert [(v.code, v.source.origin) for v in views] == [("S1", "excel"), ("S2", "pdf"), ("S3", "pdf_other")]
+    block = table_block(views, chunk="x")
+    assert "[S1: Posisi Investasi Internasional — per triwulan" in block
+    assert "[S2: Lampiran 1. Uang Beredar — per triwulan, Q1 2015 s.d. Q4 2025, satuan Juta USD — tabel di dokumen ini]" in block
+    assert "— tabel di dokumen lain (Siaran Pers UB.docx)]" in block

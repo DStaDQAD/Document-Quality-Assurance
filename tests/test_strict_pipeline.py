@@ -74,7 +74,7 @@ def test_on_and_both_mode_goes_strict_on_the_excel_tables(mock_parse, mock_extra
     from pdf_table_extraction import PdfTable
     monkeypatch.setenv("STRICT_EXTRACTION", "1")
     mock_parse.return_value = _table()
-    reference = ("Laporan.docx", [PdfTable(page_number=1, caption="Tabel 1", unit="", grid=[["Aset", 1.0]])])
+    reference = ("Laporan.docx", [PdfTable(page_number=1, caption="Tabel 1", unit="", grid=[["", "Q3 2025", "Q4 2025"], ["Aset lain", 1.0, 2.0]])])
 
     response = _verify(llm=_llm([]), mode="both", reference_tables=[reference])
 
@@ -137,3 +137,37 @@ def test_charts_or_a_category_sheet_keep_the_old_path():
     assert applies([series], "excel", has_charts=False)
     assert not applies([series], "excel", has_charts=True)
     assert not applies([series, category], "excel", has_charts=False)
+
+
+def test_strict_needs_an_uploaded_workbook_not_only_document_tables():
+    from paired_verifier import _ExcelSource
+    from strict.pipeline import applies
+
+    own = _ExcelSource(table=_table(), filename="Laporan.docx", sheet="Lampiran 1", origin="pdf")
+
+    assert not applies([own], "both", has_charts=False)
+    assert applies([_ExcelSource(table=_table(), filename="t.xls", sheet="5.39"), own], "both", has_charts=False)
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_a_claim_can_be_read_from_the_reference_documents_table(mock_parse, monkeypatch):
+    from pdf_table_extraction import PdfTable
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    grid = [["", "Q3 2025", "Q4 2025"], ["Kewajiban neto", 245.1, 272.6]]
+    reference = ("Siaran Pers PII.docx", [PdfTable(page_number=1, caption="Tabel 1. PII", unit="Miliar USD", grid=grid)])
+    seen = []
+    claim = StrictClaim(anchor_quote="tercatat 558,5 miliar dolar AS", subject="kewajiban neto", operation="value",
+                        claimed_value_raw="272,6", unit="miliar USD",
+                        cells=[CellRef(table="S2", row="Kewajiban neto", period="Q4 2025")])
+
+    def _respond(prompt_value):
+        seen.append(prompt_value.to_messages())
+        return StrictClaims(claims=[claim])
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    response = _verify(llm=llm, mode="both", reference_tables=[reference])
+
+    assert "tabel di dokumen lain (Siaran Pers PII.docx)" in seen[0][1].content
+    assert "Siaran Pers PII.docx" in response.results[0].matched_excel_source

@@ -5869,19 +5869,6 @@ async def verify_paired(
     _apply_team_aliases(parsed_sources, team_aliases)
     _remember_rows(publication, parsed_sources)
 
-    # STRICT_EXTRACTION: a check against Excel time-series tables ("excel" or "both") goes to the
-    # strict path, where the extractor names the cells and nothing below (matching, guards, cell
-    # pointer, the document's own tables) runs. Imported here: strict builds
-    # on this module.
-    from strict import pipeline as strict_pipeline
-    if strict_pipeline.enabled() and strict_pipeline.applies(parsed_sources, mode, bool(chart_readings)):
-        return await strict_pipeline.run_check(
-            narrative_text, parsed_sources, llm, pdf_filename=pdf_filename, vision_llm=vision_llm,
-            publication=publication, team_aliases=team_aliases, team_notes=team_notes,
-            review_llm=review_llm, review_new_refuted=review_new_refuted, progress_cb=progress_cb,
-            on_extract_gap=on_extract_gap, excel_parsers=excel_parsers, mode=mode,
-        )
-
     # Step 1b: PDF-internal tables become sources too. Appended AFTER the Excel ones so that in
     # "both" mode an equal-scoring Excel sheet keeps the headline verdict (ties keep the earlier
     # source) — the PDF value then shows up as the second source_values entry instead of
@@ -5908,6 +5895,19 @@ async def verify_paired(
             source, parser_used = _pdf_table_source(table_from_pdf, reference_name, "pdf_other", llm)
             parsed_sources.append(source)
             excel_parsers.append(parser_used)
+
+    # STRICT_EXTRACTION: a check against uploaded Excel time-series tables ("excel" or "both", the
+    # document's own and the other document's tables included) goes to the strict path, where the
+    # extractor names the cells and nothing below (matching, guards, cell pointer) runs. Imported
+    # here: strict builds on this module.
+    from strict import pipeline as strict_pipeline
+    if strict_pipeline.enabled() and strict_pipeline.applies(parsed_sources, mode, bool(chart_readings)):
+        return await strict_pipeline.run_check(
+            narrative_text, parsed_sources, llm, pdf_filename=pdf_filename, vision_llm=vision_llm,
+            publication=publication, team_aliases=team_aliases, team_notes=team_notes,
+            review_llm=review_llm, review_new_refuted=review_new_refuted, progress_cb=progress_cb,
+            on_extract_gap=on_extract_gap, excel_parsers=excel_parsers, mode=mode,
+        )
 
     # Per-source label groups with table title context (used by the LLM to understand
     # what generic rows like 'Total' represent in each table). Categorical sources also

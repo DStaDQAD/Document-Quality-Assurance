@@ -48,6 +48,9 @@ class Document:
     sources: List[Source]
     mode: str = "excel"
     labels: List[Label] = field(default_factory=list)
+    # Other documents checked alongside (the press release for a report and the reverse), sent as
+    # reference documents the way the team uploads them.
+    references: List[str] = field(default_factory=list)
 
 
 def _parse_label(doc_id: str, raw: dict) -> Label:
@@ -66,7 +69,8 @@ def _parse_document(raw: dict) -> Document:
     if mode in ("excel", "both") and not sources:
         raise ValueError(f"{doc_id}: mode {mode!r} needs at least one workbook")
     return Document(id=doc_id, publication=raw["publication"], doc=raw["doc"], sources=sources,
-                    mode=mode, labels=[_parse_label(doc_id, l) for l in raw.get("labels", [])])
+                    mode=mode, labels=[_parse_label(doc_id, l) for l in raw.get("labels", [])],
+                    references=list(raw.get("references", [])))
 
 
 def load_manifest(paths: Sequence[Path]) -> List[Document]:

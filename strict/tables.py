@@ -48,6 +48,15 @@ class TableView:
         return self.source.table
 
     @property
+    def origin_note(self) -> str:
+        """Where a table comes from when it is not an uploaded workbook (option B, 'both' mode)."""
+        if self.source.origin == "pdf":
+            return "tabel di dokumen ini"
+        if self.source.origin == "pdf_other":
+            return f"tabel di dokumen lain ({self.source.filename})"
+        return ""
+
+    @property
     def shape(self) -> str:
         """'per triwulan, Q1 2015 s.d. Q4 2025, satuan Juta USD'."""
         periods = sorted({key[1:] for key in self.table._data if len(key) == 3 and isinstance(key[1], int)},
@@ -71,11 +80,16 @@ class TableView:
         return f"{shape}, satuan {self.table.unit}" if self.table.unit else shape
 
 
+_ORIGIN_ORDER = {"excel": 0, "pdf": 1, "pdf_other": 2}
+
+
 def build_views(sources: List[_ExcelSource]) -> List[TableView]:
-    """The uploaded Excel time-series tables that hold data, coded S1, S2, … in upload order."""
+    """The time-series tables that hold data, coded S1, S2, …: the uploaded workbooks first, then
+    the document's own tables, then the other document's ('both' mode). Charts are not tables."""
     usable = [s for s in sources
-              if s.origin == "excel" and not s.pointer_only and s.table.axis_type == "temporal"
+              if s.origin in _ORIGIN_ORDER and not s.pointer_only and s.table.axis_type == "temporal"
               and s.table._data]
+    usable.sort(key=lambda s: _ORIGIN_ORDER[s.origin])
     return [TableView(code=f"S{i}", source=s) for i, s in enumerate(usable, 1)]
 
 
@@ -127,7 +141,8 @@ def table_block(views: List[TableView], chunk: str) -> str:
     headers = {}
     groups = []
     for view in views:
-        header = f"[{view.code}: {view.table.title} — {view.shape}]"
+        note = f" — {view.origin_note}" if view.origin_note else ""
+        header = f"[{view.code}: {view.table.title} — {view.shape}{note}]"
         headers[header] = view
         groups.append((header, list(view.table.row_labels)))
     parts: List[str] = []

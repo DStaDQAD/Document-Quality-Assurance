@@ -28,15 +28,16 @@ def enabled() -> bool:
 
 
 def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
-    """Strict reads the uploaded Excel time-series tables. It runs for "excel" and for "both" — the
-    team's usual check, press release and report together — where the document's own tables and
-    the other document's are left out (not yet measured as strict sources). Chart readings and a
-    category (non-time-series) sheet keep the old path, as do "internal" and "none"."""
+    """Strict reads the uploaded Excel time-series tables and, in "both" mode — the team's usual
+    check, press release and report together — the document's own tables and the other
+    document's after them. It needs at least one uploaded workbook. Chart readings and a category
+    (non-time-series) sheet keep the old path, as do "internal" and "none"."""
     if mode not in ("excel", "both") or has_charts:
         return False
     if any(s.origin == "excel" and not s.pointer_only and s.table.axis_type == "categorical" for s in sources):
         return False
-    return bool(build_views(sources))
+    # The document's own tables join the uploaded workbooks; they never stand in for them.
+    return any(view.source.origin == "excel" for view in build_views(sources))
 
 
 def _hints(team_aliases: Dict[str, str]) -> str:

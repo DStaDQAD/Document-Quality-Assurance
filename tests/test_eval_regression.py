@@ -255,3 +255,22 @@ def test_run_has_a_strict_switch():
     with um.patch.object(argparse.ArgumentParser, "parse_args", _capture), pytest.raises(SystemExit):
         run_regression.main(["run", "--manifest", "m.yaml", "--out", "o", "--strict"])
     assert seen["args"].strict is True
+
+
+def test_a_document_can_name_reference_documents(tmp_path: Path):
+    # The team's usual check: press release and report together, each the other's reference.
+    from eval.run_regression import _request_files
+    (tmp_path / "laporan.docx").write_bytes(b"L")
+    (tmp_path / "sp.docx").write_bytes(b"S")
+    (tmp_path / "t.xlsx").write_bytes(b"X")
+    m = tmp_path / "m.yaml"
+    m.write_text("- id: ub-laporan\n  publication: uang-beredar\n  doc: laporan.docx\n  mode: both\n"
+                 "  references: [sp.docx]\n  sources:\n    - {file: t.xlsx, sheets: ['I.1']}\n", encoding="utf-8")
+
+    [doc] = load_manifest([m])
+    files, sheets = _request_files(doc, tmp_path)
+
+    assert doc.references == ["sp.docx"] and doc.mode == "both"
+    assert [(field, name) for field, (name, _data, _type) in files] == [
+        ("pdf_file", "laporan.docx"), ("excel_file", "t.xlsx"), ("reference_pdf", "sp.docx")]
+    assert sheets == ["I.1"]
