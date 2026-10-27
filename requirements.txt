@@ -5,6 +5,7 @@ langchain-community>=0.3.0
 langchain-google-genai>=2.0.0
 langchain-groq>=0.2.0
 langchain-ollama>=0.2.0
+langchain-openai>=1.7.0  # LLM_PROVIDER=openscale (DeepSeek V4.1 Flash over an OpenAI-compatible API)
 langchain-core>=0.3.0
 pydantic>=2.7.0
 python-dotenv>=1.0.0
