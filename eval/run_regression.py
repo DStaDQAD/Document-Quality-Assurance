@@ -141,6 +141,10 @@ def cmd_run(args) -> int:
         narrative = captured.pop("narrative", None)
         if narrative is not None:
             (out / f"{doc.id}.narrative.txt").write_text(narrative, encoding="utf-8")
+        # The notes block the AI read (built-ins plus this run's Pengaturan, a fresh history.db), so
+        # a change in the notes can be told apart from a change in the engine.
+        import team_settings
+        (out / f"{doc.id}.notes.txt").write_text(team_settings.for_check(doc.publication)[1], encoding="utf-8")
         print(f"[{doc.id}] {time.time() - started:.0f}s · {body.get('total_facts')} klaim · "
               f"{body.get('entailed_count')}/{body.get('refuted_count')}/{body.get('inconclusive_count')}")
     return 0

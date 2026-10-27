@@ -105,14 +105,15 @@ def test_a_number_claim_without_a_readable_number_is_dropped():
     assert claims == []
 
 
-def test_notes_and_hints_reach_every_chunk():
+def test_the_notes_reach_every_chunk():
     two_pages = NARRATIVE + "[== Halaman 8 ==]\nIPR Juni 2026 tercatat sebesar 225,0 dengan kenaikan.\n"
     seen = []
-    asyncio.run(extract_claims(two_pages, _views(), _llm([], seen), notes="PUBLIKASI: PII",
-                               hints="\"ipr\" → 'INDEKS TOTAL'", max_chars_per_chunk=150))
+    notes = "PUBLIKASI: PII\nFrasa yang biasa dipakai → baris tabel:\n- \"ipr\" → baris 'INDEKS TOTAL'\n\n"
+    asyncio.run(extract_claims(two_pages, _views(), _llm([], seen), notes=notes, max_chars_per_chunk=150))
 
     assert len(seen) == 2
-    assert all("PUBLIKASI: PII" in m[1].content and "\"ipr\" → 'INDEKS TOTAL'" in m[1].content for m in seen)
+    assert all("PUBLIKASI: PII" in m[1].content and "\"ipr\" → baris 'INDEKS TOTAL'" in m[1].content for m in seen)
+    assert not any("PADANAN TIM" in m[1].content for m in seen)
     assert "RELATIVE PERIODS" in seen[0][0].content
 
 

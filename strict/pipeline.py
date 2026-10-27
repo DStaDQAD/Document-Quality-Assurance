@@ -11,7 +11,7 @@ from typing import Callable, Dict, List, Optional
 from langchain_core.language_models import BaseChatModel
 
 from paired_verifier import _ExcelSource
-from publication_parsers import notes_for, skipped_sections
+from publication_parsers import skipped_sections
 from schemas import PairedVerificationResponse
 from strict.claims import Claim, claim_to_dict
 from strict.evaluate import evaluate_claim
@@ -39,10 +39,6 @@ def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
         return False
     # The document's own tables join the uploaded workbooks; they never stand in for them.
     return any(view.source.origin == "excel" for view in build_views(sources))
-
-
-def _hints(team_aliases: Dict[str, str]) -> str:
-    return "\n".join(f"\"{phrase}\" → '{row}'" for phrase, row in team_aliases.items())
 
 
 async def _from_documents(claims: List[Claim], text: str, documents: List[TableView], llm: BaseChatModel,
@@ -85,7 +81,6 @@ async def run_check(
     pdf_filename: str,
     vision_llm: Optional[BaseChatModel],
     publication: str,
-    team_aliases: Dict[str, str],
     team_notes: str,
     review_llm: Optional[BaseChatModel],
     review_new_refuted: str,
@@ -107,7 +102,9 @@ async def run_check(
 
     primary, fallback = extraction_llms(llm, vision_llm)
     text = drop_sections(narrative_text, skipped_sections(publication))
-    extract_kw = dict(fallback_llm=fallback, notes=notes_for(publication), hints=_hints(team_aliases),
+    # The notes are Pengaturan's block (team_settings.for_check): the built-ins plus the team's
+    # phrases and conventions, the same block the Tinjauan AI reads.
+    extract_kw = dict(fallback_llm=fallback, notes=team_notes,
                       on_progress=_on_progress, on_chunk_failed=on_extract_gap)
     # Stage 1 shows the model the uploaded workbooks only: Excel first is the code's rule, not a
     # request the model may ignore.

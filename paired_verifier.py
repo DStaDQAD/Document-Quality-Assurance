@@ -26,7 +26,6 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-import yaml
 from langchain_core.language_models import BaseChatModel
 
 from cell_pointer import (
@@ -43,7 +42,7 @@ from pdf_chart_extraction import ChartReading
 from pdf_table_extraction import PdfTable
 from table_model import QUAL_SEP, _expand_report_terms, _same_root, _sig_words, label_match_score
 from publication_parsers import load_grid as _load_grid
-from publication_parsers import notes_enabled, notes_for, parse_for_publication, skipped_sections
+from publication_parsers import notes_enabled, parse_for_publication, skipped_sections
 import team_settings
 from table_parser_generic import (
     _MONTH_ABBREVS,
@@ -5134,16 +5133,10 @@ def _months_of_imports_guard(fact: ExtractedFact, result: FactVerificationResult
     })
 
 
-def _publication_notes(publication: str) -> str:
-    """The chosen publication's conventions for the extractor when PUBLICATION_NOTES is on, else "".
-    Guidance only: a notes file that does not load is logged and the check runs without it."""
-    if not notes_enabled():
-        return ""
-    try:
-        return notes_for(publication)
-    except (OSError, ValueError, yaml.YAMLError) as exc:
-        logger.warning("Publication notes for '%s' not used: %s", publication, exc)
-        return ""
+def _publication_notes(team_notes: str) -> str:
+    """The notes block (team_settings.for_check: the built-ins plus the team's additions) for the
+    extractor when PUBLICATION_NOTES is on, else "". Guidance only; for_check never raises."""
+    return team_notes if notes_enabled() else ""
 
 
 def _evaluate_fact_safely(fact: ExtractedFact, sources: List[_ExcelSource]) -> FactVerificationResult:
@@ -5904,7 +5897,7 @@ async def verify_paired(
     if strict_pipeline.enabled() and strict_pipeline.applies(parsed_sources, mode, bool(chart_readings)):
         return await strict_pipeline.run_check(
             narrative_text, parsed_sources, llm, pdf_filename=pdf_filename, vision_llm=vision_llm,
-            publication=publication, team_aliases=team_aliases, team_notes=team_notes,
+            publication=publication, team_notes=team_notes,
             review_llm=review_llm, review_new_refuted=review_new_refuted, progress_cb=progress_cb,
             on_extract_gap=on_extract_gap, excel_parsers=excel_parsers, mode=mode,
         )
@@ -5974,7 +5967,7 @@ async def verify_paired(
         source_labels=source_labels_for_extractor,
         on_progress=_on_chunk_progress,
         on_chunk_failed=on_extract_gap,
-        publication_notes=_publication_notes(publication),
+        publication_notes=_publication_notes(team_notes),
     )
     facts = _deduplicate_facts(raw_facts)
     logger.info("%d unique facts after deduplication (was %d)", len(facts), len(raw_facts))

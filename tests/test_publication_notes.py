@@ -125,22 +125,22 @@ def test_verify_paired_passes_the_notes_only_when_the_flag_is_on(
 
     notes = mock_extract.call_args.kwargs.get("publication_notes", "")
     assert bool(notes) is expected
-    if expected:
-        assert notes == notes_for("pmi")
+    if expected:   # the same block as every other reader: built-ins plus the team's additions
+        import team_settings
+        assert notes == team_settings.for_check("pmi")[1]
 
 
 def test_only_the_prompt_builder_reads_the_notes():
     # The notes guide the extractor; verdict code must never depend on them. team_settings builds
     # the block every reader gets (built-ins plus the team's additions, for_check).
-    allowed = {"publication_parsers/__init__.py", "paired_verifier.py", "team_settings.py"}
+    allowed = {"publication_parsers/__init__.py", "team_settings.py"}
     reads = re.compile(r"\bnotes_for\(|\.notes\.yaml\"")
     readers = {path.relative_to(ROOT).as_posix()
-               for path in [*ROOT.glob("*.py"), *(ROOT / "publication_parsers").glob("*.py")]
+               for path in [*ROOT.glob("*.py"), *(ROOT / "publication_parsers").glob("*.py"),
+                            *(ROOT / "strict").glob("*.py")]
                if reads.search(path.read_text(encoding="utf-8"))}
 
     assert readers <= allowed
-    verifier = (ROOT / "paired_verifier.py").read_text(encoding="utf-8")
-    assert len(re.findall(r"\bnotes_for\(", verifier)) == 1
 
 
 # --- the team's additions (Pengaturan › Catatan) join their sections ------------------------------

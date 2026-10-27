@@ -247,10 +247,10 @@ def test_the_teams_notes_reach_the_review_prompt_only_when_there_are_some():
     seen = []
     asyncio.run(ai_review.review_claims(_one_claim(), [_pii_source()], _capturing_review_llm(seen),
                                         team_notes="- KFLN = sisi Kewajiban."))
-    assert "CATATAN TIM UNTUK PUBLIKASI INI" in seen[0] and "KFLN = sisi Kewajiban." in seen[0]
+    assert "CATATAN PUBLIKASI INI" in seen[0] and "KFLN = sisi Kewajiban." in seen[0]
     seen.clear()
     asyncio.run(ai_review.review_claims(_one_claim(), [_pii_source()], _capturing_review_llm(seen)))
-    assert "CATATAN TIM" not in seen[0]
+    assert "CATATAN PUBLIKASI" not in seen[0]
 
 
 # --- upload hints: example file names under each upload area ---------------------------------

@@ -34,13 +34,8 @@ logger = logging.getLogger("fact-checker")
 _NO_NUMBER = {"is_increasing", "is_decreasing", "is_stable"}
 
 
-def _notes_block(notes: str, hints: str) -> str:
-    parts = []
-    if notes.strip():
-        parts.append(notes.strip())
-    if hints.strip():
-        parts.append("PADANAN TIM (petunjuk nama, bukan aturan):\n" + hints.strip())
-    return "\n\n".join(parts) + "\n\n" if parts else ""
+def _notes_block(notes: str) -> str:
+    return notes.strip() + "\n\n" if notes.strip() else ""
 
 
 def _focus_block(sentences: List[str]) -> str:
@@ -109,7 +104,6 @@ async def extract_claims(
     *,
     fallback_llm: Optional[BaseChatModel] = None,
     notes: str = "",
-    hints: str = "",
     max_chars_per_chunk: int = EXTRACTION_CHUNK_CHARS,
     on_progress: Optional[Callable[[int, int], None]] = None,
     on_chunk_failed: Optional[Callable[[List[int], Exception], None]] = None,
@@ -127,7 +121,7 @@ async def extract_claims(
         focus_of = {chunk: [s for s in wanted if s in _normalize_ws(chunk)] for chunk in chunks}
         chunks = [chunk for chunk in chunks if focus_of[chunk]]
     by_code = {v.code: v for v in views}
-    notes_block = _notes_block(notes, hints)
+    notes_block = _notes_block(notes)
     errors: List[Exception] = []
     done = 0
     if on_progress is not None:

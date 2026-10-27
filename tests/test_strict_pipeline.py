@@ -93,16 +93,21 @@ def test_on_but_internal_mode_stays_old(mock_parse, mock_extract, monkeypatch):
     assert mock_extract.called and response.strict_claims == []
 
 
-@patch("paired_verifier.team_settings.for_check", return_value=({"posisi afln indonesia": "Aset"}, ""))
+SETTINGS_BLOCK = ("PUBLIKASI: PII\nFrasa yang biasa dipakai → baris tabel:\n"
+                  "- \"posisi afln indonesia\" → baris 'Aset'\n\n")
+
+
+@patch("paired_verifier.team_settings.for_check", return_value=({"posisi afln indonesia": "Aset"}, SETTINGS_BLOCK))
 @patch("paired_verifier.parse_bi_table")
-def test_team_aliases_become_hints_not_substitutions(mock_parse, _for_check, monkeypatch):
+def test_the_settings_block_reaches_the_extraction_prompt(mock_parse, _for_check, monkeypatch):
     monkeypatch.setenv("STRICT_EXTRACTION", "1")
     mock_parse.return_value = _table()
     seen = []
 
-    _verify(llm=_llm(seen))
+    _verify(llm=_llm(seen), publication="pii")
 
-    assert "\"posisi afln indonesia\" → 'Aset'" in seen[0][1].content
+    assert "- \"posisi afln indonesia\" → baris 'Aset'" in seen[0][1].content
+    assert "PADANAN TIM" not in seen[0][1].content
 
 
 @patch("ai_review.review_claims", new_callable=AsyncMock, side_effect=RuntimeError("down"))

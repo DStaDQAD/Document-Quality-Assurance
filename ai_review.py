@@ -512,12 +512,13 @@ HUMAN = ("TABEL:\n{tables}\n\nPADANAN NAMA (nama di laporan = baris tabel):\n{al
 
 
 def team_notes_block(team_notes: str) -> str:
-    """The team's notes for this publication (Pengaturan), as a block before the claims; empty
-    when there are none. Advice for reading the sentences: every answer is still checked."""
+    """The publication's notes (Pengaturan › Catatan: the built-ins plus the team's additions, the
+    block extraction reads too), before the claims; empty when there are none. Advice for reading
+    the sentences: every answer is still checked."""
     if not (team_notes or "").strip():
         return ""
-    return ("CATATAN TIM UNTUK PUBLIKASI INI (konvensi cara membaca kalimat; jawabanmu tetap "
-            f"diperiksa program):\n{team_notes.strip()}\n\n")
+    return ("CATATAN PUBLIKASI INI (cara membaca kalimat; jawabanmu tetap diperiksa program):\n"
+            f"{team_notes.strip()}\n\n")
 
 PROMPT = ChatPromptTemplate.from_messages([
     ("system", SYSTEM),
