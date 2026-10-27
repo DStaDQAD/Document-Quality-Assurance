@@ -3171,7 +3171,7 @@ body.auth-locked .app {
         ${["press", "report", "excel"].map((slot) => `
           <div class="hint-field">
             <div class="hint-head"><label for="hint-${slot}">${labels[slot]}</label>
-              <span class="hint-state">${shown[slot] ? "Tampil" : "Disembunyikan"}
+              <span class="hint-state">
                 <span class="switch"><input type="checkbox" role="switch" data-doc="${slot}" ${shown[slot] ? "checked" : ""}
                       aria-label="Tampilkan ${labels[slot]} di formulir unggah"></span></span></div>
             <input type="text" id="hint-${slot}" maxlength="300" value="${escapeHtml(hints[slot] || "").replaceAll('"', "&quot;")}"
