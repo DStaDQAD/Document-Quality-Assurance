@@ -65,7 +65,8 @@ async def run(plants: list) -> None:
     for edition in EDITIONS:
         for document, id_path, en_path in documents(edition):
             report = await check_translation(text_of(id_path.read_bytes()), text_of(en_path.read_bytes()), llm,
-                                             document=document, id_filename=id_path.name, en_filename=en_path.name)
+                                             document=document, id_filename=id_path.name, en_filename=en_path.name,
+                                             id_is_word=True, en_is_word=True)
             print(f"{edition} {document}: angka {report.n_number} · makna {report.n_meaning} · "
                   f"tidak terperiksa {report.n_unchecked}")
             for pair in report.pairs:
@@ -80,7 +81,8 @@ async def run(plants: list) -> None:
         document, id_path, en_path = documents(edition)[1]
         planted = plant(en_path.read_bytes(), [(p["old"], p["new"]) for p in mine])
         report = await check_translation(text_of(id_path.read_bytes()), text_of(planted), llm, document=document,
-                                         id_filename=id_path.name, en_filename=en_path.name + " (planted)")
+                                         id_filename=id_path.name, en_filename=en_path.name + " (planted)",
+                                         id_is_word=True, en_is_word=True)
         for p in mine:
             pairs = [pair for pair in report.pairs if pair.en_text and p["new"] in pair.en_text]
             kinds = [f.kind for pair in pairs for f in pair.findings]

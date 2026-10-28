@@ -277,20 +277,32 @@ select { cursor: pointer; }
 .tr-files { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .tr-files label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-500); min-width: 0; }
 .tr-files input[type="file"] { font-family: inherit; font-size: 12px; max-width: 100%; }
-.tr-doc { margin-top: 18px; }
-.tr-doc h3 { margin: 0 0 6px; font-size: 15px; color: var(--text-900); }
-.tr-summary { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--text-500); margin-bottom: 10px; }
+.tr-doc { margin-top: 28px; }
+.tr-doc h3 { margin: 0 0 4px; font-size: 16px; color: var(--text-900); }
+.tr-files-meta { font-size: 12px; margin-bottom: 10px; }
+.tr-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text-500); margin-bottom: 12px; }
 .tr-summary strong { color: var(--text-900); font-variant-numeric: tabular-nums; }
-.tr-warn { padding: 8px 12px; margin-bottom: 10px; border-radius: var(--r); background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
-.tr-pair { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--white); padding: 12px 14px; margin-bottom: 10px; }
-.tr-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 13px; line-height: 1.55; color: var(--text-900); }
-.tr-texts .upload-label { display: block; margin-bottom: 4px; }
-.tr-texts mark { background: var(--amber-100); color: inherit; border-radius: 3px; padding: 0 2px; }
-.tr-findings { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--text-500); }
-.tr-findings li { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
-.tr-kind { flex: none; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--blue-100); color: var(--blue-600); }
+.tr-warn { padding: 10px 14px; margin-bottom: 14px; border-radius: var(--r); background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
+.tr-pair { border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--white); padding: 20px 22px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(11,31,58,0.04); }
+.tr-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 0; font-size: 13.5px; line-height: 1.7; color: var(--text-900); }
+.tr-texts > div { min-width: 0; }
+.tr-texts > div:first-child { padding-right: 24px; }
+/* The line between the Indonesian and the English text. */
+.tr-texts > div + div { padding-left: 24px; border-left: 1px solid var(--border); }
+.tr-texts .upload-label { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.tr-page { font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none; color: var(--text-400); }
+.tr-texts mark { background: var(--amber-100); color: inherit; border-radius: 3px; padding: 0 3px; }
+.tr-findings { margin: 18px 0 0; padding: 14px 0 0; border-top: 1px solid var(--border); list-style: none; font-size: 13px; line-height: 1.55; color: var(--text-500); }
+.tr-findings li { display: flex; gap: 10px; align-items: baseline; }
+.tr-findings li + li { margin-top: 8px; }
+.tr-kind { flex: none; font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--blue-100); color: var(--blue-600); }
 .tr-kind.is-angka { background: var(--red-100); color: var(--red-700); }
-@media (max-width: 640px) { .tr-files, .tr-texts { grid-template-columns: 1fr; } }
+@media (max-width: 640px) {
+  .tr-files, .tr-texts { grid-template-columns: 1fr; }
+  .tr-pair { padding: 16px; }
+  .tr-texts > div:first-child { padding-right: 0; padding-bottom: 16px; }
+  .tr-texts > div + div { padding-left: 0; padding-top: 16px; border-left: none; border-top: 1px solid var(--border); }
+}
 
 /* ── Pengaturan (team settings): publication list on the left, the chosen one's detail on the
    right. The list is the navigation; the detail is one card with its own three tabs. ── */
@@ -2857,10 +2869,14 @@ body.auth-locked .app {
   function renderTranslationPair(pair) {
     const idMarks = pair.findings.flatMap((f) => [...f.only_id, f.id_quote]);
     const enMarks = pair.findings.flatMap((f) => [...f.only_en, f.en_quote]);
-    const side = (label, text, marks) => `<div><span class="upload-label">${label}</span>${
+    // Where to find the paragraph: the page of a PDF, the section heading of a Word document.
+    const where = (page, section) => page != null ? `hlm. ${page}` : (section ? `Bagian: ${section}` : "");
+    const side = (label, text, marks, place) => `<div><span class="upload-label">${label}${
+      place ? ` <span class="tr-page">${escapeHtml(place)}</span>` : ""}</span>${
       text == null ? `<span class="muted-text">— tidak ada paragraf pasangannya —</span>` : markFragments(text, marks)}</div>`;
     return `<div class="tr-pair">
-      <div class="tr-texts">${side("Indonesia", pair.id_text, idMarks)}${side("Inggris", pair.en_text, enMarks)}</div>
+      <div class="tr-texts">${side("Indonesia", pair.id_text, idMarks, where(pair.id_page, pair.id_section))}${
+        side("Inggris", pair.en_text, enMarks, where(pair.en_page, pair.en_section))}</div>
       <ul class="tr-findings">${pair.findings.map((f) => `<li><span class="tr-kind is-${f.kind}">${
         f.kind === "angka" ? "Angka" : "Makna"}</span><span>${escapeHtml(f.explanation)}</span></li>`).join("")}</ul>
     </div>`;
@@ -2872,7 +2888,7 @@ body.auth-locked .app {
       ? `<div class="tr-warn">${report.n_unchecked} paragraf tidak terperiksa maknanya (AI gagal membaca bagian ini); angkanya tetap dicek.</div>` : "";
     return `<section class="tr-doc">
       <h3>${escapeHtml(TRANSLATION_DOCUMENTS[report.document] || report.document)}</h3>
-      <div class="muted-text" style="font-size:12px;margin-bottom:6px">${escapeHtml(report.id_filename)} · ${escapeHtml(report.en_filename)}</div>
+      <div class="muted-text tr-files-meta">${escapeHtml(report.id_filename)} · ${escapeHtml(report.en_filename)}</div>
       <div class="tr-summary"><span>Beda angka <strong>${report.n_number}</strong></span><span>Beda makna <strong>${report.n_meaning}</strong></span></div>
       ${renderHistoryNote(report)}${unchecked}
       ${withFindings.length ? withFindings.map(renderTranslationPair).join("")

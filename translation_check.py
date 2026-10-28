@@ -21,7 +21,7 @@ from schemas import TranslationCheckResponse, TranslationFinding, TranslationPai
 
 logger = logging.getLogger("fact-checker")
 
-_PAGE_MARKER = re.compile(r"^\[== Halaman \d+ ==\]$")
+_PAGE_MARKER = re.compile(r"^\[== Halaman (\d+) ==\]$")
 # A paragraph of fewer than three words and no figure but a year carries nothing to compare: the
 # stray "s" the UB English reports hold between two paragraphs, a date line ("Agustus 2026", which
 # ID prints after the title and EN before it), "Keterangan:" under a table.
@@ -52,23 +52,48 @@ class Pair:
     index: int
     id_text: Optional[str]
     en_text: Optional[str]
+    id_pos: Optional[int] = None   # the paragraph's position in its document's paragraphs()
+    en_pos: Optional[int] = None
+
+
+@dataclass
+class Located:
+    """A paragraph and where a reader finds it: the page of a PDF, the capitalised section heading
+    above it (a Word document has no fixed pages)."""
+    text: str
+    page: Optional[int]
+    section: Optional[str]
+
+
+def located_paragraphs(narrative_text: str) -> List[Located]:
+    """The narrative's paragraphs, without page markers, blank lines or trivial fragments, each
+    with the page marker and the capitalised heading last seen above it."""
+    out: List[Located] = []
+    page: Optional[int] = None
+    section: Optional[str] = None
+    for line in narrative_text.splitlines():
+        line = line.strip()
+        marker = _PAGE_MARKER.match(line)
+        if marker:
+            page = int(marker.group(1))
+            continue
+        if not line:
+            continue
+        has_figure = re.search(r"\d", _YEAR_IN_TEXT.sub("", line)) is not None
+        # A section heading in capitals is translated freely ("PERKEMBANGAN DANA PIHAK KETIGA
+        # (DPK)" / "DEPOSITS"): comparing it would only flag wording. It still says where the
+        # paragraphs under it are.
+        if line.isupper() and not has_figure:
+            section = line
+            continue
+        if len(_WORD.findall(line)) >= 3 or has_figure:
+            out.append(Located(line, page, section))
+    return out
 
 
 def paragraphs(narrative_text: str) -> List[str]:
     """The narrative's paragraphs, without page markers, blank lines or trivial fragments."""
-    out = []
-    for line in narrative_text.splitlines():
-        line = line.strip()
-        if not line or _PAGE_MARKER.match(line):
-            continue
-        has_figure = re.search(r"\d", _YEAR_IN_TEXT.sub("", line)) is not None
-        # A section heading in capitals is translated freely ("PERKEMBANGAN DANA PIHAK KETIGA
-        # (DPK)" / "DEPOSITS"): comparing it would only flag wording.
-        if line.isupper() and not has_figure:
-            continue
-        if len(_WORD.findall(line)) >= 3 or has_figure:
-            out.append(line)
-    return out
+    return [p.text for p in located_paragraphs(narrative_text)]
 
 
 def _id_value(token: str) -> float:
@@ -115,8 +140,8 @@ def align(id_paras: List[str], en_paras: List[str]) -> List[Pair]:
     pairs: List[Pair] = []
     for _, i1, i2, j1, j2 in matcher.get_opcodes():
         for k in range(max(i2 - i1, j2 - j1)):
-            pairs.append(Pair(len(pairs), id_paras[i1 + k] if i1 + k < i2 else None,
-                              en_paras[j1 + k] if j1 + k < j2 else None))
+            i, j = (i1 + k if i1 + k < i2 else None), (j1 + k if j1 + k < j2 else None)
+            pairs.append(Pair(len(pairs), None if i is None else id_paras[i], None if j is None else en_paras[j], i, j))
     return pairs
 
 
@@ -188,7 +213,8 @@ giro = demand deposits, tabungan = savings deposits, simpanan berjangka / deposi
 deposits, valas = foreign currency, uang kuasi = quasi-money, uang beredar sempit (M1) = narrow \
 money, uang beredar luas (M2) = broad money, uang kartal = currency, DPK = third-party funds \
 (TPF), kredit modal kerja / investasi / konsumsi = working capital / investment / consumer loans. \
-A component named differently from its equivalent is a difference.
+Use them to recognise the same thing: another English term for the same component (third-party \
+deposits for DPK) is not a difference; a different component (time deposits for giro) is.
 - Units and scale: triliun = trillion, miliar = billion, juta = million, persen = percent.
 
 Do not report wording, style, word order, added or dropped connecting words, or number formatting \
@@ -224,19 +250,35 @@ async def _meaning(batch: List[Pair], llm) -> List[MeaningFinding]:
     return answer.findings
 
 
+def _where(located: List[Located], pos: Optional[int], is_word: bool) -> Tuple[Optional[int], Optional[str]]:
+    """(page, section) for a paragraph: a PDF's page, a Word document's section heading. A Word
+    narrative's [== Halaman N ==] blocks are not pages (UB Agu 2026: off by up to nine), and a
+    PDF's page is enough to find a paragraph."""
+    if pos is None:
+        return None, None
+    return (None, located[pos].section) if is_word else (located[pos].page, None)
+
+
 async def check_translation(id_text: str, en_text: str, llm, *, document: str, id_filename: str,
-                            en_filename: str, max_chars: int = 6000) -> TranslationCheckResponse:
+                            en_filename: str, id_is_word: bool = False, en_is_word: bool = False,
+                            max_chars: int = 6000) -> TranslationCheckResponse:
     """The English narrative against the Indonesian one: pairs, the numbers each side prints
     alone (code), and the differences in meaning the LLM finds per batch of pairs. A batch the LLM
-    could not answer leaves its pairs unchecked, never clean."""
-    id_paras, en_paras = paragraphs(id_text), paragraphs(en_text)
+    could not answer leaves its pairs unchecked, never clean. Each pair says where its paragraphs
+    are: the page in a PDF, the section in a Word document (`*_is_word`)."""
+    id_located, en_located = located_paragraphs(id_text), located_paragraphs(en_text)
     # Nothing read (a scanned PDF without a text layer) must not come back as "no differences".
-    for paras, side in ((id_paras, "versi Indonesia"), (en_paras, "versi Inggris")):
+    for paras, side in ((id_located, "versi Indonesia"), (en_located, "versi Inggris")):
         if not paras:
             raise ValueError(f"Tidak ada narasi yang terbaca dari dokumen {side}. Unggah versi Word (.docx) "
                              "atau PDF yang teksnya bisa disalin.")
-    pairs = align(id_paras, en_paras)
-    out = [TranslationPair(index=p.index, id_text=p.id_text, en_text=p.en_text) for p in pairs]
+    pairs = align([p.text for p in id_located], [p.text for p in en_located])
+    out = []
+    for p in pairs:
+        id_page, id_section = _where(id_located, p.id_pos, id_is_word)
+        en_page, en_section = _where(en_located, p.en_pos, en_is_word)
+        out.append(TranslationPair(index=p.index, id_text=p.id_text, en_text=p.en_text, id_page=id_page,
+                                   en_page=en_page, id_section=id_section, en_section=en_section))
     for pair, item in zip(pairs, out):
         finding = number_finding(pair)
         if finding is not None:

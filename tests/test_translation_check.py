@@ -142,6 +142,8 @@ def test_the_prompt_shows_each_pair_and_asks_for_every_number():
     assert "every number" in system.lower()
     # UB Agu plant: "giro valas" rendered as "foreign currency time deposits" was missed without it.
     assert "giro = demand deposits" in system
+    # Riwayat run 2026-10-28: "Third Party Deposits" for DPK was flagged as a wrong term.
+    assert "another English term for the same component" in system and "is not a difference" in system
     # UB Jul real report: M0's two drivers named in reverse order in EN was once flagged.
     assert "listed in another order" in system
     assert "[PAIR 1]\nID: Tenor 24 bulan" in human and "EN: The 24-month tenor" in human
@@ -157,3 +159,25 @@ def test_a_document_with_no_readable_narrative_is_an_error_not_a_clean_result():
     with pytest.raises(ValueError, match="versi Inggris"):
         asyncio.run(check_translation(ID_DOC, "[== Halaman 1 ==]\n", _llm([]), document="laporan",
                                       id_filename="id.docx", en_filename="en.pdf"))
+
+
+def test_a_pdf_paragraph_carries_its_page():
+    id_pdf = "[== Halaman 1 ==]\nM2 tumbuh 8,2% pada bulan ini.\n[== Halaman 2 ==]\nTenor 24 bulan naik dari 5,8% menjadi 4,2%."
+    en_pdf = "[== Halaman 1 ==]\nM2 grew 8.2% this month.\n[== Halaman 3 ==]\nThe 24-month tenor rose from 4.0% to 4.2%."
+    report = asyncio.run(check_translation(id_pdf, en_pdf, _llm([]), document="laporan",
+                                           id_filename="id.pdf", en_filename="en.pdf"))
+    assert [(p.id_page, p.en_page) for p in report.pairs] == [(1, 1), (2, 3)]
+    assert report.pairs[1].id_section is None
+
+
+def test_a_word_paragraph_carries_its_section_not_its_page():
+    # Word has no fixed pages: its [== Halaman N ==] blocks are not pages (UB Agu: off by up to 9).
+    id_word = ("[== Halaman 1 ==]\nPERKEMBANGAN SUKU BUNGA\nTenor 24 bulan naik dari 5,8% menjadi 4,2%.\n"
+               "[== Halaman 2 ==]\nPERKEMBANGAN KREDIT\nKredit tumbuh 13,3% pada bulan ini.")
+    en_word = ("LENDING AND DEPOSIT RATES\nThe 24-month tenor rose from 4.0% to 4.2%.\n"
+               "LOANS\nLoans grew 13.3% this month.")
+    report = asyncio.run(check_translation(id_word, en_word, _llm([]), document="laporan", id_filename="id.docx",
+                                           en_filename="en.docx", id_is_word=True, en_is_word=True))
+    assert [(p.id_section, p.en_section) for p in report.pairs] == [
+        ("PERKEMBANGAN SUKU BUNGA", "LENDING AND DEPOSIT RATES"), ("PERKEMBANGAN KREDIT", "LOANS")]
+    assert report.pairs[0].id_page is None

@@ -328,6 +328,11 @@ class TranslationPair(BaseModel):
     index: int
     id_text: Optional[str] = None
     en_text: Optional[str] = None
+    # Where each paragraph is: its page in a PDF, its section heading in a Word document.
+    id_page: Optional[int] = None
+    en_page: Optional[int] = None
+    id_section: Optional[str] = None
+    en_section: Optional[str] = None
     checked: bool = True
     findings: List[TranslationFinding] = Field(default_factory=list)
 
