@@ -279,9 +279,17 @@ select { cursor: pointer; }
 .tr-files input[type="file"] { font-family: inherit; font-size: 12px; max-width: 100%; }
 .tr-doc { margin-top: 28px; }
 .tr-doc h3 { margin: 0 0 4px; font-size: 16px; color: var(--text-900); }
-.tr-files-meta { font-size: 12px; margin-bottom: 10px; }
-.tr-summary { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; color: var(--text-500); margin-bottom: 12px; }
-.tr-summary strong { color: var(--text-900); font-variant-numeric: tabular-nums; }
+/* The summary above a document's findings: publication, both files, the two counts. */
+.tr-head {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 10px 0 14px;
+  padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--white);
+  font-size: 13px;
+}
+.tr-head dt { color: var(--text-400); font-weight: 600; }
+.tr-head dd { margin: 0; color: var(--text-900); overflow-wrap: anywhere; }
+.tr-count + .tr-count { margin-left: 18px; }
+.tr-count strong { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .tr-head { grid-template-columns: 1fr; gap: 2px; } .tr-head dd { margin-bottom: 8px; } }
 .tr-warn { padding: 10px 14px; margin-bottom: 14px; border-radius: var(--r); background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
 .tr-pair { border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--white); padding: 20px 22px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(11,31,58,0.04); }
 .tr-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 0; font-size: 13.5px; line-height: 1.7; color: var(--text-900); }
@@ -2882,14 +2890,21 @@ body.auth-locked .app {
     </div>`;
   }
 
-  function renderTranslationReport(report) {
+  // publication: the key the check ran under (the form's choice, or the Riwayat summary's).
+  function renderTranslationReport(report, publication) {
     const withFindings = report.pairs.filter((p) => p.findings.length);
     const unchecked = report.n_unchecked
       ? `<div class="tr-warn">${report.n_unchecked} paragraf tidak terperiksa maknanya (AI gagal membaca bagian ini); angkanya tetap dicek.</div>` : "";
+    const row = (label, value) => `<dt>${label}</dt><dd>${value}</dd>`;
     return `<section class="tr-doc">
       <h3>${escapeHtml(TRANSLATION_DOCUMENTS[report.document] || report.document)}</h3>
-      <div class="muted-text tr-files-meta">${escapeHtml(report.id_filename)} · ${escapeHtml(report.en_filename)}</div>
-      <div class="tr-summary"><span>Beda angka <strong>${report.n_number}</strong></span><span>Beda makna <strong>${report.n_meaning}</strong></span></div>
+      <dl class="tr-head">
+        ${row("Publikasi", escapeHtml(publicationLabel(publication)))}
+        ${row("Versi Indonesia", escapeHtml(report.id_filename))}
+        ${row("Versi Inggris", escapeHtml(report.en_filename))}
+        ${row("Temuan", `<span class="tr-count">Beda angka <strong>${report.n_number}</strong></span>
+          <span class="tr-count">Beda makna <strong>${report.n_meaning}</strong></span>`)}
+      </dl>
       ${renderHistoryNote(report)}${unchecked}
       ${withFindings.length ? withFindings.map(renderTranslationPair).join("")
         : `<p class="muted-text">Tidak ada perbedaan ditemukan.</p>`}
@@ -2933,7 +2948,7 @@ body.auth-locked .app {
         slot.innerHTML = `<p class="muted-text">Memeriksa ${TRANSLATION_DOCUMENTS[job.doc]}…</p>`;
         resultEl.appendChild(slot);
         try {
-          slot.innerHTML = renderTranslationReport(await postTranslation(job.doc, job.id, job.en));
+          slot.innerHTML = renderTranslationReport(await postTranslation(job.doc, job.id, job.en), trPublication.value);
         } catch (err) {
           slot.innerHTML = `<div class="error-banner">${escapeHtml(TRANSLATION_DOCUMENTS[job.doc])}: ${escapeHtml(err.message)}</div>`;
         }
@@ -2964,7 +2979,7 @@ body.auth-locked .app {
       return;
     }
     window.history.replaceState(null, "", `#terjemahan/${id}`);
-    resultEl.innerHTML = renderHistoryBanner(entry.summary) + renderTranslationReport(entry.result);
+    resultEl.innerHTML = renderHistoryBanner(entry.summary) + renderTranslationReport(entry.result, entry.summary.publication);
     resultEl.querySelector(".history-back").addEventListener("click", () => {
       clearHistoryHash();
       showTab("history");
