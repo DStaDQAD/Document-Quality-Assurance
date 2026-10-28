@@ -82,6 +82,44 @@ def test_ratio_sums_numerators(value, verdict):
     assert evaluate_claim(claim, views).verdict == verdict
 
 
+# --- a computed number is rounded at the end as the sentence prints it; none printed is exact --------
+
+@pytest.mark.parametrize("before, printed, verdict", [
+    (300.0, "0,52", "Entailed"),   # 0,524 -> 0,52
+    (299.958, "0,52", "Refuted"),  # 0,566 -> 0,57; the old 0,05 tolerance let it through
+    (264.75, "35,2", "Refuted"),   # 35,25 -> 35,3
+    (264.76, "35,2", "Entailed"),  # 35,24 -> 35,2
+])
+def test_a_computed_number_is_rounded_as_printed(before, printed, verdict):
+    after = 300.524 if printed == "0,52" else 300.0
+    views = _views(("Miliar USD", {("X", 2026, "Q1"): before, ("X", 2026, "Q2"): after}))
+    claim = _claim("diff", [_cell("X", 2026, "Q1"), _cell("X", 2026, "Q2")], float(printed.replace(",", ".")),
+                   "miliar USD", quote=f"X naik {printed} miliar dolar AS.")
+
+    assert evaluate_claim(claim, views).verdict == verdict
+
+
+@pytest.mark.parametrize("after, verdict", [(278.0, "Entailed"), (278.04, "Refuted")])
+def test_a_computed_number_printed_without_decimals_must_be_exact(after, verdict):
+    # The user's rule (2026-10-28): "23 juta" against 22,78 is Tidak Sesuai; no rounding, no tolerance.
+    views = _views(("Miliar USD", {("X", 2026, "Q1"): 100.0, ("X", 2026, "Q2"): after}))
+    claim = _claim("diff", [_cell("X", 2026, "Q1"), _cell("X", 2026, "Q2")], 178.0, "miliar USD",
+                   quote="X naik 178 miliar dolar AS.")
+
+    assert evaluate_claim(claim, views).verdict == verdict
+
+
+@pytest.mark.parametrize("printed, verdict", [("37,5", "Entailed"), ("37,4", "Refuted")])
+def test_yoy_is_rounded_at_the_end_with_no_band_for_rounded_levels(printed, verdict):
+    # M2 Juni 2026: 799,0 / 581,3 = 37,4505% -> 37,5. The report's 37,4 used to pass on a band for
+    # the levels' own rounding; the user chose to flag it (2026-10-28).
+    views = _views(("Triliun Rp", {("M2", 2025, "Jun"): 581.3, ("M2", 2026, "Jun"): 799.0}))
+    claim = _claim("yoy_growth", [_cell("M2", 2025, "Jun"), _cell("M2", 2026, "Jun")],
+                   float(printed.replace(",", ".")), "persen", quote=f"M2 tumbuh {printed}% (yoy).")
+
+    assert evaluate_claim(claim, views).verdict == verdict
+
+
 @pytest.mark.parametrize("operation, value, verdict", [
     ("sum", 30.0, "Entailed"), ("sum", 31.0, "Refuted"), ("average", 15.0, "Entailed"), ("average", 16.0, "Refuted")])
 def test_sum_and_average(operation, value, verdict):
@@ -212,7 +250,9 @@ def test_reasoning_lists_the_cells():
 
 def test_strict_imports_no_matching_or_guards():
     allowed = {"_ExcelSource", "MATCH_TOLERANCE", "_unit_factor", "_parse_scale_unit", "_numeric_verdict",
-               "_value_verdict", "_growth_tolerance", "_stable_band", "_period_ordinal",
+               "_value_verdict", "_stable_band", "_period_ordinal",
+               # how many decimals the sentence prints a number with (rounding a result as printed)
+               "_printed_decimals",
                # unit kinds, not row matching (review 2026-10-26: level on a growth table = jenis)
                "_is_growth_series", "_is_percent_unit", "_is_plain_index"}
     imported = set()

@@ -2,18 +2,19 @@
 guesses the row: the cells are read by exact key, the arithmetic is the old engine's (units,
 rounding as printed, signed comparison, the stability band), and every result lists its cells.
 """
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, List, Optional, Tuple
 
 from cell_formula import FormulaError, evaluate
 from paired_verifier import (
     MATCH_TOLERANCE,
-    _growth_tolerance,
     _is_growth_series,
     _is_percent_unit,
     _is_plain_index,
     _numeric_verdict,
     _parse_scale_unit,
     _period_ordinal,
+    _printed_decimals,
     _stable_band,
     _unit_factor,
     _value_verdict,
@@ -148,8 +149,26 @@ def _claimed(claim: Claim) -> float:
 
 
 def _derived(claim: Claim, computed: float) -> Tuple[float, float, str, str]:
-    delta, verdict = _numeric_verdict(_claimed(claim), round(computed, 4))
-    return round(computed, 4), delta, verdict, f"Δ = {delta} (toleransi {MATCH_TOLERANCE})"
+    """A computed number judged by rounding the final result to the decimals the sentence prints
+    (half-up, as Excel shows it); printed with none, it must be exact ("23 juta" against 22,78 is
+    Tidak Sesuai: the user's rule). No allowance for levels the table already rounded: the user
+    would rather see those flagged. Only a sentence that does not show how it printed the number
+    falls back to MATCH_TOLERANCE."""
+    claimed = _claimed(claim)
+    delta, verdict = _numeric_verdict(claimed, round(computed, 4))
+    decimals = _printed_decimals(claimed, claim.context_quote)
+    if decimals is None:
+        return round(computed, 4), delta, verdict, f"Δ = {delta} (toleransi {MATCH_TOLERANCE})"
+    if decimals == 0:
+        same = round(computed, 6) == claimed
+        return round(computed, 4), delta, "Entailed" if same else "Refuted", (
+            f"angka tanpa desimal harus sama persis → {'sama dengan' if same else 'berbeda dari'} klaim")
+    step = Decimal(1).scaleb(-decimals)
+    shown = Decimal(repr(round(computed, 10))).quantize(step, rounding=ROUND_HALF_UP)
+    same = shown == Decimal(repr(claimed)).quantize(step, rounding=ROUND_HALF_UP)
+    return round(computed, 4), delta, "Entailed" if same else "Refuted", (
+        f"hasil dibulatkan ke {decimals} desimal seperti di laporan = {f'{shown:f}'.replace('.', ',')} → "
+        f"{'sama dengan' if same else 'berbeda dari'} klaim")
 
 
 def _per_row(read: List[Read], values: List[float]) -> Dict[str, List[float]]:
@@ -233,10 +252,7 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
     if op == "yoy_growth":
         if len(values) != 2 or values[0] == 0:
             raise _Undecided("klaim_tidak_lengkap", "Pertumbuhan yoy butuh dua sel: tahun lalu, lalu sekarang.")
-        growth = (values[1] / values[0] - 1) * 100
-        tolerance = _growth_tolerance(values[1], values[0], _claimed(claim), claim.context_quote)
-        delta, verdict = _numeric_verdict(_claimed(claim), round(growth, 4), tolerance)
-        return round(growth, 4), delta, verdict, f"Δ = {delta} (toleransi {round(tolerance, 4)})"
+        return _derived(claim, (values[1] / values[0] - 1) * 100)
     if op == "diff":
         if len(values) != 2:
             raise _Undecided("klaim_tidak_lengkap", "Selisih butuh dua sel: sebelum, lalu sesudah.")
