@@ -104,10 +104,14 @@ from schemas import (
     PairedVerificationResponse,
     TableDataResponse,
     TableListResponse,
+    TranslationCheckResponse,
+    TranslationCheckSummary,
+    TranslationHistoryListResponse,
     UploadExcelSourceResponse,
     VerifyClaimResponse,
     VerifyDocumentResponse,
 )
+from translation_check import check_translation
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
 from word_extraction import is_legacy_word_document, is_word_document, read_word_document
@@ -1082,6 +1086,101 @@ async def get_history_endpoint(check_id: str) -> JSONResponse:
         entry = await asyncio.to_thread(check_history.get_check, check_id)
     except Exception as exc:
         logger.warning("History read failed for %s", check_id, exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
+    summary, result = entry
+    return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
+
+
+# ── Cek Terjemahan: an English publication against its Indonesian version (translation_check.py).
+# One document pair per request; stored in Riwayat's own translation_checks table.
+
+_TRANSLATION_DOCUMENTS = ("siaran_pers", "laporan")
+
+
+async def _document_text(data: bytes, filename: str) -> str:
+    """The narrative of an uploaded Word or PDF document, as the paired check reads it."""
+    if is_legacy_word_document(filename):
+        raise ValueError(
+            "File Word format lama (.doc) belum didukung. Buka di Word, simpan sebagai .docx, "
+            "lalu unggah lagi."
+        )
+    if is_word_document(data):
+        try:
+            return read_word_document(data).narrative_text
+        except Exception as exc:
+            raise ValueError("File Word ini rusak atau tidak bisa dibuka. Buka di Word, simpan "
+                             "ulang sebagai .docx, lalu unggah lagi.") from exc
+    try:
+        vision_llm = get_vision_llm()
+    except RuntimeError:
+        vision_llm = None
+    return await extract_narrative_text(data, vision_llm)
+
+
+@app.post("/api/check-translation", response_model=TranslationCheckResponse)
+async def check_translation_endpoint(
+    id_file: UploadFile = File(..., description="The Indonesian version (.docx or .pdf)."),
+    en_file: UploadFile = File(..., description="The English version (.docx or .pdf)."),
+    document: str = "laporan",
+    checker_name: str = "",
+    publication: str = "",
+) -> TranslationCheckResponse:
+    """Check the English version of one document against its Indonesian version: numbers one
+    side prints and the other does not (code), and differences in meaning (LLM). Differences are
+    flagged; which side is wrong is the reviewer's call.
+
+    document: "siaran_pers" or "laporan". checker_name, publication: stored with the check in
+    Riwayat (GET /api/translation-history). A failed save leaves history_id null.
+    """
+    if document not in _TRANSLATION_DOCUMENTS:
+        raise HTTPException(status_code=422, detail="document harus 'siaran_pers' atau 'laporan'.")
+    id_bytes, en_bytes = await id_file.read(), await en_file.read()
+    id_name, en_name = id_file.filename or "indonesia.docx", en_file.filename or "inggris.docx"
+    started = time.monotonic()
+    try:
+        id_text = await _document_text(id_bytes, id_name)
+        en_text = await _document_text(en_bytes, en_name)
+        report = await check_translation(id_text, en_text, get_llm(temperature=0.0), document=document,
+                                         id_filename=id_name, en_filename=en_name)
+    except Exception as exc:
+        logger.exception("Translation check failed")
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    report.duration_s = round(time.monotonic() - started, 1)
+    summary = TranslationCheckSummary(
+        document=document, id_filename=id_name, en_filename=en_name, checker_name=checker_name,
+        publication=publication, n_number=report.n_number, n_meaning=report.n_meaning,
+        n_unchecked=report.n_unchecked, duration_s=report.duration_s)
+    try:
+        report.history_id = await asyncio.to_thread(
+            check_history.save_translation_check, summary, report.model_dump(mode="json"))
+    except Exception:
+        logger.warning("Saving the translation check to the history failed", exc_info=True)
+    return report
+
+
+@app.get("/api/translation-history", response_model=TranslationHistoryListResponse)
+async def list_translation_history_endpoint(limit: int = 50, offset: int = 0,
+                                            q: str = "") -> TranslationHistoryListResponse:
+    """Stored Cek Terjemahan checks, newest first; q matches either file name or the checker."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    try:
+        items, has_more = await asyncio.to_thread(check_history.list_translation_checks, limit, offset, q)
+    except Exception as exc:
+        logger.warning("Translation history list failed", exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+    return TranslationHistoryListResponse(items=items, has_more=has_more)
+
+
+@app.get("/api/translation-history/{check_id}")
+async def get_translation_history_endpoint(check_id: str) -> JSONResponse:
+    """One stored Cek Terjemahan: its summary and its full result as it was returned."""
+    try:
+        entry = await asyncio.to_thread(check_history.get_translation_check, check_id)
+    except Exception as exc:
+        logger.warning("Translation history read failed for %s", check_id, exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
     if entry is None:
         raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
