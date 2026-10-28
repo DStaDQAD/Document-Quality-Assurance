@@ -306,3 +306,17 @@ class CheckSummary(BaseModel):
 class CheckHistoryListResponse(BaseModel):
     items: List[CheckSummary]
     has_more: bool
+
+
+# ── Cek Terjemahan: the English version checked against the Indonesian one ────────────────────
+
+class TranslationFinding(BaseModel):
+    """One difference between a paragraph and its translation. "angka": a number on one side only
+    (found by code); "makna": the same numbers saying something else, or a difference in direction,
+    period, subject or unit (found by the LLM). Neither says which version is right."""
+    kind: Literal["angka", "makna"]
+    explanation: str
+    id_quote: Optional[str] = None
+    en_quote: Optional[str] = None
+    only_id: List[str] = Field(default_factory=list)   # numbers as printed, ID side only
+    only_en: List[str] = Field(default_factory=list)
