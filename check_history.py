@@ -26,7 +26,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.engine import Engine
 
-from schemas import CheckSummary
+from schemas import CheckSummary, TranslationCheckSummary
 
 logger = logging.getLogger("fact-checker")
 
@@ -65,6 +65,25 @@ checks = Table(
 )
 # The list never needs the (large) result, so it never reads it.
 _SUMMARY_COLUMNS = [c for c in checks.columns if c.name != "result_gz"]
+
+# Cek Terjemahan (an English publication against its Indonesian version) keeps its own table:
+# Riwayat lists the two kinds apart.
+translation_checks = Table(
+    "translation_checks", _metadata,
+    Column("id", String(36), primary_key=True),
+    Column("created_at", DateTime(timezone=True), nullable=False, index=True),
+    Column("document", String(16), nullable=False),
+    Column("id_filename", String(512), nullable=False),
+    Column("en_filename", String(512), nullable=False),
+    Column("checker_name", String(CHECKER_NAME_MAX_CHARS)),
+    Column("publication", String(32)),
+    Column("n_number", Integer, nullable=False),
+    Column("n_meaning", Integer, nullable=False),
+    Column("n_unchecked", Integer, nullable=False),
+    Column("duration_s", Float, nullable=False),
+    Column("result_gz", LargeBinary, nullable=False),  # gzipped TranslationCheckResponse JSON
+)
+_TRANSLATION_SUMMARY_COLUMNS = [c for c in translation_checks.columns if c.name != "result_gz"]
 
 _engine: Optional[Engine] = None
 _engine_lock = threading.Lock()
@@ -158,6 +177,21 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _gz(result: Dict[str, Any]) -> bytes:
+    return gzip.compress(json.dumps(result, ensure_ascii=False).encode("utf-8"))
+
+
+def _ungz(blob: bytes, check_id: str) -> Dict[str, Any]:
+    result = json.loads(gzip.decompress(blob).decode("utf-8"))
+    result["history_id"] = check_id
+    return result
+
+
+def _utc(created: datetime) -> datetime:
+    # SQLite keeps no offset; every row was written in UTC (see _now).
+    return created.replace(tzinfo=timezone.utc) if created.tzinfo is None else created
+
+
 def save_check(summary: CheckSummary, result: Dict[str, Any]) -> str:
     """Store one finished check and return its new id."""
     check_id = str(uuid.uuid4())
@@ -166,18 +200,14 @@ def save_check(summary: CheckSummary, result: Dict[str, Any]) -> str:
     row["publication"] = normalize_publication(row["publication"])
     row["excel_files"] = json.dumps(row["excel_files"], ensure_ascii=False)
     row["reference_files"] = json.dumps(row["reference_files"], ensure_ascii=False)
-    blob = gzip.compress(json.dumps(result, ensure_ascii=False).encode("utf-8"))
     with _get_engine().begin() as conn:
-        conn.execute(checks.insert().values(id=check_id, created_at=_now(), result_gz=blob, **row))
+        conn.execute(checks.insert().values(id=check_id, created_at=_now(), result_gz=_gz(result), **row))
     return check_id
 
 
 def _row_to_summary(row) -> CheckSummary:
     data = {k: v for k, v in row._mapping.items() if k != "result_gz"}
-    created = data["created_at"]
-    if created.tzinfo is None:
-        # SQLite keeps no offset; every row was written in UTC (see _now).
-        data["created_at"] = created.replace(tzinfo=timezone.utc)
+    data["created_at"] = _utc(data["created_at"])
     data["excel_files"] = json.loads(data["excel_files"])
     data["reference_files"] = json.loads(data["reference_files"])
     return CheckSummary(**data)
@@ -207,6 +237,48 @@ def get_check(check_id: str) -> Optional[Tuple[CheckSummary, Dict[str, Any]]]:
         row = conn.execute(select(checks).where(checks.c.id == check_id)).first()
     if row is None:
         return None
-    result = json.loads(gzip.decompress(row.result_gz).decode("utf-8"))
-    result["history_id"] = check_id
-    return _row_to_summary(row), result
+    return _row_to_summary(row), _ungz(row.result_gz, check_id)
+
+
+def save_translation_check(summary: TranslationCheckSummary, result: Dict[str, Any]) -> str:
+    """Store one finished Cek Terjemahan and return its new id."""
+    check_id = str(uuid.uuid4())
+    row = summary.model_dump(exclude={"id", "created_at"})
+    row["checker_name"] = normalize_checker_name(row["checker_name"])
+    row["publication"] = normalize_publication(row["publication"])
+    with _get_engine().begin() as conn:
+        conn.execute(translation_checks.insert().values(id=check_id, created_at=_now(), result_gz=_gz(result), **row))
+    return check_id
+
+
+def _translation_summary(row) -> TranslationCheckSummary:
+    data = {k: v for k, v in row._mapping.items() if k != "result_gz"}
+    data["created_at"] = _utc(data["created_at"])
+    return TranslationCheckSummary(**data)
+
+
+def list_translation_checks(limit: int = 50, offset: int = 0,
+                            q: str = "") -> Tuple[List[TranslationCheckSummary], bool]:
+    """A page of Cek Terjemahan summaries, newest first, and whether more follow; `q` matches
+    either file name or the checker's name, as list_checks does."""
+    t = translation_checks
+    query = select(*_TRANSLATION_SUMMARY_COLUMNS).order_by(t.c.created_at.desc(), t.c.id.desc())
+    needle = q.strip().lower()
+    if needle:
+        query = query.where(or_(
+            func.lower(t.c.id_filename).contains(needle, autoescape=True),
+            func.lower(t.c.en_filename).contains(needle, autoescape=True),
+            func.lower(func.coalesce(t.c.checker_name, "")).contains(needle, autoescape=True),
+        ))
+    with _get_engine().connect() as conn:
+        rows = conn.execute(query.limit(limit + 1).offset(offset)).all()
+    return [_translation_summary(r) for r in rows[:limit]], len(rows) > limit
+
+
+def get_translation_check(check_id: str) -> Optional[Tuple[TranslationCheckSummary, Dict[str, Any]]]:
+    """One stored Cek Terjemahan — its summary and its full result, with history_id set — or None."""
+    with _get_engine().connect() as conn:
+        row = conn.execute(select(translation_checks).where(translation_checks.c.id == check_id)).first()
+    if row is None:
+        return None
+    return _translation_summary(row), _ungz(row.result_gz, check_id)

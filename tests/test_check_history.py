@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import create_engine, select, text
 
 import check_history
-from schemas import CheckSummary
+from schemas import CheckSummary, TranslationCheckSummary
 
 PNG_1PX = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
            "YAAAAAYAAjCB0C8AAAAASUVORK5CYII=")
@@ -206,3 +206,42 @@ def test_no_warning_when_configured_or_off_render(monkeypatch, caplog):
         monkeypatch.delenv("HISTORY_DATABASE_URL")
         check_history.warn_if_ephemeral()          # local development
     assert caplog.text == ""
+
+
+# --- Cek Terjemahan: its own table ------------------------------------------------------------
+
+def _tsave(en_filename="UB_EN.docx", result=None, **overrides):
+    base = dict(document="laporan", id_filename="UB_ID.docx", en_filename=en_filename)
+    base.update(overrides)
+    return check_history.save_translation_check(TranslationCheckSummary(**base), result or {"pairs": []})
+
+
+def test_translation_check_round_trips_and_lists_apart_from_checks(clock):
+    tid = _tsave(n_number=1, n_meaning=2, result={"pairs": [{"index": 0}]})
+
+    items, more = check_history.list_translation_checks()
+    assert [i.id for i in items] == [tid] and not more
+    assert items[0].n_number == 1 and items[0].n_meaning == 2
+    assert check_history.list_checks()[0] == []
+    summary, result = check_history.get_translation_check(tid)
+    assert summary.en_filename == "UB_EN.docx" and result == {"pairs": [{"index": 0}], "history_id": tid}
+    assert check_history.get_translation_check("does-not-exist") is None
+
+
+def test_translation_search_matches_either_filename_and_checker(clock):
+    _tsave("UB_Agustus_EN.docx", id_filename="UB_Agustus_ID.docx", checker_name="Ivan")
+    _tsave("SK_Juli_EN.docx", id_filename="SK_Juli_ID.docx", checker_name="Budi")
+
+    assert [i.en_filename for i in check_history.list_translation_checks(q="agustus_id")[0]] == ["UB_Agustus_EN.docx"]
+    assert [i.en_filename for i in check_history.list_translation_checks(q="sk_juli_en")[0]] == ["SK_Juli_EN.docx"]
+    assert [i.en_filename for i in check_history.list_translation_checks(q="BUDI")[0]] == ["SK_Juli_EN.docx"]
+
+
+def test_translation_publication_and_checker_are_normalised_like_checks(clock):
+    tid = _tsave(publication=" SK ", checker_name="  Ivan   Jehuda ")
+    _tsave("b.docx", publication="bukan-publikasi", checker_name="  ")
+
+    summary = check_history.get_translation_check(tid)[0]
+    assert (summary.publication, summary.checker_name) == ("sk", "Ivan Jehuda")
+    other = [i for i in check_history.list_translation_checks()[0] if i.en_filename == "b.docx"][0]
+    assert (other.publication, other.checker_name) == (None, None)

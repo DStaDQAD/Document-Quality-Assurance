@@ -344,3 +344,23 @@ class TranslationCheckResponse(BaseModel):
     duration_s: float = 0.0
     pairs: List[TranslationPair] = Field(default_factory=list)
     history_id: Optional[str] = None
+
+
+class TranslationCheckSummary(BaseModel):
+    """One stored Cek Terjemahan as Riwayat lists it — everything but the full result."""
+    id: Optional[str] = None
+    created_at: Optional[datetime] = None   # UTC; the UI shows it in WIB
+    document: str                           # "siaran_pers" / "laporan"
+    id_filename: str
+    en_filename: str
+    checker_name: Optional[str] = None
+    publication: Optional[str] = None
+    n_number: int = 0
+    n_meaning: int = 0
+    n_unchecked: int = 0
+    duration_s: float = 0.0
+
+
+class TranslationHistoryListResponse(BaseModel):
+    items: List[TranslationCheckSummary]
+    has_more: bool
