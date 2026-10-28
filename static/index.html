@@ -279,35 +279,17 @@ select { cursor: pointer; }
 .tr-files input[type="file"] { font-family: inherit; font-size: 12px; max-width: 100%; }
 .tr-doc { margin-top: 28px; }
 .tr-doc h3 { margin: 0 0 4px; font-size: 16px; color: var(--text-900); }
-/* The summary above a document's findings: one card, what was compared on the left (publication,
-   document, both files), the number of findings on the right behind a thin rule. */
-.tr-top {
-  display: flex; align-items: stretch; margin: 10px 0 18px;
-  border: 1px solid var(--border); border-radius: var(--r-lg);
-  background: linear-gradient(135deg, #F6F9FF, #FFF); box-shadow: 0 1px 2px rgba(11,31,58,0.04);
+/* The summary above a document's findings: publication, both files, the two counts. */
+.tr-head {
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; margin: 10px 0 14px;
+  padding: 16px 20px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--white);
+  font-size: 13px;
 }
-.tr-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; justify-content: center; padding: 18px 22px; }
-.tr-total {
-  flex: none; min-width: 150px; display: flex; flex-direction: column; justify-content: center; align-items: flex-end;
-  padding: 18px 26px; border-left: 1px solid var(--border);
-}
-.tr-total-num { font-size: 40px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; color: #DC2626; font-variant-numeric: tabular-nums; }
-.tr-total.is-clean .tr-total-num { color: #16A34A; }
-.tr-total-label { margin-top: 6px; font-size: 12px; font-weight: 600; color: var(--text-500); }
-.tr-tags { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.tr-pub { font-size: 16px; font-weight: 800; letter-spacing: -0.01em; color: var(--navy-900); }
-.tr-doc-tag { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; background: var(--blue-100); color: var(--blue-600); }
-.tr-file { display: flex; gap: 10px; align-items: baseline; font-size: 13px; color: var(--text-900); min-width: 0; }
-.tr-file .tr-fname { overflow-wrap: anywhere; }
-.tr-lang {
-  flex: none; width: 28px; text-align: center; font-size: 10px; font-weight: 800; letter-spacing: 0.04em;
-  padding: 2px 0; border-radius: 4px; background: var(--navy-900); color: var(--white);
-}
-.tr-lang.is-en { background: var(--blue-500); }
-@media (max-width: 640px) {
-  .tr-top { flex-direction: column; }
-  .tr-total { align-items: flex-start; border-left: none; border-top: 1px solid var(--border); padding: 14px 22px; }
-}
+.tr-head dt { color: var(--text-400); font-weight: 600; }
+.tr-head dd { margin: 0; color: var(--text-900); overflow-wrap: anywhere; }
+.tr-count + .tr-count { margin-left: 18px; }
+.tr-count strong { font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) { .tr-head { grid-template-columns: 1fr; gap: 2px; } .tr-head dd { margin-bottom: 8px; } }
 .tr-warn { padding: 10px 14px; margin-bottom: 14px; border-radius: var(--r); background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
 .tr-pair { border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--white); padding: 20px 22px; margin-bottom: 18px; box-shadow: 0 1px 2px rgba(11,31,58,0.04); }
 .tr-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 0; font-size: 13.5px; line-height: 1.7; color: var(--text-900); }
@@ -2913,20 +2895,16 @@ body.auth-locked .app {
     const withFindings = report.pairs.filter((p) => p.findings.length);
     const unchecked = report.n_unchecked
       ? `<div class="tr-warn">${report.n_unchecked} paragraf tidak terperiksa maknanya (AI gagal membaca bagian ini); angkanya tetap dicek.</div>` : "";
-    const total = report.n_number + report.n_meaning;
-    const file = (lang, name) => `<div class="tr-file"><span class="tr-lang${lang === "EN" ? " is-en" : ""}">${lang}</span>
-      <span class="tr-fname">${escapeHtml(name)}</span></div>`;
+    const row = (label, value) => `<dt>${label}</dt><dd>${value}</dd>`;
     return `<section class="tr-doc">
-      <div class="tr-top">
-        <div class="tr-info">
-          <div class="tr-tags"><span class="tr-pub">${escapeHtml(publicationLabel(publication))}</span>
-            <span class="tr-doc-tag">${escapeHtml(TRANSLATION_DOCUMENTS[report.document] || report.document)}</span></div>
-          ${file("ID", report.id_filename)}${file("EN", report.en_filename)}
-        </div>
-        <div class="tr-total${total ? "" : " is-clean"}">
-          <div class="tr-total-num">${total}</div><div class="tr-total-label">Jumlah temuan</div>
-        </div>
-      </div>
+      <h3>${escapeHtml(TRANSLATION_DOCUMENTS[report.document] || report.document)}</h3>
+      <dl class="tr-head">
+        ${row("Publikasi", escapeHtml(publicationLabel(publication)))}
+        ${row("Versi Indonesia", escapeHtml(report.id_filename))}
+        ${row("Versi Inggris", escapeHtml(report.en_filename))}
+        ${row("Temuan", `<span class="tr-count">Beda angka <strong>${report.n_number}</strong></span>
+          <span class="tr-count">Beda makna <strong>${report.n_meaning}</strong></span>`)}
+      </dl>
       ${renderHistoryNote(report)}${unchecked}
       ${withFindings.length ? withFindings.map(renderTranslationPair).join("")
         : `<p class="muted-text">Tidak ada perbedaan ditemukan.</p>`}
