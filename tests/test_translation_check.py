@@ -139,6 +139,10 @@ def test_the_prompt_shows_each_pair_and_asks_for_every_number():
     _check(_llm([], seen))
     system, human = seen[0][0].content, seen[0][1].content
     assert "every number" in system.lower()
+    # UB Agu plant: "giro valas" rendered as "foreign currency time deposits" was missed without it.
+    assert "giro = demand deposits" in system
+    # UB Jul real report: M0's two drivers named in reverse order in EN was once flagged.
+    assert "listed in another order" in system
     assert "[PAIR 1]\nID: Tenor 24 bulan" in human and "EN: The 24-month tenor" in human
 
 

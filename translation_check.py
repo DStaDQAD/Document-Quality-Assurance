@@ -183,11 +183,17 @@ same period and the same direction. Numbers swapped between items ("masing-masin
 - Direction words: naik/meningkat/tumbuh/akselerasi against fell/decreased/slowed, and the reverse.
 - Periods: month, quarter, year, yoy against mtm, "bulan sebelumnya" against a named month that is \
 not the previous one.
-- Subject: the indicator, component, sector or region named.
+- Subject: the indicator, component, sector or region named. Usual Bank Indonesia equivalents: \
+giro = demand deposits, tabungan = savings deposits, simpanan berjangka / deposito = time \
+deposits, valas = foreign currency, uang kuasi = quasi-money, uang beredar sempit (M1) = narrow \
+money, uang beredar luas (M2) = broad money, uang kartal = currency, DPK = third-party funds \
+(TPF), kredit modal kerja / investasi / konsumsi = working capital / investment / consumer loans. \
+A component named differently from its equivalent is a difference.
 - Units and scale: triliun = trillion, miliar = billion, juta = million, persen = percent.
 
 Do not report wording, style, word order, added or dropped connecting words, or number formatting \
-(10.448,1 is the same as 10,448.1). Do not judge which version is right.
+(10.448,1 is the same as 10,448.1). The same items listed in another order, each still with its own \
+number, are not a difference. Do not judge which version is right.
 
 For each difference give the PAIR number, the exact differing fragment of each text, and one \
 sentence in Indonesian saying what differs. An empty list is the normal answer."""

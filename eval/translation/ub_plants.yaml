@@ -1,0 +1,24 @@
+# Errors planted in copies of the UB English reports (sample_data/sharepoint/ub/<edition>/EN/,
+# gitignored) for eval/run_translation_eval.py. Two of each kind; `old` must occur once, inside
+# one <w:t> run. expect: the finding kind Cek Terjemahan should give the pair holding `new`.
+plants:
+  - {edition: jun26, kind: angka, expect: angka,
+     old: "accelerated to 22.5% (yoy) in June 2026", new: "accelerated to 22.3% (yoy) in June 2026"}
+  - {edition: jun26, kind: tukar, expect: makna,
+     old: "which grew by 12.7% (yoy) and 2.8% (yoy), respectively", new: "which grew by 2.8% (yoy) and 12.7% (yoy), respectively"}
+  - {edition: jun26, kind: arah, expect: makna,
+     old: "trillion, accelerating from 6.0% (yoy) in the previous month", new: "trillion, moderating from 6.0% (yoy) in the previous month"}
+  - {edition: jun26, kind: bulan, expect: makna,
+     old: "following 10.8% (yoy) growth in May 2026 (Table 1", new: "following 10.8% (yoy) growth in April 2026 (Table 1"}
+  - {edition: jul26, kind: angka, expect: angka,
+     old: "accelerated to 23.1% (yoy) in July 2026", new: "accelerated to 21.3% (yoy) in July 2026"}
+  - {edition: jul26, kind: subjek, expect: makna,
+     old: "Quasi-money, accounting for 42.2% of M2", new: "Narrow money, accounting for 42.2% of M2"}
+  - {edition: jul26, kind: tukar, expect: makna,
+     old: "which grew by 4.3% (yoy) and 7.6% (yoy), respectively", new: "which grew by 7.6% (yoy) and 4.3% (yoy), respectively"}
+  - {edition: agu26, kind: arah, expect: makna,
+     old: "growth of 9.5% (yoy), up from 8.3% (yoy) in the previous month", new: "growth of 9.5% (yoy), down from 8.3% (yoy) in the previous month"}
+  - {edition: agu26, kind: bulan, expect: makna,
+     old: "0.7% (yoy) and 2.0% (yoy) in July 2026 (Table 8)", new: "0.7% (yoy) and 2.0% (yoy) in June 2026 (Table 8)"}
+  - {edition: agu26, kind: subjek, expect: makna,
+     old: "supported by foreign currency demand deposits", new: "supported by foreign currency time deposits"}
