@@ -4,6 +4,7 @@ import asyncio
 from collections import Counter
 from unittest.mock import Mock
 
+import pytest
 from langchain_core.runnables import RunnableLambda
 
 from translation_check import (MeaningFinding, MeaningFindings, Pair, align, check_translation, number_finding,
@@ -149,3 +150,10 @@ def test_the_prompt_shows_each_pair_and_asks_for_every_number():
 def test_a_finding_for_a_pair_outside_its_batch_is_dropped():
     report = _check(_llm([MeaningFinding(pair=7, id_quote="x", en_quote="y", explanation="z")]))
     assert report.n_meaning == 0
+
+
+def test_a_document_with_no_readable_narrative_is_an_error_not_a_clean_result():
+    # A scanned PDF with no text layer reads as nothing; "no differences" would look clean.
+    with pytest.raises(ValueError, match="versi Inggris"):
+        asyncio.run(check_translation(ID_DOC, "[== Halaman 1 ==]\n", _llm([]), document="laporan",
+                                      id_filename="id.docx", en_filename="en.pdf"))

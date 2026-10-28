@@ -229,7 +229,13 @@ async def check_translation(id_text: str, en_text: str, llm, *, document: str, i
     """The English narrative against the Indonesian one: pairs, the numbers each side prints
     alone (code), and the differences in meaning the LLM finds per batch of pairs. A batch the LLM
     could not answer leaves its pairs unchecked, never clean."""
-    pairs = align(paragraphs(id_text), paragraphs(en_text))
+    id_paras, en_paras = paragraphs(id_text), paragraphs(en_text)
+    # Nothing read (a scanned PDF without a text layer) must not come back as "no differences".
+    for paras, side in ((id_paras, "versi Indonesia"), (en_paras, "versi Inggris")):
+        if not paras:
+            raise ValueError(f"Tidak ada narasi yang terbaca dari dokumen {side}. Unggah versi Word (.docx) "
+                             "atau PDF yang teksnya bisa disalin.")
+    pairs = align(id_paras, en_paras)
     out = [TranslationPair(index=p.index, id_text=p.id_text, en_text=p.en_text) for p in pairs]
     for pair, item in zip(pairs, out):
         finding = number_finding(pair)
