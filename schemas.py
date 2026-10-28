@@ -320,3 +320,27 @@ class TranslationFinding(BaseModel):
     en_quote: Optional[str] = None
     only_id: List[str] = Field(default_factory=list)   # numbers as printed, ID side only
     only_en: List[str] = Field(default_factory=list)
+
+
+class TranslationPair(BaseModel):
+    """A paragraph and its translation (one side None when it has no counterpart). checked=False:
+    the LLM could not read this pair, so its meaning is unchecked, not clean."""
+    index: int
+    id_text: Optional[str] = None
+    en_text: Optional[str] = None
+    checked: bool = True
+    findings: List[TranslationFinding] = Field(default_factory=list)
+
+
+class TranslationCheckResponse(BaseModel):
+    """One document (siaran pers or laporan) checked EN against ID. Every pair is kept, so a
+    reopened check still shows each finding in its place; the UI lists the pairs with findings."""
+    document: Literal["siaran_pers", "laporan"]
+    id_filename: str
+    en_filename: str
+    n_number: int = 0
+    n_meaning: int = 0
+    n_unchecked: int = 0
+    duration_s: float = 0.0
+    pairs: List[TranslationPair] = Field(default_factory=list)
+    history_id: Optional[str] = None

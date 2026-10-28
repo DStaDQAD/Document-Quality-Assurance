@@ -6,13 +6,20 @@ in each language's format and compared as sets, whatever order the sentence puts
 number is attached to, and the meaning around it (direction, period, subject, unit), is left to
 the LLM. Differences are flagged; which version is wrong is the reviewer's call.
 """
+import asyncio
 import difflib
+import logging
 import re
 from collections import Counter
 from dataclasses import dataclass
 from typing import List, Literal, Optional, Tuple
 
-from schemas import TranslationFinding
+from langchain_core.prompts import ChatPromptTemplate
+from pydantic import BaseModel, Field
+
+from schemas import TranslationCheckResponse, TranslationFinding, TranslationPair
+
+logger = logging.getLogger("fact-checker")
 
 _PAGE_MARKER = re.compile(r"^\[== Halaman \d+ ==\]$")
 # A paragraph of fewer than three words and no figure but a year carries nothing to compare: the
@@ -150,3 +157,95 @@ def number_finding(pair: Pair) -> Optional[TranslationFinding]:
         parts.append(f"Format angka Indonesia di versi EN: {', '.join(wrong_format)}")
     return TranslationFinding(kind="angka", explanation="; ".join(parts), only_id=only_id,
                               only_en=only_en + [t for t in wrong_format if t not in only_en])
+
+
+# ── The meaning pass ─────────────────────────────────────────────────────────────────────────────
+
+class MeaningFinding(BaseModel):
+    pair: int = Field(description="The PAIR number the difference is in")
+    id_quote: str = Field(description="The exact fragment of the ID text that differs")
+    en_quote: str = Field(description="The exact fragment of the EN text that differs")
+    explanation: str = Field(description="One sentence in Indonesian saying what differs, not which side is right")
+
+
+class MeaningFindings(BaseModel):
+    findings: List[MeaningFinding] = Field(default_factory=list)
+
+
+SYSTEM_PROMPT = """You compare paragraphs of an Indonesian statistical publication (Bank Indonesia) \
+with their English version. The English text is meant to be a direct translation of the Indonesian \
+one. Each PAIR holds one Indonesian paragraph (ID) and its English counterpart (EN).
+
+Report only real differences in content:
+- For EVERY number, check that in both versions it refers to the same subject or component, the \
+same period and the same direction. Numbers swapped between items ("masing-masing" / \
+"respectively") are a difference.
+- Direction words: naik/meningkat/tumbuh/akselerasi against fell/decreased/slowed, and the reverse.
+- Periods: month, quarter, year, yoy against mtm, "bulan sebelumnya" against a named month that is \
+not the previous one.
+- Subject: the indicator, component, sector or region named.
+- Units and scale: triliun = trillion, miliar = billion, juta = million, persen = percent.
+
+Do not report wording, style, word order, added or dropped connecting words, or number formatting \
+(10.448,1 is the same as 10,448.1). Do not judge which version is right.
+
+For each difference give the PAIR number, the exact differing fragment of each text, and one \
+sentence in Indonesian saying what differs. An empty list is the normal answer."""
+
+_PROMPT = ChatPromptTemplate.from_messages([("system", SYSTEM_PROMPT), ("human", "{pairs}")])
+
+
+def _batches(pairs: List[Pair], max_chars: int) -> List[List[Pair]]:
+    """Two-sided pairs, in order, grouped so each batch's text stays under max_chars."""
+    batches: List[List[Pair]] = []
+    size = 0
+    for pair in pairs:
+        if pair.id_text is None or pair.en_text is None:
+            continue
+        length = len(pair.id_text) + len(pair.en_text)
+        if batches and size + length <= max_chars:
+            batches[-1].append(pair)
+            size += length
+        else:
+            batches.append([pair])
+            size = length
+    return batches
+
+
+async def _meaning(batch: List[Pair], llm) -> List[MeaningFinding]:
+    text = "\n\n".join(f"[PAIR {p.index}]\nID: {p.id_text}\nEN: {p.en_text}" for p in batch)
+    answer = await (_PROMPT | llm.with_structured_output(MeaningFindings)).ainvoke({"pairs": text})
+    return answer.findings
+
+
+async def check_translation(id_text: str, en_text: str, llm, *, document: str, id_filename: str,
+                            en_filename: str, max_chars: int = 6000) -> TranslationCheckResponse:
+    """The English narrative against the Indonesian one: pairs, the numbers each side prints
+    alone (code), and the differences in meaning the LLM finds per batch of pairs. A batch the LLM
+    could not answer leaves its pairs unchecked, never clean."""
+    pairs = align(paragraphs(id_text), paragraphs(en_text))
+    out = [TranslationPair(index=p.index, id_text=p.id_text, en_text=p.en_text) for p in pairs]
+    for pair, item in zip(pairs, out):
+        finding = number_finding(pair)
+        if finding is not None:
+            item.findings.append(finding)
+    batches = _batches(pairs, max_chars)
+    answers = await asyncio.gather(*(_meaning(b, llm) for b in batches), return_exceptions=True)
+    for batch, answer in zip(batches, answers):
+        if isinstance(answer, BaseException):
+            logger.warning("Translation meaning check failed for pairs %s: %s", [p.index for p in batch], answer)
+            for pair in batch:
+                out[pair.index].checked = False
+            continue
+        inside = {p.index for p in batch}
+        for found in answer:
+            if found.pair not in inside:
+                logger.warning("Meaning finding for pair %s outside its batch dropped", found.pair)
+                continue
+            out[found.pair].findings.append(TranslationFinding(
+                kind="makna", explanation=found.explanation, id_quote=found.id_quote, en_quote=found.en_quote))
+    findings = [f for item in out for f in item.findings]
+    return TranslationCheckResponse(
+        document=document, id_filename=id_filename, en_filename=en_filename, pairs=out,
+        n_number=sum(f.kind == "angka" for f in findings), n_meaning=sum(f.kind == "makna" for f in findings),
+        n_unchecked=sum(not item.checked for item in out))
