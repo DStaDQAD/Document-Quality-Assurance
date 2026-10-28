@@ -83,3 +83,9 @@ def test_endpoints_sit_behind_the_login_gate(monkeypatch):
 
     assert gated.post("/api/check-translation", files=_files()).status_code == 401
     assert gated.get("/api/translation-history").status_code == 401
+
+
+def test_the_app_shell_has_the_tab_and_the_riwayat_switch():
+    html = client.get("/").text
+    for piece in ('data-tab="translation"', 'id="panel-translation"', "Cek Terjemahan", 'id="history-kind"'):
+        assert piece in html, piece

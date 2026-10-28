@@ -266,6 +266,31 @@ select { cursor: pointer; }
   font-size: 13px; color: var(--text-900);
 }
 .history-banner .material-symbols-outlined { font-size: 18px; color: var(--blue-400); }
+/* Riwayat lists Verifikasi and Cek Terjemahan apart; the switch reuses the settings tab look. */
+.history-kinds { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--border); }
+
+/* ── Cek Terjemahan: one card per paragraph pair with findings, ID beside EN. ── */
+.tr-container.from-history .tr-form { display: none; }
+.tr-subtitle { margin: 0 0 14px; font-size: 13px; color: var(--text-500); }
+.tr-form .upload-row { margin-top: 14px; }
+.tr-row-label { display: block; margin-bottom: 6px; }
+.tr-files { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.tr-files label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-500); min-width: 0; }
+.tr-files input[type="file"] { font-family: inherit; font-size: 12px; max-width: 100%; }
+.tr-doc { margin-top: 18px; }
+.tr-doc h3 { margin: 0 0 6px; font-size: 15px; color: var(--text-900); }
+.tr-summary { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--text-500); margin-bottom: 10px; }
+.tr-summary strong { color: var(--text-900); font-variant-numeric: tabular-nums; }
+.tr-warn { padding: 8px 12px; margin-bottom: 10px; border-radius: var(--r); background: var(--amber-100); color: var(--amber-700); font-size: 13px; }
+.tr-pair { border: 1px solid var(--border); border-radius: var(--r-lg); background: var(--white); padding: 12px 14px; margin-bottom: 10px; }
+.tr-texts { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; font-size: 13px; line-height: 1.55; color: var(--text-900); }
+.tr-texts .upload-label { display: block; margin-bottom: 4px; }
+.tr-texts mark { background: var(--amber-100); color: inherit; border-radius: 3px; padding: 0 2px; }
+.tr-findings { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; color: var(--text-500); }
+.tr-findings li { display: flex; gap: 8px; align-items: baseline; margin-top: 4px; }
+.tr-kind { flex: none; font-size: 11px; font-weight: 700; padding: 1px 7px; border-radius: 999px; background: var(--blue-100); color: var(--blue-600); }
+.tr-kind.is-angka { background: var(--red-100); color: var(--red-700); }
+@media (max-width: 640px) { .tr-files, .tr-texts { grid-template-columns: 1fr; } }
 
 /* ── Pengaturan (team settings): publication list on the left, the chosen one's detail on the
    right. The list is the navigation; the detail is one card with its own three tabs. ── */
@@ -1125,6 +1150,10 @@ body.auth-locked .app {
       <span class="material-symbols-outlined">compare_arrows</span>
       <span class="nav-text">Verifikasi</span>
     </button>
+    <button type="button" class="nav-item inactive-nav" data-tab="translation" title="Cek Terjemahan">
+      <span class="material-symbols-outlined">translate</span>
+      <span class="nav-text">Cek Terjemahan</span>
+    </button>
     <button type="button" class="nav-item inactive-nav" data-tab="history" title="Riwayat">
       <span class="material-symbols-outlined">history</span>
       <span class="nav-text">Riwayat</span>
@@ -1258,15 +1287,65 @@ body.auth-locked .app {
       </div>
     </div>
 
+    <!-- Panel: Cek Terjemahan. The English version of a document against its Indonesian one
+         (POST /api/check-translation, one request per document pair). -->
+    <div class="panel" id="panel-translation">
+      <div class="tr-container" id="tr-container">
+        <div class="card tr-form">
+          <div class="card-header">
+            <p class="tr-subtitle">Cek konsistensi versi Inggris terhadap versi Indonesia</p>
+            <fieldset class="rules">
+              <legend class="upload-label">Jenis publikasi</legend>
+              <select id="tr-publication" aria-label="Jenis publikasi">
+                <option value="" disabled selected>Pilih jenis publikasi…</option>
+              </select>
+            </fieldset>
+            <div class="upload-row">
+              <div class="upload-field" id="tr-row-siaran_pers">
+                <span class="upload-label tr-row-label">Siaran Pers</span>
+                <div class="tr-files">
+                  <label>Versi Indonesia<input type="file" id="tr-siaran_pers-id" accept=".docx,.pdf"></label>
+                  <label>Versi Inggris<input type="file" id="tr-siaran_pers-en" accept=".docx,.pdf"></label>
+                </div>
+              </div>
+              <div class="upload-field" id="tr-row-laporan">
+                <span class="upload-label tr-row-label">Laporan</span>
+                <div class="tr-files">
+                  <label>Versi Indonesia<input type="file" id="tr-laporan-id" accept=".docx,.pdf"></label>
+                  <label>Versi Inggris<input type="file" id="tr-laporan-en" accept=".docx,.pdf"></label>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="card-footer">
+            <label class="checker-field" title="Nama ini ikut tersimpan di riwayat pengecekan">
+              <span class="material-symbols-outlined">person</span>
+              <input type="text" id="tr-checker-name" maxlength="80" autocomplete="name"
+                     placeholder="Nama pemeriksa (opsional)">
+            </label>
+            <button type="button" class="run-btn" id="tr-run">
+              <span class="material-symbols-outlined">translate</span>
+              Cek
+            </button>
+          </div>
+        </div>
+        <div id="tr-result"></div>
+      </div>
+    </div>
+
     <!-- Panel: Riwayat. Every successful check, shared by everyone signed in (GET /api/history).
          Opening a row renders the stored result on the Verifikasi panel. -->
     <div class="panel" id="panel-history">
       <div class="card">
+        <div class="history-kinds" id="history-kind" role="tablist" aria-label="Jenis pengecekan">
+          <button type="button" role="tab" class="settings-tab active" data-kind="paired" aria-selected="true">Verifikasi</button>
+          <button type="button" role="tab" class="settings-tab" data-kind="translation" aria-selected="false">Cek Terjemahan</button>
+        </div>
         <div class="card-header history-toolbar">
           <span class="material-symbols-outlined">search</span>
           <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa"
                  aria-label="Cari riwayat menurut nama dokumen atau pemeriksa">
-          <span class="history-legend" aria-hidden="true">Hasil: <span class="is-match">✓ Sesuai</span> ·
+          <span class="history-legend" id="history-legend" aria-hidden="true">Hasil: <span class="is-match">✓ Sesuai</span> ·
             <span class="is-mismatch">✗ Tidak Sesuai</span> · <span class="is-unverified">? Tidak Cukup Data</span></span>
         </div>
         <div class="error-banner history-busy" id="history-busy" hidden></div>
@@ -1371,7 +1450,7 @@ body.auth-locked .app {
     if (n.matches(".material-symbols-outlined")) n.setAttribute("aria-hidden", "true"); else hideIconNames(n);
   }))).observe(document.body, { childList: true, subtree: true });
 
-  const PANEL_TITLES = { paired: "Verifikasi", history: "Riwayat", settings: "Pengaturan", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi", translation: "Cek Terjemahan", history: "Riwayat", settings: "Pengaturan", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
   function showTab(tab) {
@@ -1404,6 +1483,7 @@ body.auth-locked .app {
     item.addEventListener("click", () => {
       // A running check keeps its form and progress; otherwise Verifikasi starts afresh.
       if (item.dataset.tab === "paired" && !pairedRunActive) resetPairedForm();
+      if (item.dataset.tab === "translation" && !translationRunActive) resetTranslationForm();
       showTab(item.dataset.tab);
     });
   });
@@ -2586,9 +2666,10 @@ body.auth-locked .app {
       listEl.innerHTML = `<p class="muted-text history-empty">Memuat riwayat…</p>`;
     }
     const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
+    const translation = historyKind === "translation";
     let page;
     try {
-      page = await fetchJson(`/api/history?${params}`);
+      page = await fetchJson(`${translation ? "/api/translation-history" : "/api/history"}?${params}`);
     } catch (err) {
       if (request !== historyRequest) return;
       const banner = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
@@ -2606,10 +2687,44 @@ body.auth-locked .app {
       return;
     }
     listEl.innerHTML = `<div class="history-table-wrap"><table class="data-table history-table">
-      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>Mode</th><th>Hasil</th><th>Durasi</th><th><span class="sr-only">Buka</span></th></tr></thead>
-      <tbody>${historyItems.map(renderHistoryRow).join("")}</tbody>
+      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>${translation ? "Jenis" : "Mode"}</th><th>${translation ? "Temuan" : "Hasil"}</th><th>Durasi</th><th><span class="sr-only">Buka</span></th></tr></thead>
+      <tbody>${historyItems.map(translation ? renderTranslationRow : renderHistoryRow).join("")}</tbody>
     </table></div>`;
   }
+
+  const TRANSLATION_DOCUMENTS = { siaran_pers: "Siaran Pers", laporan: "Laporan" };
+  let historyKind = "paired";   // which list Riwayat shows: "paired" (Verifikasi) or "translation"
+
+  function renderTranslationRow(item, idx) {
+    const who = item.checker_name ? escapeHtml(item.checker_name) : `<span class="muted-text">—</span>`;
+    const pub = item.publication
+      ? escapeHtml(publicationLabel(item.publication))
+      : `<span class="muted-text">Umum</span>`;
+    return `<tr class="history-row" data-idx="${idx}" tabindex="0">
+      <td>${escapeHtml(formatWib(item.created_at))}</td>
+      <td class="history-file" title="${escapeHtml(item.en_filename)}">${escapeHtml(item.en_filename)}</td>
+      <td>${pub}</td>
+      <td>${who}</td>
+      <td>${escapeHtml(TRANSLATION_DOCUMENTS[item.document] || item.document)}</td>
+      <td class="history-counts">angka ${item.n_number} · makna ${item.n_meaning}</td>
+      <td>${escapeHtml(formatDuration(item.duration_s))}</td>
+      <td class="history-open"><span class="material-symbols-outlined">chevron_right</span></td>
+    </tr>`;
+  }
+
+  document.getElementById("history-kind").addEventListener("click", (e) => {
+    const tab = e.target.closest("[data-kind]");
+    if (!tab || tab.dataset.kind === historyKind) return;
+    historyKind = tab.dataset.kind;
+    document.querySelectorAll("#history-kind [data-kind]").forEach((t) => {
+      const active = t === tab;
+      t.classList.toggle("active", active);
+      t.setAttribute("aria-selected", String(active));
+    });
+    // The Sesuai / Tidak Sesuai legend belongs to Verifikasi's counts only.
+    document.getElementById("history-legend").hidden = historyKind !== "paired";
+    loadHistory(true);
+  });
 
   function renderHistoryBanner(summary) {
     const who = summary.checker_name ? ` · oleh ${escapeHtml(summary.checker_name)}` : "";
@@ -2671,17 +2786,25 @@ body.auth-locked .app {
   function openFromHash() {
     const m = /^#riwayat\/([0-9a-f-]{36})$/i.exec(window.location.hash);
     if (m) openHistoryEntry(m[1]);
+    const t = /^#terjemahan\/([0-9a-f-]{36})$/i.exec(window.location.hash);
+    if (t) openTranslationEntry(t[1]);
+  }
+
+  // The row's kind is the list's kind: Riwayat shows one list at a time.
+  function openListedEntry(idx) {
+    const id = historyItems[idx].id;
+    if (historyKind === "translation") openTranslationEntry(id); else openHistoryEntry(id);
   }
   window.addEventListener("hashchange", openFromHash);
 
   const historyListEl = document.getElementById("history-list");
   historyListEl.addEventListener("click", (e) => {
     const row = e.target.closest(".history-row");
-    if (row) openHistoryEntry(historyItems[Number(row.dataset.idx)].id);
+    if (row) openListedEntry(Number(row.dataset.idx));
   });
   historyListEl.addEventListener("keydown", (e) => {
     const row = e.target.closest(".history-row");
-    if (row && e.key === "Enter") openHistoryEntry(historyItems[Number(row.dataset.idx)].id);
+    if (row && e.key === "Enter") openListedEntry(Number(row.dataset.idx));
   });
   document.getElementById("history-more").addEventListener("click", () => loadHistory(false));
   document.getElementById("history-search").addEventListener("input", (e) => {
@@ -2691,6 +2814,146 @@ body.auth-locked .app {
       loadHistory(true);
     }, 300);
   });
+
+  // ══ Cek Terjemahan ══════════════════════════════════════════════════
+  // One request per document pair (Siaran Pers, Laporan), in that order. Every finding of a
+  // document is listed in one place, number and meaning findings together, paragraph by
+  // paragraph; the system flags differences and never says which version is right.
+  let translationRunActive = false;
+  const trPublication = document.getElementById("tr-publication");
+  trPublication.insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
+    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
+  const trCheckerEl = document.getElementById("tr-checker-name");
+  try { trCheckerEl.value = localStorage.getItem(CHECKER_NAME_KEY) || ""; } catch (_) {}
+  trCheckerEl.addEventListener("change", () => {
+    try { localStorage.setItem(CHECKER_NAME_KEY, trCheckerEl.value.trim()); } catch (_) {}
+    checkerNameEl.value = trCheckerEl.value.trim();
+  });
+
+  // A publication without a press release (PPKom) or a report (M0, Cadev, SULNI) shows one row.
+  function showTranslationRows() {
+    const pub = PUBLICATIONS[trPublication.value];
+    document.getElementById("tr-row-siaran_pers").hidden = !!pub && pub.press === false;
+    document.getElementById("tr-row-laporan").hidden = !!pub && !pub.report;
+  }
+  trPublication.addEventListener("change", showTranslationRows);
+
+  function resetTranslationForm() {
+    document.getElementById("tr-container").classList.remove("from-history");
+    document.getElementById("tr-result").replaceChildren();
+    if (window.location.hash.startsWith("#terjemahan/")) clearHistoryHash();
+  }
+
+  // The text with its differing parts marked: escaped first, then each fragment wrapped.
+  function markFragments(text, fragments) {
+    let html = escapeHtml(text || "");
+    for (const fragment of new Set(fragments.filter(Boolean))) {
+      const safe = escapeHtml(fragment);
+      if (html.includes(safe)) html = html.split(safe).join(`<mark>${safe}</mark>`);
+    }
+    return html;
+  }
+
+  function renderTranslationPair(pair) {
+    const idMarks = pair.findings.flatMap((f) => [...f.only_id, f.id_quote]);
+    const enMarks = pair.findings.flatMap((f) => [...f.only_en, f.en_quote]);
+    const side = (label, text, marks) => `<div><span class="upload-label">${label}</span>${
+      text == null ? `<span class="muted-text">— tidak ada paragraf pasangannya —</span>` : markFragments(text, marks)}</div>`;
+    return `<div class="tr-pair">
+      <div class="tr-texts">${side("Indonesia", pair.id_text, idMarks)}${side("Inggris", pair.en_text, enMarks)}</div>
+      <ul class="tr-findings">${pair.findings.map((f) => `<li><span class="tr-kind is-${f.kind}">${
+        f.kind === "angka" ? "Angka" : "Makna"}</span><span>${escapeHtml(f.explanation)}</span></li>`).join("")}</ul>
+    </div>`;
+  }
+
+  function renderTranslationReport(report) {
+    const withFindings = report.pairs.filter((p) => p.findings.length);
+    const unchecked = report.n_unchecked
+      ? `<div class="tr-warn">${report.n_unchecked} paragraf tidak terperiksa maknanya (AI gagal membaca bagian ini); angkanya tetap dicek.</div>` : "";
+    return `<section class="tr-doc">
+      <h3>${escapeHtml(TRANSLATION_DOCUMENTS[report.document] || report.document)}</h3>
+      <div class="muted-text" style="font-size:12px;margin-bottom:6px">${escapeHtml(report.id_filename)} · ${escapeHtml(report.en_filename)}</div>
+      <div class="tr-summary"><span>Beda angka <strong>${report.n_number}</strong></span><span>Beda makna <strong>${report.n_meaning}</strong></span></div>
+      ${renderHistoryNote(report)}${unchecked}
+      ${withFindings.length ? withFindings.map(renderTranslationPair).join("")
+        : `<p class="muted-text">Tidak ada perbedaan ditemukan.</p>`}
+    </section>`;
+  }
+
+  async function postTranslation(document_, idFile, enFile) {
+    const form = new FormData();
+    form.append("id_file", idFile);
+    form.append("en_file", enFile);
+    const params = new URLSearchParams({ document: document_, checker_name: trCheckerEl.value.trim(),
+                                         publication: trPublication.value || "" });
+    const res = await fetch(`/api/check-translation?${params}`, { method: "POST", body: form });
+    if (!res.ok) {
+      let detail = `Server membalas ${res.status}.`;
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    return res.json();
+  }
+
+  document.getElementById("tr-run").addEventListener("click", async () => {
+    const resultEl = document.getElementById("tr-result");
+    const jobs = ["siaran_pers", "laporan"].map((doc) => ({
+      doc,
+      row: document.getElementById(`tr-row-${doc}`),
+      id: document.getElementById(`tr-${doc}-id`).files[0],
+      en: document.getElementById(`tr-${doc}-en`).files[0],
+    })).filter((j) => !j.row.hidden && j.id && j.en);
+    if (!jobs.length) {
+      resultEl.innerHTML = `<div class="error-banner">Upload versi Indonesia dan versi Inggris untuk minimal satu dokumen.</div>`;
+      return;
+    }
+    const button = document.getElementById("tr-run");
+    button.disabled = true;
+    translationRunActive = true;
+    resultEl.replaceChildren();
+    try {
+      for (const job of jobs) {
+        const slot = document.createElement("div");
+        slot.innerHTML = `<p class="muted-text">Memeriksa ${TRANSLATION_DOCUMENTS[job.doc]}…</p>`;
+        resultEl.appendChild(slot);
+        try {
+          slot.innerHTML = renderTranslationReport(await postTranslation(job.doc, job.id, job.en));
+        } catch (err) {
+          slot.innerHTML = `<div class="error-banner">${escapeHtml(TRANSLATION_DOCUMENTS[job.doc])}: ${escapeHtml(err.message)}</div>`;
+        }
+      }
+    } finally {
+      button.disabled = false;
+      translationRunActive = false;
+    }
+  });
+
+  async function openTranslationEntry(id) {
+    if (translationRunActive) {
+      const busy = document.getElementById("history-busy");
+      busy.textContent = "Cek terjemahan sedang berjalan. Tunggu sampai selesai, lalu buka riwayat ini lagi.";
+      busy.hidden = false;
+      return;
+    }
+    showTab("translation");
+    highlightNav("history");
+    document.getElementById("tr-container").classList.add("from-history");
+    const resultEl = document.getElementById("tr-result");
+    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
+    let entry;
+    try {
+      entry = await fetchJson(`/api/translation-history/${encodeURIComponent(id)}`);
+    } catch (err) {
+      resultEl.innerHTML = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
+      return;
+    }
+    window.history.replaceState(null, "", `#terjemahan/${id}`);
+    resultEl.innerHTML = renderHistoryBanner(entry.summary) + renderTranslationReport(entry.result);
+    resultEl.querySelector(".history-back").addEventListener("click", () => {
+      clearHistoryHash();
+      showTab("history");
+    });
+  }
 
   // ══ Paired verification with streamed progress ══════════════════════
   // The paired check takes 40s+, so it talks to /api/verify-paired-stream and reports each
