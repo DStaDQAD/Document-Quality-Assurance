@@ -3281,6 +3281,13 @@ body.auth-locked .app {
   async function loadSettings(keepTab) {
     const request = ++settingsRequest;
     settingsNameEl.value = checkerNameEl.value.trim();
+    if (!keepTab) settingsResetOpen = false;
+    // The copy fetched at sign-in (refreshHiddenPublications) or on the last visit shows at once;
+    // the fresh one replaces it when it arrives.
+    if (settingsData && !keepTab) {
+      renderPubList();
+      renderSettingsDetail();
+    }
     try {
       const data = await fetchJson("/api/settings");
       if (request !== settingsRequest) return;
@@ -3288,7 +3295,6 @@ body.auth-locked .app {
       settingsChanges = null;
       showSettingsError("");
       applyHiddenPublications(data.publications);
-      if (!keepTab) settingsResetOpen = false;
       renderPubList();
       renderSettingsDetail();
     } catch (err) {
@@ -3645,7 +3651,11 @@ body.auth-locked .app {
     });
   }
   async function refreshHiddenPublications() {
-    try { applyHiddenPublications((await fetchJson("/api/settings")).publications); } catch (_) { /* keep all */ }
+    try {
+      const data = await fetchJson("/api/settings");
+      applyHiddenPublications(data.publications);
+      if (!settingsData) settingsData = data;   // the Pengaturan tab opens on it (loadSettings)
+    } catch (_) { /* keep all */ }
   }
   function applyUploadHints(publications) {
     uploadHints = Object.fromEntries(publications.map((p) => [p.key, p.upload_hints || {}]));

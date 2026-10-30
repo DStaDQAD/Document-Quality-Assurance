@@ -369,16 +369,17 @@ def builtin_view(publication: str) -> Dict[str, list]:
             "units_signs": sections["units_signs"]}
 
 
+# A row an older version copied from the YAML counts only once the team edited it.
+_TEAM_NOTE = ~(notes_table.c.seeded & notes_table.c.updated_by.is_(None))
+
+
 def notes(publication: str) -> List[dict]:
     """The team's conventions in order. The built-ins are not here: they come from code
-    (builtin_view, notes_for). A row an older version copied from the YAML counts only once the
-    team edited it."""
+    (builtin_view, notes_for)."""
     publication = _publication(publication)
     with _engine().connect() as conn:
-        rows = conn.execute(select(notes_table).where(
-            (notes_table.c.publication == publication)
-            & ~(notes_table.c.seeded & notes_table.c.updated_by.is_(None)))
-            .order_by(notes_table.c.position, notes_table.c.id))
+        rows = conn.execute(select(notes_table).where((notes_table.c.publication == publication) & _TEAM_NOTE)
+                            .order_by(notes_table.c.position, notes_table.c.id))
         return [_note_dict(r) for r in rows]
 
 
@@ -464,6 +465,10 @@ def upload_hints(publication: str) -> Dict[str, str]:
     publication = _publication(publication)
     with _engine().connect() as conn:
         r = conn.execute(select(upload_hint_table).where(upload_hint_table.c.publication == publication)).first()
+    return _hints_of(publication, r)
+
+
+def _hints_of(publication: str, r) -> Dict[str, str]:
     if r is None:
         return dict(UPLOAD_HINT_DEFAULTS[publication])
     return {"press": r.press, "report": r.report, "excel": r.excel}
@@ -493,10 +498,15 @@ def documents(publication: str) -> Dict[str, bool]:
     """{press, report, excel}: whether the upload card offers each. A document starts shown when
     the publication has it (a SharePoint default name), until the team switches it."""
     publication = _publication(publication)
-    shown = {slot: bool(UPLOAD_HINT_DEFAULTS[publication][slot]) for slot in DOCUMENT_LABELS}
     with _engine().connect() as conn:
-        for r in conn.execute(select(document_table).where(document_table.c.publication == publication)):
-            shown[r.slot] = bool(r.shown)
+        rows = list(conn.execute(select(document_table).where(document_table.c.publication == publication)))
+    return _documents_of(publication, rows)
+
+
+def _documents_of(publication: str, rows) -> Dict[str, bool]:
+    shown = {slot: bool(UPLOAD_HINT_DEFAULTS[publication][slot]) for slot in DOCUMENT_LABELS}
+    for r in rows:
+        shown[r.slot] = bool(r.shown)
     return shown
 
 
@@ -520,6 +530,37 @@ def set_document(publication: str, slot: str, shown: bool, by: str) -> Dict[str,
 
 
 # --- reset, log, a check's view ------------------------------------------------------------
+
+def snapshot() -> Dict[str, dict]:
+    """Everything the Pengaturan tab shows, for every publication, read in one connection with one
+    query per table. Reading it through the per-publication functions above took 66 connections,
+    each one or more round trips to Neon: about 46 s on Render (2026-10-30)."""
+    with _engine().connect() as conn:
+        hidden = {r.publication for r in conn.execute(
+            select(publication_state.c.publication).where(publication_state.c.hidden))}
+        team_aliases_of: Dict[str, List[dict]] = {}
+        for r in conn.execute(select(aliases).order_by(aliases.c.id)):
+            team_aliases_of.setdefault(r.publication, []).append(_alias_dict(r))
+        notes_of: Dict[str, List[dict]] = {}
+        for r in conn.execute(select(notes_table).where(_TEAM_NOTE)
+                              .order_by(notes_table.c.position, notes_table.c.id)):
+            notes_of.setdefault(r.publication, []).append(_note_dict(r))
+        rows_of: Dict[str, List[str]] = {}
+        for r in conn.execute(select(known_rows_table.c.publication, known_rows_table.c.row)):
+            rows_of.setdefault(r.publication, []).append(r.row)
+        hint_of = {r.publication: r for r in conn.execute(select(upload_hint_table))}
+        documents_of: Dict[str, list] = {}
+        for r in conn.execute(select(document_table)):
+            documents_of.setdefault(r.publication, []).append(r)
+    return {key: {"hidden": key in hidden,
+                  "builtin": builtin_view(key),
+                  "team_aliases": team_aliases_of.get(key, []),
+                  "notes": notes_of.get(key, []),
+                  "known_rows": sorted(rows_of.get(key, [])),
+                  "upload_hints": _hints_of(key, hint_of.get(key)),
+                  "documents": _documents_of(key, documents_of.get(key, []))}
+            for key in PUBLICATIONS}
+
 
 def reset(publication: str, by: str) -> None:
     """Back to the start: no team phrases or conventions, the default upload hints and documents,

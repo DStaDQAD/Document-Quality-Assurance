@@ -64,7 +64,7 @@ def test_an_unknown_publication_is_404_and_bad_values_are_422_in_indonesian():
 def test_a_database_failure_is_a_503_not_a_crash(monkeypatch):
     def broken(*_a, **_k):
         raise RuntimeError("database down")
-    monkeypatch.setattr(team_settings, "hidden_publications", broken)
+    monkeypatch.setattr(team_settings, "snapshot", broken)
     response = client.get("/api/settings")
     assert response.status_code == 503 and "Pengaturan" in response.json()["detail"]
 

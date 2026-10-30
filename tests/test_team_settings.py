@@ -312,3 +312,42 @@ def test_press_release_and_report_cannot_both_be_hidden():
         team_settings.set_document("ppkom", "report", False, by="Ani")   # its press is hidden from the start
     with pytest.raises(SettingsError):
         team_settings.set_document("npi", "lampiran", False, by="Ani")
+
+
+# --- the Pengaturan tab's whole read ---------------------------------------------------------
+
+def test_the_snapshot_reads_what_the_per_publication_readers_read_in_one_connection():
+    from sqlalchemy import event
+
+    team_settings.set_hidden("ppkom", True, by="Ani")
+    team_settings.add_alias("pii", "total afln", "Aset", by="Ani")
+    team_settings.add_alias("pii", "kfln bruto", "Kewajiban", by="Ani")
+    team_settings.add_note("pii", "KFLN = Kewajiban.", by="Budi")
+    team_settings.add_note("npi", "Defisit ditulis tanpa minus.", by="Budi")
+    team_settings.record_known_rows("pii", ["Kewajiban", "Aset"])
+    team_settings.set_upload_hints("sk", "SP SK.docx", "", "SK.xlsx", by="Ani")
+    team_settings.set_document("spe", "excel", False, by="Ani")
+
+    engine = team_settings._engine()
+    checkouts = []
+    listener = lambda *_a: checkouts.append(1)
+    event.listen(engine.pool, "checkout", listener)
+    try:
+        snap = team_settings.snapshot()
+    finally:
+        event.remove(engine.pool, "checkout", listener)
+
+    assert len(checkouts) == 1
+    assert list(snap) == list(team_settings.PUBLICATIONS)
+    hidden = team_settings.hidden_publications()
+    for key in team_settings.PUBLICATIONS:
+        assert snap[key] == {"hidden": key in hidden,
+                             "builtin": team_settings.builtin_view(key),
+                             "team_aliases": team_settings.list_team_aliases(key),
+                             "notes": team_settings.notes(key),
+                             "known_rows": team_settings.known_rows(key),
+                             "upload_hints": team_settings.upload_hints(key),
+                             "documents": team_settings.documents(key)}, key
+    assert snap["ppkom"]["hidden"] and [a["phrase"] for a in snap["pii"]["team_aliases"]] == [
+        "total afln", "kfln bruto"]
+    assert snap["pii"]["known_rows"] == ["Aset", "Kewajiban"] and snap["spe"]["documents"]["excel"] is False

@@ -1240,21 +1240,8 @@ async def _settings_call(fn, *args):
 
 
 def _settings_snapshot() -> dict:
-    hidden = team_settings.hidden_publications()
     return {
-        "publications": [
-            {
-                "key": key,
-                "hidden": key in hidden,
-                "builtin": team_settings.builtin_view(key),
-                "team_aliases": team_settings.list_team_aliases(key),
-                "notes": team_settings.notes(key),
-                "known_rows": team_settings.known_rows(key),
-                "upload_hints": team_settings.upload_hints(key),
-                "documents": team_settings.documents(key),
-            }
-            for key in team_settings.PUBLICATIONS
-        ],
+        "publications": [{"key": key, **settings} for key, settings in team_settings.snapshot().items()],
         "notes_max_words": team_settings.NOTES_MAX_WORDS,
     }
 
