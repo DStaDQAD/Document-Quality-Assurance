@@ -363,10 +363,29 @@ def builtin_view(publication: str) -> Dict[str, list]:
     groups: Dict[str, List[str]] = {}
     for phrase, row in getattr(PARSERS[publication], "TERM_ALIASES", {}).items():
         groups.setdefault(row, []).append(phrase)
-    return {"phrases": [{"text": line} for line in sections["phrases"]]
+    return {"phrases": [shown for line in sections["phrases"] for shown in _phrase_rows(line)]
                        + [{"phrases": phrases, "row": row} for row, phrases in groups.items()],
             "conventions": sections["conventions"], "periods": sections["periods"],
             "units_signs": sections["units_signs"]}
+
+
+# One mapping of a YAML phrase line: '"a", "b" → Row' (a line may join several with ";").
+_MAPPING = re.compile(r'\s*((?:"[^"]+"\s*,\s*)*"[^"]+")\s*→\s*([^"→;]+?)\s*\.?\s*')
+_QUOTED_PHRASE = re.compile(r'"([^"]+)"')
+
+
+def _phrase_rows(line: str) -> List[dict]:
+    """A YAML phrase line as the Catatan tab lists it: one phrases → row entry per mapping when the
+    line is nothing but mappings, else the line as text ('"x" adalah sisi kewajiban'). Display
+    only: the prompt keeps the line as written (notes_for)."""
+    shown = []
+    for part in line.split(";"):
+        m = _MAPPING.fullmatch(part)
+        if not m:
+            return [{"text": line}]
+        row = re.sub(r"^baris\s+", "", m.group(2), flags=re.IGNORECASE).strip("'")
+        shown.append({"phrases": _QUOTED_PHRASE.findall(m.group(1)), "row": row})
+    return shown
 
 
 # A row an older version copied from the YAML counts only once the team edited it.

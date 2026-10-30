@@ -126,12 +126,29 @@ def test_builtin_view_shows_exactly_the_phrases_the_prompt_carries():
     from publication_parsers import PARSERS
     pii = team_settings.builtin_view("pii")
     shown = {p for g in pii["phrases"] if "row" in g for p in g["phrases"]}
-    assert shown == set(PARSERS["pii"].TERM_ALIASES)
+    assert set(PARSERS["pii"].TERM_ALIASES) <= shown
     spe = team_settings.builtin_view("spe")
-    assert [g["text"] for g in spe["phrases"]] == team_settings.notes_sections("spe")["phrases"]
+    assert [g["phrases"] for g in spe["phrases"]][:2] == [
+        ["IPR", "penjualan eceran", "kinerja penjualan"], ["Indeks Ekspektasi Penjualan (IEP)"]]
     assert spe["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
     block = team_settings.for_check("pii")[1]
-    assert all(f'"{p}" → baris' in block for p in shown)
+    assert all(f'"{p}" → baris' in block for p in PARSERS["pii"].TERM_ALIASES)
+    assert all(line in block for line in team_settings.notes_sections("pii")["phrases"])
+
+
+def test_a_yaml_phrase_line_of_mappings_is_listed_one_row_per_table_row():
+    # Display only: the tab splits '"a", "b" → Row; "c" → Row2' lines, the prompt keeps the line.
+    ub = team_settings.builtin_view("uang-beredar")["phrases"]
+    assert ub[:2] == [{"phrases": ["M2", "likuiditas perekonomian", "uang beredar luas"],
+                       "row": "Uang Beredar Luas (M2)"},
+                      {"phrases": ["M1", "uang beredar sempit"], "row": "Uang Beredar Sempit (M1)"}]
+    assert [g["row"] for g in ub[2:5]] == ["Uang Kartal di Luar Bank Umum dan BPR", "Uang Kuasi", "Surat Berharga"]
+    npi = team_settings.builtin_view("npi")["phrases"]
+    assert {"phrases": ["neraca jasa"], "row": "Jasa-jasa"} in npi            # "→ baris X" shows X
+    mixed = next(g for g in npi if "text" in g and "adalah sisi kewajiban" in g["text"])
+    assert mixed["text"] == team_settings.notes_sections("npi")["phrases"][2]   # not all mappings: kept whole
+    block = team_settings.for_check("uang-beredar")[1]
+    assert all(line in block for line in team_settings.notes_sections("uang-beredar")["phrases"])
 
 
 def test_notes_are_added_edited_reordered_and_removed():
