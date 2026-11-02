@@ -1805,12 +1805,13 @@ body.auth-locked .app {
   // the server (Pengaturan, team_settings.UPLOAD_HINT_DEFAULTS). The keys are what the server stores
   // in the history (check_history.PUBLICATIONS).
   // `rules` is the publication's fixed set of checks, which replaces the Aturan pemeriksaan
-  // checkboxes (see syncRules). A press release alone has no second document to cross-check and
-  // as a rule no charts, so those publications skip both.
-  const WITH_REPORT_RULES = ["intra", "cross", "excel", "charts", "typo"];
-  const PRESS_ONLY_RULES = ["intra", "excel", "typo"];
-  // A publication released as a report alone (no Siaran Pers): nothing to cross-check against.
-  const REPORT_ONLY_RULES = ["intra", "excel", "charts", "typo"];
+  // checkboxes (see syncRules). The narrative is checked against the uploaded Excel only: the
+  // tables inside the documents (intra-file, antar-file) are not a source since 2026-11-02, so a
+  // typo copied from a report's own table into its text cannot pass. A press release as a rule
+  // has no charts.
+  const WITH_REPORT_RULES = ["excel", "charts", "typo"];
+  const PRESS_ONLY_RULES = ["excel", "typo"];
+  const REPORT_ONLY_RULES = ["excel", "charts", "typo"];
   const PUBLICATIONS = {
     "uang-beredar":    { label: "Uang Beredar", report: true, rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, rules: PRESS_ONLY_RULES },
@@ -1828,8 +1829,8 @@ body.auth-locked .app {
   };
 
   // Which documents the upload card offers per publication: the team's choice (Pengaturan ›
-  // Format nama dokumen, /api/settings `documents`), else what the publication has. The rules
-  // follow: a second document brings the cross-check, a hidden Excel drops the Excel rule.
+  // Format nama dokumen, /api/settings `documents`), else what the publication has. The Excel is
+  // always offered: it is the only source the narrative is checked against.
   let uploadDocuments = {};
   function docsOf(key) {
     const pub = PUBLICATIONS[key];
@@ -1837,8 +1838,7 @@ body.auth-locked .app {
   }
   function rulesOf(key) {
     const d = docsOf(key);
-    const rules = d.press && d.report ? WITH_REPORT_RULES : d.press ? PRESS_ONLY_RULES : REPORT_ONLY_RULES;
-    return d.excel ? rules : rules.filter((rule) => rule !== "excel");
+    return d.press && d.report ? WITH_REPORT_RULES : d.press ? PRESS_ONLY_RULES : REPORT_ONLY_RULES;
   }
 
   const publicationSelect = document.getElementById("publication-select");
@@ -3146,6 +3146,10 @@ body.auth-locked .app {
       resultEl.innerHTML = `<div class="error-banner">Pilih file PDF atau Word terlebih dahulu.</div>`;
       return;
     }
+    if (!mode) {
+      resultEl.innerHTML = `<div class="error-banner">Unggah tabel Excel terlebih dahulu: narasi dicek terhadap tabel Excel.</div>`;
+      return;
+    }
     // Internal mode compares against the PDF's own tables, so the Excel column is ignored
     // entirely — including any files still sitting in it. The Excel rule can only be checked
     // while a file is picked, so the other modes always have at least one source here.
@@ -3471,9 +3475,10 @@ body.auth-locked .app {
         ${["press", "report", "excel"].map((slot) => `
           <div class="hint-field">
             <div class="hint-head"><label for="hint-${slot}">${labels[slot]}</label>
-              <span class="hint-state">
-                <span class="switch"><input type="checkbox" role="switch" data-doc="${slot}" ${shown[slot] ? "checked" : ""}
-                      aria-label="Tampilkan ${labels[slot]} di formulir unggah"></span></span></div>
+              <span class="hint-state">${slot === "excel"
+                ? `<span class="tag-builtin" title="Narasi hanya dicek terhadap tabel Excel">Selalu dipakai</span>`
+                : `<span class="switch"><input type="checkbox" role="switch" data-doc="${slot}" ${shown[slot] ? "checked" : ""}
+                      aria-label="Tampilkan ${labels[slot]} di formulir unggah"></span>`}</span></div>
             <input type="text" id="hint-${slot}" maxlength="300" value="${escapeHtml(hints[slot] || "").replaceAll('"', "&quot;")}"
                    ${shown[slot] ? "" : "disabled"} placeholder="${shown[slot] ? "Contoh nama file" : "Disembunyikan dari formulir unggah"}">
           </div>`).join("")}

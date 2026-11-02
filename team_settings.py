@@ -526,6 +526,9 @@ def _documents_of(publication: str, rows) -> Dict[str, bool]:
     shown = {slot: bool(UPLOAD_HINT_DEFAULTS[publication][slot]) for slot in DOCUMENT_LABELS}
     for r in rows:
         shown[r.slot] = bool(r.shown)
+    # The Excel is the only source a narrative is checked against (since 2026-11-02), so it is
+    # always offered; a switch saved before then no longer hides it.
+    shown["excel"] = True
     return shown
 
 
@@ -534,6 +537,8 @@ def set_document(publication: str, slot: str, shown: bool, by: str) -> Dict[str,
     publication, by = _publication(publication), _editor(by)
     if slot not in DOCUMENT_LABELS:
         raise SettingsError("Dokumen itu tidak dikenal.")
+    if slot == "excel" and not shown:
+        raise SettingsError("Tabel Excel selalu dipakai: narasi hanya dicek terhadap tabel Excel.")
     after = {**documents(publication), slot: bool(shown)}
     if not (after["press"] or after["report"]):
         raise SettingsError("Siaran Pers dan Laporan tidak bisa disembunyikan dua-duanya; "
