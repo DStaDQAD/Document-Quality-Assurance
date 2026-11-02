@@ -10,6 +10,7 @@ from typing import Callable, Dict, List, Optional
 
 from langchain_core.language_models import BaseChatModel
 
+from document_checks import check_document
 from paired_verifier import _ExcelSource
 from publication_parsers import skipped_sections
 from schemas import PairedVerificationResponse
@@ -124,7 +125,10 @@ async def run_check(
             n_reviewed = stats.changed
         except Exception:
             logger.warning("Tinjauan AI gagal; vonis kode dipertahankan", exc_info=True)
-    entailed = sum(r.verdict == "Entailed" for r in results)
+    # After the review, which never sees them: the report's own comparisons, table pointers and
+    # table numbering, checked by the code alone.
+    results = check_document(text, results, sources)
+    entailed =sum(r.verdict == "Entailed" for r in results)
     refuted = sum(r.verdict == "Refuted" for r in results)
     inconclusive = sum(r.verdict == "Inconclusive" for r in results)
     detail = f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"

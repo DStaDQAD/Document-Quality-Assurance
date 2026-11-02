@@ -2083,6 +2083,7 @@ body.auth-locked .app {
     is_increasing: "Tren Naik", is_decreasing: "Tren Turun", is_stable: "Tren Stabil",
     above_threshold: "Di Atas Ambang", below_threshold: "Di Bawah Ambang",
     ranking: "Tertinggi/Terendah", formula: "Perhitungan",
+    comparison: "Perbandingan", reference: "Rujukan Tabel",
   };
 
   function fmtNumber(val) {
@@ -2314,7 +2315,11 @@ body.auth-locked .app {
           } else if (verdict === "Inconclusive") {
             comparison = `<span class="na">Tidak ditemukan di data</span>`;
           } else {
-            const against = item.operation === "formula" ? "terhadap rumus klaim" : "terhadap klaim tren";
+            const against = {
+              formula: "terhadap rumus klaim",
+              comparison: "terhadap angka di kalimat itu sendiri",
+              reference: "terhadap judul tabel di dokumen",
+            }[item.operation] || "terhadap klaim tren";
             comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">${against}</span>`;
           }
 

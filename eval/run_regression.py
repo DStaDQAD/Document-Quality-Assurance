@@ -276,8 +276,16 @@ def cmd_replay(args) -> int:
             from strict.claims import claim_from_dict
             from strict.evaluate import evaluate_claim
             from strict.tables import build_views
-            views = build_views(_parsed_sources(doc, data_root))
+            sources = _parsed_sources(doc, data_root)
+            views = build_views(sources)
             judged = [evaluate_claim(claim_from_dict(c), views) for c in body["strict_claims"]]
+            narrative = _narrative_of(doc, data_root)
+            if narrative is not None:
+                from document_checks import check_document
+                from publication_parsers import skipped_sections
+                from structured_extractor import drop_sections
+                judged = check_document(drop_sections(narrative, skipped_sections(doc.publication)),
+                                        judged, sources)
             (out / f"{doc.id}.json").write_text(json.dumps(
                 {"results": [r.model_dump() for r in judged], "_replay": {"strict": True}},
                 ensure_ascii=False, indent=1), encoding="utf-8")
