@@ -1805,13 +1805,14 @@ body.auth-locked .app {
   // the server (Pengaturan, team_settings.UPLOAD_HINT_DEFAULTS). The keys are what the server stores
   // in the history (check_history.PUBLICATIONS).
   // `rules` is the publication's fixed set of checks, which replaces the Aturan pemeriksaan
-  // checkboxes (see syncRules). The narrative is checked against the uploaded Excel only: the
-  // tables inside the documents (intra-file, antar-file) are not a source since 2026-11-02, so a
-  // typo copied from a report's own table into its text cannot pass. A press release as a rule
-  // has no charts.
-  const WITH_REPORT_RULES = ["excel", "charts", "typo"];
-  const PRESS_ONLY_RULES = ["excel", "typo"];
-  const REPORT_ONLY_RULES = ["excel", "charts", "typo"];
+  // checkboxes (see syncRules). The narrative is checked against the uploaded Excel first. The
+  // document's own tables (intra-file) are an option, off unless the checker switches it on: with
+  // only the Excel, a figure the Excel lacks (UB's penyaluran kredit) may be put on a look-alike
+  // row and come back a false Tidak Sesuai. The other document's tables (antar-file) are not a
+  // source since 2026-11-02. A press release as a rule has no charts.
+  const WITH_REPORT_RULES = ["excel", "intra", "charts", "typo"];
+  const PRESS_ONLY_RULES = ["excel", "intra", "typo"];
+  const REPORT_ONLY_RULES = ["excel", "intra", "charts", "typo"];
   const PUBLICATIONS = {
     "uang-beredar":    { label: "Uang Beredar", report: true, rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, rules: PRESS_ONLY_RULES },
@@ -1938,30 +1939,28 @@ body.auth-locked .app {
   // internal, excel, or both; "antar-file" sends the other PDFs as reference_pdf, and on its
   // own (neither of the other two) the mode is "none". The spelling box is run_typo_check. ──
 
-  // "excel" | "internal" | "both" | "none", or null when no numeric rule is checked.
+  // "excel", or "both" when the document's own tables are switched on; null without an Excel —
+  // the Excel is always the first source, the document's tables never stand in for it.
   function currentMode() {
-    const intra = document.getElementById("rule-intra").checked;
-    const excel = document.getElementById("rule-excel").checked;
-    if (intra && excel) return "both";
-    if (intra) return "internal";
-    if (excel) return "excel";
-    if (document.getElementById("rule-cross-pdf").checked) return "none";
-    return null;
+    if (!document.getElementById("rule-excel").checked) return null;
+    return document.getElementById("rule-intra").checked ? "both" : "excel";
   }
 
   const RULE_BOXES = {
     intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", charts: "rule-charts", typo: "rule-typo",
   };
   const RULE_HINTS = {
-    intra: ["Narasi vs tabel di dokumen yang sama"],
+    intra: ["Untuk angka yang tidak ada di Excel: dicek ke tabel di dokumen yang sama · opsional"],
     cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
     excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
     charts: ["Label angka pada grafik dibaca AI, lalu dicek terhadap tabel · opsional"],
   };
-  // Cek grafik is the one rule a checker may switch off (it costs AI calls). The choice is kept
-  // when another publication is picked.
-  let chartsWanted = true;
-  document.getElementById("rule-charts").addEventListener("change", (e) => { chartsWanted = e.target.checked; });
+  // The rules a checker may switch: cek grafik (on; it costs AI calls) and the document's own
+  // tables (off; see WITH_REPORT_RULES). The choice is kept when another publication is picked.
+  const wanted = { charts: true, intra: false };
+  for (const key of Object.keys(wanted)) {
+    document.getElementById(RULE_BOXES[key]).addEventListener("change", (e) => { wanted[key] = e.target.checked; });
+  }
 
   // The boxes display the chosen publication's `rules`: each one runs as soon as its documents
   // are there and cannot be unticked, except cek grafik; a rule the publication does not use is
@@ -1978,9 +1977,9 @@ body.auth-locked .app {
       const label = box.closest(".rule-check");
       const used = !!pub && rulesOf(currentPublication()).includes(key);
       const runs = used && ready[key] !== false;
-      const optional = key === "charts";
+      const optional = key in wanted;
       label.hidden = !used;
-      box.checked = runs && (!optional || chartsWanted);
+      box.checked = runs && (!optional || wanted[key]);
       box.disabled = !(optional && runs);
       label.classList.toggle("is-disabled", used && !runs);
       const hint = document.getElementById(`${id}-hint`);
@@ -1994,8 +1993,8 @@ body.auth-locked .app {
     document.getElementById("rules-fixed-note").textContent = !pub
       ? "Pilih jenis publikasi untuk melihat aturannya."
       : rulesOf(currentPublication()).includes("charts")
-        ? "Ditetapkan untuk publikasi ini. Cek grafik boleh dimatikan."
-        : "Ditetapkan untuk publikasi ini, tidak perlu dicentang.";
+        ? "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan, cek grafik boleh dimatikan."
+        : "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan.";
   }
 
   syncRules();
