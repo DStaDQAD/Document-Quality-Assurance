@@ -323,16 +323,8 @@ def evaluate_claim(claim: Claim, views: List[TableView]) -> FactVerificationResu
         return FactVerificationResult(**base, verdict="Inconclusive", reason_code=undecided.code,
                                       reasoning=undecided.why)
     cells = "; ".join(f"{c.code} · {c.row} · {period_header(*c.key)} = {round(v, 4)}" for c, _, v in read)
-    reasoning = f"Sel: {cells} | {tail}"
-    if claim.extractor_operation:
-        reasoning += (f" | Arah dibaca dari kata kalimat '{claim.direction_words}' "
-                      f"({_DIRECTION_NAME[claim.operation]}); AI membacanya sebagai "
-                      f"{_DIRECTION_NAME.get(claim.extractor_operation, claim.extractor_operation)}")
     return FactVerificationResult(
         **base, matched_excel_source=read[0][1].source.label,
         periods=[PeriodResult(metric_label=c.row, year=c.key[0], month=c.key[1], excel_value=v) for c, _, v in read],
-        computed_value=computed, delta=delta, verdict=verdict, reasoning=reasoning,
+        computed_value=computed, delta=delta, verdict=verdict, reasoning=f"Sel: {cells} | {tail}",
     )
-
-
-_DIRECTION_NAME = {"is_increasing": "naik", "is_decreasing": "turun", "is_stable": "stabil"}

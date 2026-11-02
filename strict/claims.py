@@ -28,10 +28,6 @@ class StrictClaim(BaseModel):
     subject: str = Field(description="Apa yang diukur, disalin dari kalimat")
     not_in_tables: bool = Field(False, description="True bila tidak ada tabel yang memuat data ini")
     reason: Optional[str] = Field(None, description="Alasan singkat bila not_in_tables")
-    # Before the operation, so the words are written before the direction is chosen (rule 19).
-    direction_words: Optional[str] = Field(
-        None, description="Hanya untuk is_increasing/is_decreasing/is_stable: kata arah disalin persis dari "
-                          "kalimat, mis. 'lebih tinggi dibandingkan', 'meningkat', 'melambat'")
     operation: Operation = Field(description="Operasi klaim; 'formula' bila menu tidak bisa mengatakannya")
     cells: List[CellRef] = Field(default_factory=list, description="Sel yang dibutuhkan klaim, urut sesuai operasinya")
     all_members: bool = Field(False, description="True bila kalimat membahas SETIAP anggota rincian (seluruh/semua/12 dari 18)")
@@ -87,10 +83,6 @@ class Claim:
     size_of_negative: bool = False
     not_in_tables: bool = False
     reason: Optional[str] = None
-    # A trend's direction words as copied (StrictClaim.direction_words), and the operation the
-    # extractor chose when those words, found in the sentence, said otherwise (strict.direction).
-    direction_words: Optional[str] = None
-    extractor_operation: Optional[str] = None
 
 
 def claim_to_dict(claim: Claim) -> dict:
