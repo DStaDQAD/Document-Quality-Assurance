@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional
 from langchain_core.language_models import BaseChatModel
 
 from strict.claims import Cell, Claim, StrictClaim, StrictClaims
+from strict.direction import direction_of, in_sentence
 from strict.prompt import PROMPT
 from strict.tables import TableView, find_row, parse_period, table_block
 from structured_extractor import (
@@ -32,6 +33,7 @@ logger = logging.getLogger("fact-checker")
 
 # Claims whose sentence states no number to compare.
 _NO_NUMBER = {"is_increasing", "is_decreasing", "is_stable", "ranking"}
+_TRENDS = {"is_increasing", "is_decreasing", "is_stable"}
 
 
 def _notes_block(notes: str) -> str:
@@ -88,14 +90,23 @@ def _finish(raw: StrictClaim, normalized: str, views: Dict[str, TableView]) -> O
         page = _page_at(normalized, span[0])
     else:
         quote, page = raw.anchor_quote, None
+    # A trend's direction is the sentence's words, not the extractor's reading of them: when the
+    # copied words are in the sentence and state a direction, that direction is the claim's.
+    operation, extractor_operation = raw.operation, None
+    if raw.operation in _TRENDS and in_sentence(raw.direction_words, quote):
+        stated = direction_of(raw.direction_words)
+        if stated is not None and stated != raw.operation:
+            operation, extractor_operation = stated, raw.operation
     return Claim(
-        operation=raw.operation, subject=raw.subject, cells=[] if raw.not_in_tables else _cells(raw, views),
+        operation=operation, subject=raw.subject, cells=[] if raw.not_in_tables else _cells(raw, views),
         context_quote=quote, page_number=page, claimed_value=value, unit=raw.unit, formula=raw.formula,
         formula_unit=raw.formula_unit, ranked=raw.ranked, rank=raw.rank, rank_pairs=raw.rank_pairs,
         all_members=raw.all_members,
         size_of_negative=raw.size_of_negative,
         not_in_tables=raw.not_in_tables,
         reason=raw.reason,
+        direction_words=raw.direction_words if raw.operation in _TRENDS else None,
+        extractor_operation=extractor_operation,
     )
 
 

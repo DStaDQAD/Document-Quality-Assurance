@@ -165,6 +165,16 @@ workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
    sementara peningkatan tertinggi di B') is two ranking claims.
    NET POSITIONS ('kewajiban neto tertinggi pada investasi portofolio') rank a difference of two rows:
    rank_pairs = true and two cells per member at the same period, Kewajiban then Aset (rule 12).
+
+19. DIRECTION WORDS ARE COPIED, NEVER CORRECTED. For is_increasing, is_decreasing and is_stable,
+   copy into direction_words the words of the sentence that state the direction, exactly as printed
+   ('lebih tinggi dibandingkan', 'meningkat', 'melambat', 'stabil'), and choose the operation those
+   words state — even when the sentence's own numbers say the opposite. '1,84% pada triwulan III
+   2026, meski lebih tinggi dibandingkan 2,45% pada triwulan II 2026' is direction_words 'lebih
+   tinggi dibandingkan' and is_increasing over Q2 2026 and Q3 2026, besides the two value claims.
+   The report may be wrong; finding that is the program's job, never yours. Every 'lebih tinggi /
+   lebih rendah dibandingkan' between two periods of the same row is such a trend claim (rule 10),
+   unless it compares two growth rates (rule 15).
 """
 
 HUMAN_TEMPLATE = """\
