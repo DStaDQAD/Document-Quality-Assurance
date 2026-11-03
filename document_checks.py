@@ -298,6 +298,10 @@ _POINTER_RE = re.compile(r"\b(?:lampiran\s+tabel|tabel|lampiran|grafik|gambar|bo
                          r"(?:\s*(?:,|dan|&)\s*\d+)*\b", re.IGNORECASE)
 
 
+_CHART_POINTER_RE = re.compile(r"\b(?:grafik|gambar)\s+\d+", re.IGNORECASE)
+_CURRENCY_RE = re.compile(r"\b(?:Rp|USD|US\$)(?=\s?\d)", re.IGNORECASE)
+
+
 def _key(printed: str) -> str:
     """'9.732,8' → '9732,8': the digits as printed, sign and thousands dots left out."""
     return printed.lstrip("-").replace(".", "")
@@ -309,8 +313,9 @@ def _printed(table_text: str) -> Set[str]:
 
 def _sentence_figures(sentence: str) -> Dict[str, str]:
     """The sentence's figures (key → as printed), without its pointers ("Tabel 3", "Grafik 1")
-    and its years."""
-    text = _POINTER_RE.sub(" ", sentence)
+    and its years. A level written after its currency ("Rp10.448,1 triliun") counts: it is the
+    figure a table is least likely to print by chance."""
+    text = _CURRENCY_RE.sub(" ", _POINTER_RE.sub(" ", sentence))
     figures: Dict[str, str] = {}
     for m in _PRINTED_RE.findall(text):
         if not re.fullmatch(r"(?:19|20)\d\d", m):
@@ -468,7 +473,9 @@ def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Po
                         if key not in p.cited), default=0)
         if in_cited and in_cited >= in_other:
             p.status = "holds"
-        other = _printed_elsewhere(p.cited, list(figures), printed)
+        # "(Tabel 1 dan Grafik 1)": the figures the table lacks may be the chart's (UB Juli 2026's
+        # Tabel 1 prints the levels, Grafik 1 the growth), so the code cannot call them misplaced.
+        other = None if _CHART_POINTER_RE.search(p.sentence) else _printed_elsewhere(p.cited, list(figures), printed)
         if other is not None:
             shown = ", ".join(as_printed for key, as_printed in figures.items() if key in printed[other])
             p.status = "elsewhere"

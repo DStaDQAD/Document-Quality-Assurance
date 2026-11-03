@@ -69,6 +69,19 @@ def test_an_open_pointer_carries_the_sentences_before_it():
     assert opened.sentence == sentence and opened.before == lead
 
 
+def test_a_level_after_its_currency_is_a_figure():
+    assert dc._sentence_figures("M2 tercatat Rp10.448,1 triliun, tumbuh 8,2% (Tabel 1 dan Grafik 1).") == {
+        "10448,1": "10.448,1", "8,2": "8,2"}
+
+
+def test_a_pointer_that_also_names_a_chart_is_left_to_the_model():
+    # UB Juli 2026: Tabel 1 prints the levels, Grafik 1 the growth; Tabel 2 prints both.
+    printed = {**PRINTED, "Tabel 1": "M2 10.371,1", "Tabel 2": "M2 10.371,1 8,3 8,7"}
+    sentence = "M2 tercatat Rp10.371,1 triliun, tumbuh 8,3%, dari 8,7% (Tabel 1 dan Grafik 1)."
+    assert [p.cited for p in dc.open_pointers(_narrative(sentence), printed)[1]] == [["Tabel 1"]]
+    assert [r for r in dc.check_document(_narrative(sentence), [], printed) if r.operation == "reference"] == []
+
+
 def test_a_pointer_the_code_already_found_wrong_is_not_sent():
     sentence = "Lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 1)."
     assert dc.open_pointers(_narrative(sentence), PRINTED)[1] == []
