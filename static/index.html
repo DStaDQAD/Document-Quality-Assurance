@@ -1039,9 +1039,10 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   scrollbar-width: thin;
   scrollbar-color: var(--border-dark) transparent;
 }
-/* A result opened from Riwayat is only for reading: no form column, the result takes the width. */
-.paired-container.from-history .paired-form-area { display: none; }
-.paired-container.has-results.from-history { grid-template-columns: 1fr; }
+/* A finished check, or one opened from History, is only for reading: no form column, the result
+   takes the width. A new check starts from the empty form (resetPairedForm). */
+.paired-container.result-only .paired-form-area { display: none; }
+.paired-container.has-results.result-only { grid-template-columns: 1fr; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar { width: 5px; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar-track { background: transparent; }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 2px; }
@@ -1933,7 +1934,7 @@ body.auth-locked .app {
     publicationSelect.value = "";
     applyPublication();
     document.getElementById("paired-result").replaceChildren();
-    document.getElementById("paired-container").classList.remove("has-results", "from-history");
+    document.getElementById("paired-container").classList.remove("has-results", "result-only");
     document.getElementById("panel-paired").classList.remove("has-results");
     if (/^#riwayat\//i.test(window.location.hash)) clearHistoryHash();
   }
@@ -2802,7 +2803,7 @@ body.auth-locked .app {
     showTab("paired");
     highlightNav("history");
     // Hidden until the Verifikasi nav item resets the form (resetPairedForm).
-    document.getElementById("paired-container").classList.add("from-history");
+    document.getElementById("paired-container").classList.add("result-only");
     const resultEl = document.getElementById("paired-result");
     resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari History…</p>`;
     let entry;
@@ -3245,8 +3246,25 @@ body.auth-locked .app {
       document.getElementById("history-busy").hidden = true;
       cancelBtn.hidden = true;
       cancelBtn.removeEventListener("click", onCancel);
+      showResultOnly(resultEl);
     });
   });
+
+  // Once the run is over, its result stands alone, like an entry opened from History; the form
+  // (and its Batalkan button) stays while the run is in flight. A run where nothing finished
+  // keeps the form so the files can be sent again.
+  function showResultOnly(resultEl) {
+    const container = document.getElementById("paired-container");
+    if (!container.classList.contains("has-results")) return;
+    container.classList.add("result-only");
+    const bar = document.createElement("div");
+    bar.className = "history-banner";
+    bar.innerHTML = `<span class="material-symbols-outlined">task_alt</span>
+      <span>Pengecekan selesai</span>
+      <button type="button" class="history-back">← Pengecekan baru</button>`;
+    bar.querySelector(".history-back").addEventListener("click", resetPairedForm);
+    resultEl.prepend(bar);
+  }
 
   // ── Pengaturan ───────────────────────────────────────────────────────────────────────────
   // Shared by the whole team (/api/settings). The name field is the same one Riwayat stores
