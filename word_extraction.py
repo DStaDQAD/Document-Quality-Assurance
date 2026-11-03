@@ -160,6 +160,8 @@ _ANY_CAPTION_RE = re.compile(r'^(Tabel|Lampiran)\s*(\d+)\b', re.IGNORECASE)
 _ANY_CHART_CAPTION_RE = re.compile(r'^Grafik\s*\d+\b', re.IGNORECASE)
 # A caption is a short line; a longer one is the narrative coming back, which ends the caption.
 _CAPTION_MAX_WORDS = 20
+# What follows a list-of-tables entry's title: its page number, or a dot leader before it.
+_CONTENTS_TAIL_RE = re.compile(r'^(?:\d{1,3}|[.…·\s]{3,}\d{0,3})$')
 # A decimal written the English way ("6.3", "10,432.0") or the Indonesian way ("6,3", "8.110,6").
 _EN_DECIMAL_RE = re.compile(r'\d\.\d{1,2}(?!\d)')
 _ID_DECIMAL_RE = re.compile(r'\d,\d{1,2}(?!\d)')
@@ -349,21 +351,49 @@ def _as_indonesian(text: str, document_format: str) -> str:
     return text
 
 
+def _is_contents_entry(paragraphs: List[_Paragraph], index: int) -> bool:
+    """A list-of-tables entry rather than a caption: its title is followed by a page number or a
+    dot leader ("Tabel 8 / Perkembangan Ekspor Gas / 12" in NPI's Daftar Tabel), not a picture."""
+    looked = 0
+    for p in paragraphs[index + 1:]:
+        if p.pictures:
+            return False
+        if not p.text:
+            continue
+        if _CONTENTS_TAIL_RE.match(p.text):
+            return True
+        looked += 1
+        if looked == 3 or _ANY_CAPTION_RE.match(p.text):
+            return False
+    return False
+
+
 def _caption_texts(paragraphs: List[_Paragraph], rels: Dict[str, str],
                    z: zipfile.ZipFile) -> Dict[str, str]:
     """The text of the EMF picture(s) under each 'Tabel N' / 'Lampiran N' caption. Every picture
-    up to the next caption counts: UB prints a table's levels and its growth as two pictures."""
+    up to the next caption counts: UB prints a table's levels and its growth as two pictures.
+
+    Only the report's own run of tables: a list of tables is skipped, and numbering that starts
+    again (NPI's box "Tabel 1", its appendix "TABEL 1 … 10") ends the collection, so "Tabel 1"
+    always means the report's Tabel 1."""
     names = set(z.namelist())
     runs_of: Dict[str, List[str]] = {}
     current: Optional[str] = None
-    for p in paragraphs:
+    last: Dict[str, int] = {}
+    for index, p in enumerate(paragraphs):
         if p.word_table:
             current = None
             continue
         short = len(p.text.split()) <= _CAPTION_MAX_WORDS
         m = _ANY_CAPTION_RE.match(p.text) if short else None
-        if m:
-            current = f"{m.group(1).capitalize()} {int(m.group(2))}"
+        if m and _is_contents_entry(paragraphs, index):
+            current = None
+        elif m:
+            kind, number = m.group(1).capitalize(), int(m.group(2))
+            if number < last.get(kind, 0):
+                break
+            last[kind] = number
+            current = f"{kind} {number}"
         elif _ANY_CHART_CAPTION_RE.match(p.text) or not short:
             current = None
         for rid in p.pictures:

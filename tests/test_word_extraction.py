@@ -171,6 +171,20 @@ def test_a_picture_pasted_from_an_english_excel_reads_the_indonesian_way():
     assert doc.table_texts == {"Tabel 1": "Rupiah 8.110,6 6,3"}
 
 
+def test_only_the_reports_own_run_of_tables_is_kept():
+    # NPI: a Daftar Tabel (title, then page number), the report's tables, then a box whose
+    # numbering starts again at 1.
+    doc = read_word_document(docx_bytes(
+        para("Tabel 2") + para("Ekspor Gas") + para("12")
+        + para("Tabel 1") + para("Ekspor Nonmigas") + picture("rId1")
+        + para("Tabel 2") + para("Ekspor Gas") + picture("rId2")
+        + para("Boks 1") + para("Tabel 1") + para("Perbandingan Publikasi") + picture("rId3"),
+        {"image1.emf": emf_bytes([(0, 10, "Nonmigas"), (50, 10, "52,6")]),
+         "image2.emf": emf_bytes([(0, 10, "Gas"), (50, 10, "1,6")]),
+         "image3.emf": emf_bytes([(0, 10, "Revisi"), (50, 10, "0,3")])}))
+    assert doc.table_texts == {"Tabel 1": "Nonmigas 52,6", "Tabel 2": "Gas 1,6"}
+
+
 def test_lampiran_captions_are_their_own_and_pictures_without_text_or_after_a_chart_are_not():
     doc = read_word_document(docx_bytes(
         para("Lampiran 4. Kredit yang Disalurkan (Triliun Rp)") + picture("rId1")

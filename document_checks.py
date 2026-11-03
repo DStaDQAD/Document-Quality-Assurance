@@ -191,28 +191,65 @@ _CITED_RE = re.compile(r"\b(lampiran\s+tabel|tabel|lampiran)\s+(\d+(?:\s*(?:,|da
 _LAMPIRAN_CAPTION_RE = re.compile(r"^\s*lampiran\s+\d+\b", re.IGNORECASE | re.MULTILINE)
 
 
-def table_captions(narrative_text: str) -> List[Tuple[int, str]]:
-    """(number, title) of each 'Tabel N' caption, in document order."""
-    lines = [line.strip() for line in narrative_text.split("\n")]
-    lines = [line for line in lines if line and not _PAGE_MARKER_PATTERN.fullmatch(line)]
-    captions: List[Tuple[int, str]] = []
-    for index, line in enumerate(lines):
+# What follows a list-of-tables entry's title: its page number, or a dot leader before it.
+_CONTENTS_TAIL_RE = re.compile(r"^(?:\d{1,3}|[.…·\s]{3,}\d{0,3})$")
+
+
+def _caption_lines(narrative_text: str) -> List[Tuple[int, int, str]]:
+    """(offset in the text, number, title) of each 'Tabel N' caption, in document order. A list of
+    tables ("Tabel 8 / Perkembangan Ekspor Gas / 12" in NPI's Daftar Tabel) is not a caption."""
+    lines: List[Tuple[int, str]] = []
+    offset = 0
+    for raw in narrative_text.split("\n"):
+        line = raw.strip()
+        if line and not _PAGE_MARKER_PATTERN.fullmatch(line):
+            lines.append((offset, line))
+        offset += len(raw) + 1
+    captions: List[Tuple[int, int, str]] = []
+    for index, (at, line) in enumerate(lines):
         m = _CAPTION_RE.match(line)
         if not m or len(line.split()) > _CAPTION_MAX_WORDS:
             continue
+        following = []
+        for _, after in lines[index + 1:index + 4]:
+            if _CAPTION_RE.match(after):
+                break
+            following.append(after)
+        if any(_CONTENTS_TAIL_RE.match(after) for after in following):
+            continue
         title = (m.group(2) or "").strip()
-        if not title and index + 1 < len(lines):
-            following = lines[index + 1]
-            if not _CAPTION_RE.match(following) and len(following.split()) <= _CAPTION_MAX_WORDS:
-                title = following
-        captions.append((int(m.group(1)), title))
+        if not title and following and len(following[0].split()) <= _CAPTION_MAX_WORDS:
+            title = following[0]
+        captions.append((at, int(m.group(1)), title))
     return captions
 
 
-def _cited(sentence: str, lampiran_captions: bool) -> List[str]:
-    """The tables a sentence points to, as 'Tabel N' / 'Lampiran N', in the order it names them."""
+def table_captions(narrative_text: str) -> List[Tuple[int, str]]:
+    """(number, title) of each 'Tabel N' caption, in document order."""
+    return [(n, title) for _, n, title in _caption_lines(narrative_text)]
+
+
+def _report_part(narrative_text: str) -> Tuple[List[Tuple[int, str]], str]:
+    """The report's own run of table captions and the text they belong to. Numbering that starts
+    again (NPI: a box's "Tabel 1", the appendix's "TABEL 1 … 10") ends both: past it "Tabel 1"
+    is another table, and a sentence there points into its own run."""
+    captions = _caption_lines(narrative_text)
+    for (_, a, _), (at, b, _) in zip(captions, captions[1:]):
+        if b < a:
+            run = [(n, title) for start, n, title in captions if start < at]
+            return run, narrative_text[:at]
+    return [(n, title) for _, n, title in captions], narrative_text
+
+
+def _cited(sentence: str, lampiran_captions: bool, appendix_apart: bool = False) -> List[str]:
+    """The tables a sentence points to, as 'Tabel N' / 'Lampiran N', in the order it names them.
+
+    `appendix_apart`: the appendix numbers its tables from 1 again (NPI), and they are not the
+    report's run. A sentence pointing into it ("Lampiran Tabel 9") is then not checked at all."""
     keys: List[str] = []
     for m in _CITED_RE.finditer(sentence):
+        if appendix_apart and m.group(1).lower().startswith("lampiran"):
+            return []
         kind = "Lampiran" if m.group(1).lower() == "lampiran" and lampiran_captions else "Tabel"
         for n in re.findall(r"\d+", m.group(2)):
             if f"{kind} {int(n)}" not in keys:
@@ -304,19 +341,23 @@ def _rounds_to(figure: str, printed: Set[str]) -> bool:
     return False
 
 
-# Two figures of the sentence printed in another table, and none in the one it cites: one shared
-# figure could be chance (a "2,6%" sits in many tables), two in the same table is where they come from.
+# Two figures of the sentence printed in another table: one shared figure could be chance (a
+# "2,6%" sits in many tables), two in the same table is where they come from.
 _MIN_FIGURES_ELSEWHERE = 2
 
 
 def _printed_elsewhere(cited: List[str], figures: List[str], printed: Dict[str, Set[str]]) -> Optional[str]:
-    """The one other table that prints the sentence's figures when the cited ones print none."""
-    if any(_rounds_to(f, printed[c]) for c in cited for f in figures):
+    """The one other table the sentence's figures come from: the cited tables print none of them,
+    or only some ("10,3" turning up in NPI's Tabel 4) while that table prints every one."""
+    in_cited = sum(any(_rounds_to(f, printed[c]) for c in cited) for f in figures)
+    if in_cited == len(figures):
         return None
     distinctive = [f for f in figures if _distinctive(f)]
     scored = sorted(((sum(f in found for f in distinctive), key) for key, found in printed.items()
                      if key not in cited), reverse=True)
     if not scored or scored[0][0] < _MIN_FIGURES_ELSEWHERE or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+        return None
+    if in_cited and scored[0][0] < len(figures):
         return None
     return scored[0][1]
 
@@ -359,16 +400,17 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
             out = [r for r in out if r not in same]
             out.append(_comparison_result(sentence, page, a, b, word))
 
-    captions = table_captions(narrative_text)
-    # Numbering that starts again (NPI: the body's tables, each box's, the appendix's) or a
-    # two-column layout read across (1, 7, 2, 8, …) leaves "Tabel 3" naming several tables, and
-    # a picture under it may belong to another caption.
+    # The report's own tables and the sentences before any numbering that starts again
+    # (word_extraction keeps the same run of pictures).
+    captions, report_text = _report_part(narrative_text)
     numbers = [n for n, _ in captions]
-    if any(b < a for a, b in zip(numbers, numbers[1:])):
-        return out
-    lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(narrative_text)) or any(
+    if report_text is not narrative_text:
+        sentences = _sentences(report_text)
+    lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(report_text)) or any(
         key.startswith("Lampiran") for key in (table_texts or {}))
-    cited_in = [(sentence, page, _cited(sentence, lampiran_captions)) for sentence, page in sentences]
+    appendix_apart = report_text is not narrative_text
+    cited_in = [(sentence, page, _cited(sentence, lampiran_captions, appendix_apart))
+                for sentence, page in sentences]
     cited_in = [(sentence, page, cited) for sentence, page, cited in cited_in if cited]
 
     # Against the captions: the numbering, and a pointer to a number no caption carries.

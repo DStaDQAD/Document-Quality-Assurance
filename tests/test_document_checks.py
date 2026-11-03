@@ -127,6 +127,20 @@ def test_a_sentence_citing_another_table_than_the_one_printing_its_figures_is_ti
         in found.reasoning
 
 
+def test_a_cited_table_printing_only_some_figures_while_another_prints_all_is_tidak_sesuai():
+    # NPI: "10,3" also sits in the cited Tabel 4 by chance; Tabel 3 prints both figures.
+    printed = {**PRINTED, "Tabel 4": PRINTED["Tabel 4"] + " 4,12"}
+    sentence = "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 4)."
+    [found] = _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], printed))
+    assert "ada di Tabel 3" in found.reasoning
+
+
+def test_figures_some_other_table_does_not_print_all_of_are_left_alone():
+    printed = {**PRINTED, "Tabel 4": PRINTED["Tabel 4"] + " 4,12", "Tabel 3": "Akses Kredit 6,35 4,12"}
+    sentence = "Lebih mudah 6,35%, lebih sulit 4,12%, netral 89,53% (Lampiran Tabel 4)."
+    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], printed)) == []
+
+
 def test_one_figure_another_table_also_prints_is_not_enough():
     sentence = "Responden yang menjawab lebih mudah sebesar 6,35% (Lampiran Tabel 1)."
     assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], PRINTED)) == []
@@ -184,10 +198,30 @@ def test_a_number_printed_twice_and_one_skipped_is_one_finding():
     assert "tidak ada Tabel 3, padahal dirujuk 1 kalimat" in found.reasoning
 
 
-def test_numbering_that_starts_again_is_not_checked():
-    appendix = APPENDIX + [(1, "Neraca Pembayaran"), (2, "Ekspor"), (3, "Impor")]
-    sentence = "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 1)."
-    assert _findings(dc.check_document(_narrative(sentence, appendix=appendix), [], PRINTED)) == []
+def test_numbering_that_starts_again_ends_the_reports_tables():
+    # NPI: the report's Tabel 1-4, then a box or the appendix numbered from 1 again. Past that
+    # point "Tabel 1" is another table: its captions are not counted (no "Tabel 1 dipakai 2 kali")
+    # and a sentence there is not checked against the report's Tabel 1.
+    body = "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Tabel 1)."
+    # With an appendix numbered apart, "Lampiran Tabel 1" is the appendix's table, not the report's.
+    to_appendix = "Responden yang menjawab lebih baik sebesar 6,35% dan 4,12% (Lampiran Tabel 1)."
+    box = "Perbandingan publikasi menunjukkan revisi sebesar 6,35 dan 4,12 (Tabel 1)."
+    text = _narrative(body, to_appendix, appendix=APPENDIX) + "\n".join(
+        ["Boks 1", "Tabel 1", "Perbandingan Publikasi NPI", box]) + "\n"
+    found = _findings(dc.check_document(text, [], PRINTED))
+    assert [(f.metric_label, f.context_quote) for f in found] == [("Rujukan Tabel 1", body)]
+
+
+def test_a_list_of_tables_is_not_a_run_of_captions():
+    # NPI's Daftar Tabel in two columns reads 1, 7, 2, 8 … each title followed by its page.
+    contents = ["DAFTAR TABEL", "Tabel 1", "Ekspor Nonmigas", "5", "Tabel 7", "Impor Minyak", "11",
+                "Tabel 2", "Ekspor Komoditas", "7"]
+    text = "\n".join(["[== Halaman 1 ==]"] + contents) + "\n" + _narrative(
+        "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 1).",
+        appendix=APPENDIX)
+    assert dc.table_captions(text) == APPENDIX
+    [found] = _findings(dc.check_document(text, [], PRINTED))
+    assert found.metric_label == "Rujukan Tabel 1" and "ada di Tabel 3" in found.reasoning
 
 
 def test_a_document_with_few_captions_has_no_missing_caption_check():
