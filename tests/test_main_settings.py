@@ -66,7 +66,7 @@ def test_a_database_failure_is_a_503_not_a_crash(monkeypatch):
         raise RuntimeError("database down")
     monkeypatch.setattr(team_settings, "snapshot", broken)
     response = client.get("/api/settings")
-    assert response.status_code == 503 and "Pengaturan" in response.json()["detail"]
+    assert response.status_code == 503 and "Settings" in response.json()["detail"]
 
 
 def test_upload_hints_are_listed_and_edited():

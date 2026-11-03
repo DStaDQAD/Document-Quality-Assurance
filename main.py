@@ -1057,7 +1057,7 @@ async def verify_paired_stream_endpoint(
     )
 
 
-_HISTORY_UNAVAILABLE = "Riwayat tidak dapat dibuka saat ini: database riwayat tidak terhubung."
+_HISTORY_UNAVAILABLE = "History tidak dapat dibuka saat ini: database History tidak terhubung."
 
 
 @app.get("/api/history", response_model=CheckHistoryListResponse)
@@ -1192,7 +1192,7 @@ async def get_translation_history_endpoint(check_id: str) -> JSONResponse:
 # ── Pengaturan (team_settings): hide/show publications, team aliases, notes for the Tinjauan AI.
 # Shared by everyone signed in; every change carries the editor's name (`by`) and is logged.
 
-_SETTINGS_UNAVAILABLE = "Pengaturan tidak bisa dibuka sekarang; coba lagi sebentar lagi."
+_SETTINGS_UNAVAILABLE = "Settings tidak bisa dibuka sekarang; coba lagi sebentar lagi."
 
 
 class _ByBody(BaseModel):

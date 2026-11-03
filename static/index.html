@@ -244,9 +244,20 @@ select { cursor: pointer; }
 .history-open .material-symbols-outlined { font-size: 18px; vertical-align: middle; }
 .history-row:hover .history-open { color: var(--blue-600); }
 .history-table-wrap { overflow-x: auto; }
+/* The list fits its card on a laptop: text columns wrap instead of widening the table; only
+   the date, the counts and the duration stay on one line. */
+table.history-table td { white-space: normal; vertical-align: top; line-height: 1.4; }
 .history-row { cursor: pointer; }
 .history-row:focus { outline: 2px solid var(--blue-400); outline-offset: -2px; }
-.history-file { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+table.history-table td.history-when, table.history-table td.history-counts,
+table.history-table td.history-duration { white-space: nowrap; }
+.history-time { display: block; font-size: 11px; color: var(--text-400); }
+.history-file { min-width: 180px; }
+.history-file span {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere;
+}
+.history-pub { min-width: 120px; }
 .history-counts .is-match { color: #15803D; }
 .history-counts .is-mismatch { color: #DC2626; }
 .history-counts .is-unverified { color: #B45309; }
@@ -1174,13 +1185,13 @@ body.auth-locked .app {
       <span class="material-symbols-outlined">translate</span>
       <span class="nav-text">Cek Terjemahan</span>
     </button>
-    <button type="button" class="nav-item inactive-nav" data-tab="history" title="Riwayat">
+    <button type="button" class="nav-item inactive-nav" data-tab="history" title="History">
       <span class="material-symbols-outlined">history</span>
-      <span class="nav-text">Riwayat</span>
+      <span class="nav-text">History</span>
     </button>
-    <button type="button" class="nav-item inactive-nav" data-tab="settings" title="Pengaturan">
+    <button type="button" class="nav-item inactive-nav" data-tab="settings" title="Settings">
       <span class="material-symbols-outlined">tune</span>
-      <span class="nav-text">Pengaturan</span>
+      <span class="nav-text">Settings</span>
     </button>
     <!-- "Lihat Data" browses /api/tables (the ground-truth SQLite DB). That DB is
          not shipped to the deployment (only synthetic sample data), so the tab is
@@ -1287,7 +1298,7 @@ body.auth-locked .app {
               </details>
             </div>
             <div class="card-footer">
-              <label class="checker-field" title="Nama ini ikut tersimpan di riwayat pengecekan">
+              <label class="checker-field" title="Nama ini ikut tersimpan di History">
                 <span class="material-symbols-outlined">person</span>
                 <input type="text" id="checker-name" maxlength="80" autocomplete="name"
                        placeholder="Nama pemeriksa (opsional)">
@@ -1338,7 +1349,7 @@ body.auth-locked .app {
             </div>
           </div>
           <div class="card-footer">
-            <label class="checker-field" title="Nama ini ikut tersimpan di riwayat pengecekan">
+            <label class="checker-field" title="Nama ini ikut tersimpan di History">
               <span class="material-symbols-outlined">person</span>
               <input type="text" id="tr-checker-name" maxlength="80" autocomplete="name"
                      placeholder="Nama pemeriksa (opsional)">
@@ -1364,7 +1375,7 @@ body.auth-locked .app {
         <div class="card-header history-toolbar">
           <span class="material-symbols-outlined">search</span>
           <input type="search" id="history-search" placeholder="Cari nama dokumen atau pemeriksa"
-                 aria-label="Cari riwayat menurut nama dokumen atau pemeriksa">
+                 aria-label="Cari di History menurut nama dokumen atau pemeriksa">
           <span class="history-legend" id="history-legend" aria-hidden="true">Hasil: <span class="is-match">✓ Sesuai</span> ·
             <span class="is-mismatch">✗ Tidak Sesuai</span> · <span class="is-unverified">? Tidak Cukup Data</span></span>
         </div>
@@ -1470,7 +1481,7 @@ body.auth-locked .app {
     if (n.matches(".material-symbols-outlined")) n.setAttribute("aria-hidden", "true"); else hideIconNames(n);
   }))).observe(document.body, { childList: true, subtree: true });
 
-  const PANEL_TITLES = { paired: "Verifikasi", translation: "Cek Terjemahan", history: "Riwayat", settings: "Pengaturan", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Verifikasi", translation: "Cek Terjemahan", history: "History", settings: "Settings", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
   function showTab(tab) {
@@ -2615,10 +2626,10 @@ body.auth-locked .app {
   function renderHistoryNote(result) {
     if (result.history_id) {
       return `<div class="history-note is-saved">
-        <span class="material-symbols-outlined">history</span>Tersimpan di riwayat</div>`;
+        <span class="material-symbols-outlined">history</span>Tersimpan di History</div>`;
     }
     return `<div class="history-note is-unsaved">
-      <span class="material-symbols-outlined">warning</span>Hasil ini tidak tersimpan di riwayat</div>`;
+      <span class="material-symbols-outlined">warning</span>Hasil ini tidak tersimpan di History</div>`;
   }
 
   // ══ Riwayat panel ═══════════════════════════════════════════════════
@@ -2659,15 +2670,28 @@ body.auth-locked .app {
     return key ? (PUBLICATIONS[key]?.label || key) : "Umum";
   }
 
+  // The list's Waktu cell: the date, the time on a line of its own below it.
+  function historyWhen(iso) {
+    const d = new Date(iso);
+    const day = d.toLocaleDateString("id-ID", { timeZone: "Asia/Jakarta", day: "numeric", month: "short", year: "numeric" });
+    const time = d.toLocaleTimeString("id-ID", { timeZone: "Asia/Jakarta", hour: "2-digit", minute: "2-digit" });
+    return `<td class="history-when">${escapeHtml(day)}<span class="history-time">${escapeHtml(time)} WIB</span></td>`;
+  }
+
+  // A long file name wraps to two lines at most; the full name is in the tooltip.
+  function historyFile(name) {
+    return `<td class="history-file" title="${escapeHtml(name)}"><span>${escapeHtml(name)}</span></td>`;
+  }
+
   function renderHistoryRow(item, idx) {
     const who = item.checker_name ? escapeHtml(item.checker_name) : `<span class="muted-text">—</span>`;
     const pub = item.publication
       ? escapeHtml(publicationLabel(item.publication))
       : `<span class="muted-text">Umum</span>`;
     return `<tr class="history-row" data-idx="${idx}" tabindex="0">
-      <td>${escapeHtml(formatWib(item.created_at))}</td>
-      <td class="history-file" title="${escapeHtml(item.filename)}">${escapeHtml(item.filename)}</td>
-      <td>${pub}</td>
+      ${historyWhen(item.created_at)}
+      ${historyFile(item.filename)}
+      <td class="history-pub">${pub}</td>
       <td>${who}</td>
       <td>${escapeHtml(MODE_LABELS[item.mode] || item.mode)}</td>
       <td class="history-counts">
@@ -2676,7 +2700,7 @@ body.auth-locked .app {
         <span class="is-unverified" title="Tidak Cukup Data">? ${item.n_unverified}</span>
         <span class="sr-only">${item.n_match} sesuai, ${item.n_mismatch} tidak sesuai, ${item.n_unverified} tidak cukup data</span>
       </td>
-      <td>${escapeHtml(formatDuration(item.duration_s))}</td>
+      <td class="history-duration">${escapeHtml(formatDuration(item.duration_s))}</td>
       <td class="history-open"><span class="material-symbols-outlined">chevron_right</span></td>
     </tr>`;
   }
@@ -2687,7 +2711,7 @@ body.auth-locked .app {
     const request = ++historyRequest;
     if (reset) {
       historyItems = [];
-      listEl.innerHTML = `<p class="muted-text history-empty">Memuat riwayat…</p>`;
+      listEl.innerHTML = `<p class="muted-text history-empty">Memuat History…</p>`;
     }
     const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
     const translation = historyKind === "translation";
@@ -2725,13 +2749,13 @@ body.auth-locked .app {
       ? escapeHtml(publicationLabel(item.publication))
       : `<span class="muted-text">Umum</span>`;
     return `<tr class="history-row" data-idx="${idx}" tabindex="0">
-      <td>${escapeHtml(formatWib(item.created_at))}</td>
-      <td class="history-file" title="${escapeHtml(item.en_filename)}">${escapeHtml(item.en_filename)}</td>
-      <td>${pub}</td>
+      ${historyWhen(item.created_at)}
+      ${historyFile(item.en_filename)}
+      <td class="history-pub">${pub}</td>
       <td>${who}</td>
       <td>${escapeHtml(TRANSLATION_DOCUMENTS[item.document] || item.document)}</td>
       <td class="history-counts">angka ${item.n_number} · makna ${item.n_meaning}</td>
-      <td>${escapeHtml(formatDuration(item.duration_s))}</td>
+      <td class="history-duration">${escapeHtml(formatDuration(item.duration_s))}</td>
       <td class="history-open"><span class="material-symbols-outlined">chevron_right</span></td>
     </tr>`;
   }
@@ -2755,8 +2779,8 @@ body.auth-locked .app {
     const pub = summary.publication ? ` · ${escapeHtml(publicationLabel(summary.publication))}` : "";
     return `<div class="history-banner">
       <span class="material-symbols-outlined">history</span>
-      <span>Dari riwayat · ${escapeHtml(formatWib(summary.created_at))}${pub}${who}</span>
-      <button type="button" class="history-back">← Kembali ke riwayat</button>
+      <span>Dari History · ${escapeHtml(formatWib(summary.created_at))}${pub}${who}</span>
+      <button type="button" class="history-back">← Kembali ke History</button>
     </div>`;
   }
 
@@ -2770,7 +2794,7 @@ body.auth-locked .app {
       // append the next reports under this old one.
       const busy = document.getElementById("history-busy");
       busy.textContent = "Pengecekan sedang berjalan. Tunggu sampai selesai atau batalkan dulu, " +
-        "lalu buka riwayat ini lagi.";
+        "lalu buka entri History ini lagi.";
       busy.hidden = false;
       if (!document.getElementById("panel-history").classList.contains("active")) showTab("history");
       return;
@@ -2780,7 +2804,7 @@ body.auth-locked .app {
     // Hidden until the Verifikasi nav item resets the form (resetPairedForm).
     document.getElementById("paired-container").classList.add("from-history");
     const resultEl = document.getElementById("paired-result");
-    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
+    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari History…</p>`;
     let entry;
     try {
       entry = await fetchJson(`/api/history/${encodeURIComponent(id)}`);
@@ -2966,7 +2990,7 @@ body.auth-locked .app {
   async function openTranslationEntry(id) {
     if (translationRunActive) {
       const busy = document.getElementById("history-busy");
-      busy.textContent = "Cek terjemahan sedang berjalan. Tunggu sampai selesai, lalu buka riwayat ini lagi.";
+      busy.textContent = "Cek terjemahan sedang berjalan. Tunggu sampai selesai, lalu buka entri History ini lagi.";
       busy.hidden = false;
       return;
     }
@@ -2974,7 +2998,7 @@ body.auth-locked .app {
     highlightNav("history");
     document.getElementById("tr-container").classList.add("from-history");
     const resultEl = document.getElementById("tr-result");
-    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari riwayat…</p>`;
+    resultEl.innerHTML = `<p class="muted-text">Memuat hasil dari History…</p>`;
     let entry;
     try {
       entry = await fetchJson(`/api/translation-history/${encodeURIComponent(id)}`);
