@@ -178,9 +178,18 @@ def test_a_cited_table_whose_picture_was_not_read_is_left_alone():
     assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], printed)) == []
 
 
-def test_without_the_tables_text_a_pointer_is_only_checked_against_the_captions():
+def test_without_any_table_read_a_pointer_is_only_checked_against_the_captions():
     sentence = "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 1)."
-    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [])) == []
+    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], {})) == []
+    missing = "Margin usaha terendah sebesar 11,29% (Lampiran Tabel 12)."
+    assert len(_findings(dc.check_document(_narrative(missing, appendix=APPENDIX), [], {}))) == 1
+
+
+def test_a_pdf_has_no_numbering_or_pointer_check():
+    # Its text layer keeps few captions whole: Tabel 12 would read as missing.
+    sentence = "Margin usaha terendah sebesar 11,29% (Lampiran Tabel 12)."
+    appendix = APPENDIX[:2] + [(4, "Penggunaan Tenaga Kerja"), (4, "Upah")]
+    assert _findings(dc.check_document(_narrative(sentence, appendix=appendix), [])) == []
 
 
 def test_a_sentence_citing_a_table_the_document_lacks_is_tidak_sesuai():
@@ -192,7 +201,7 @@ def test_a_sentence_citing_a_table_the_document_lacks_is_tidak_sesuai():
 def test_a_number_printed_twice_and_one_skipped_is_one_finding():
     appendix = APPENDIX[:2] + [(4, "Kondisi Keuangan dan Akses Kredit"), (4, "Penggunaan Tenaga Kerja")]
     sentence = "Responden yang menjawab lebih mudah sebesar 6,35% (Lampiran Tabel 3)."
-    [found] = _findings(dc.check_document(_narrative(sentence, appendix=appendix), []))
+    [found] = _findings(dc.check_document(_narrative(sentence, appendix=appendix), [], {}))
     assert found.metric_label == "Nomor tabel"
     assert "Tabel 4 dipakai 2 kali" in found.reasoning
     assert "tidak ada Tabel 3, padahal dirujuk 1 kalimat" in found.reasoning
@@ -226,4 +235,4 @@ def test_a_list_of_tables_is_not_a_run_of_captions():
 
 def test_a_document_with_few_captions_has_no_missing_caption_check():
     sentence = "Margin usaha terendah sebesar 11,29% (Lampiran Tabel 12)."
-    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX[:2]), [])) == []
+    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX[:2]), [], {})) == []

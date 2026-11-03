@@ -11,6 +11,7 @@ from typing import Callable, Dict, List, Optional
 from langchain_core.language_models import BaseChatModel
 
 from document_checks import check_document
+from pointer_review import review_pointers
 from paired_verifier import _ExcelSource
 from publication_parsers import skipped_sections
 from schemas import PairedVerificationResponse
@@ -129,6 +130,11 @@ async def run_check(
     # After the review, which never sees them: the report's own comparisons, table pointers and
     # table numbering, checked by the code alone.
     results = check_document(text, results, table_texts)
+    # The table pointers the numbers leave open, read by the model from each sentence's subject.
+    try:
+        results = await review_pointers(text, results, table_texts, llm)
+    except Exception:
+        logger.warning("Tinjauan AI rujukan tabel gagal; kartu dari kode tetap dipakai", exc_info=True)
     entailed =sum(r.verdict == "Entailed" for r in results)
     refuted = sum(r.verdict == "Refuted" for r in results)
     inconclusive = sum(r.verdict == "Inconclusive" for r in results)

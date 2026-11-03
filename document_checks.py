@@ -12,6 +12,7 @@ Each finding is one Tidak Sesuai card (operation "comparison" or "reference"), a
 claims are judged, so it never changes how a claim is read.
 """
 import re
+from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -380,6 +381,111 @@ def _reference_result(sentence: str, page: Optional[int], cited: List[str], prob
 _MIN_CAPTIONS = 3
 
 
+@dataclass
+class Pointer:
+    """A sentence's pointer to the report's tables, and what the code made of it.
+
+    `status`: "absent" — a cited Tabel N has no caption; "elsewhere" — the cited tables print none
+    (or only some) of the sentence's figures and one other table prints them; "holds" — the cited
+    tables print its figures; "open" — the numbers settle nothing (none in the sentence, a cited
+    picture unread, the figures in several tables or in none: wrong, derived, or rounded away)."""
+    sentence: str
+    page: Optional[int]
+    cited: List[str]
+    status: str = "open"
+    problem: str = ""
+    before: str = ""    # the sentences just before it: "Hal tersebut tecermin dari SBT …" needs them
+
+
+# How many sentences before a pointer's own come with it, for a reader judging its subject.
+_CONTEXT_SENTENCES = 2
+# "Lampiran 4. Kredit yang Disalurkan …": an appendix table with its own caption (UB).
+_LAMPIRAN_TITLE_RE = re.compile(r"^\s*lampiran\s+(\d+)\s*[.:]\s*(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+@dataclass
+class _Pointers:
+    captions: List[Tuple[int, str]]
+    titles: Dict[str, str]           # 'Tabel 3' / 'Lampiran 4' → its title, the report's own run
+    pointers: List[Pointer]
+    numbering_problem: Optional[str]
+
+
+def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Pointers:
+    # A PDF's text layer keeps few of its captions whole (PPKom Tw IV-2025: 3 of 18), so its
+    # numbering and pointers would read as gaps and missing tables: a PDF's are not checked.
+    if table_texts is None:
+        return _Pointers([], {}, [], None)
+    # The report's own tables and the sentences before any numbering that starts again
+    # (word_extraction keeps the same run of pictures).
+    captions, report_text = _report_part(narrative_text)
+    numbers = [n for n, _ in captions]
+    titles = {f"Tabel {n}": title for n, title in captions}
+    for m in _LAMPIRAN_TITLE_RE.finditer(report_text):
+        if len(m.group(0).split()) <= _CAPTION_MAX_WORDS + 6:
+            titles.setdefault(f"Lampiran {int(m.group(1))}", m.group(2))
+    lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(report_text)) or any(
+        key.startswith("Lampiran") for key in (table_texts or {}))
+    appendix_apart = report_text is not narrative_text
+    sentences = _sentences(report_text)
+    pointers = [Pointer(sentence, page, _cited(sentence, lampiran_captions, appendix_apart),
+                        before=" ".join(s for s, at in sentences[max(0, i - _CONTEXT_SENTENCES):i] if at == page))
+                for i, (sentence, page) in enumerate(sentences)]
+    pointers = [p for p in pointers if p.cited]
+
+    # Against the captions: the numbering, and a pointer to a number no caption carries.
+    skipped: Set[int] = set()
+    numbering_problem = None
+    enough_captions = len(captions) >= _MIN_CAPTIONS
+    if enough_captions:
+        citations: Dict[int, int] = {}
+        for p in pointers:
+            for key in p.cited:
+                if key.startswith("Tabel "):
+                    n = int(key.split()[1])
+                    citations[n] = citations.get(n, 0) + 1
+        numbering_problem = _numbering_problems(captions, citations)
+        # A pointer to a number the numbering skips is that card's finding, not one per sentence.
+        skipped = set(_missing_numbers(captions))
+
+    printed = {key: _printed(text) for key, text in (table_texts or {}).items()}
+    for p in pointers:
+        absent = [key for key in p.cited if key.startswith("Tabel ")
+                  and int(key.split()[1]) not in numbers and int(key.split()[1]) not in skipped]
+        if enough_captions and absent:
+            p.status = "absent"
+            p.problem = f"Kalimat merujuk {absent[0]}, tetapi tidak ada judul {absent[0]} di dokumen"
+            continue
+        # Against what the tables print: every cited table has to be one whose picture was read.
+        figures = _sentence_figures(p.sentence)
+        if not figures or any(key not in printed for key in p.cited):
+            continue
+        # The figures prove the pointer unless another table prints more of them: NPI's cited
+        # Tabel 4 prints the "10,3" of a sentence whose "17,9" and "10,3" are both in Tabel 5. A tie
+        # holds (SKDU prints a LU's SBT in several tables).
+        in_cited = sum(any(_rounds_to(f, printed[key]) for key in p.cited) for f in figures)
+        in_other = max((sum(_rounds_to(f, found) for f in figures) for key, found in printed.items()
+                        if key not in p.cited), default=0)
+        if in_cited and in_cited >= in_other:
+            p.status = "holds"
+        other = _printed_elsewhere(p.cited, list(figures), printed)
+        if other is not None:
+            shown = ", ".join(as_printed for key, as_printed in figures.items() if key in printed[other])
+            p.status = "elsewhere"
+            p.problem = (f"Kalimat merujuk {' dan '.join(p.cited)}, tetapi angkanya ({shown}) tidak ada "
+                         f"di tabel itu; angka tersebut ada di {other}")
+    return _Pointers(captions, titles, pointers, numbering_problem)
+
+
+def open_pointers(narrative_text: str, table_texts: Optional[Dict[str, str]] = None
+                  ) -> Tuple[Dict[str, str], List[Pointer]]:
+    """The report's tables (key → title) and the pointers the numbers leave open, each citing only
+    tables that have a caption: what is left for a reader who goes by the sentence's subject."""
+    found = _pointers(narrative_text, table_texts)
+    return found.titles, [p for p in found.pointers if p.status == "open"
+                          and all(key in found.titles for key in p.cited)]
+
+
 def check_document(narrative_text: str, results: List[FactVerificationResult],
                    table_texts: Optional[Dict[str, str]] = None) -> List[FactVerificationResult]:
     """`results` with the document's own mistakes added as Tidak Sesuai cards (see the module
@@ -387,12 +493,10 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
     replaced by the comparison's card, so the sentence is not shown as both.
 
     `table_texts`: what each table of a Word document prints ('Tabel 3' → its picture's text,
-    word_extraction.WordDocument.table_texts). Without it, as for a PDF, a sentence's pointer is
-    only checked against the captions, not against what the table holds."""
+    word_extraction.WordDocument.table_texts; empty when no picture could be read). None, for a
+    PDF, leaves the table numbering and pointers unchecked: only the comparisons are."""
     out = list(results)
-    sentences = _sentences(narrative_text)
-
-    for sentence, page in sentences:
+    for sentence, page in _sentences(narrative_text):
         for a, b, word in _wrong_comparisons(sentence):
             same = [r for r in out if _is_same_comparison(r, sentence, a, b)]
             if any(r.verdict == "Refuted" for r in same):
@@ -400,55 +504,12 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
             out = [r for r in out if r not in same]
             out.append(_comparison_result(sentence, page, a, b, word))
 
-    # The report's own tables and the sentences before any numbering that starts again
-    # (word_extraction keeps the same run of pictures).
-    captions, report_text = _report_part(narrative_text)
-    numbers = [n for n, _ in captions]
-    if report_text is not narrative_text:
-        sentences = _sentences(report_text)
-    lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(report_text)) or any(
-        key.startswith("Lampiran") for key in (table_texts or {}))
-    appendix_apart = report_text is not narrative_text
-    cited_in = [(sentence, page, _cited(sentence, lampiran_captions, appendix_apart))
-                for sentence, page in sentences]
-    cited_in = [(sentence, page, cited) for sentence, page, cited in cited_in if cited]
-
-    # Against the captions: the numbering, and a pointer to a number no caption carries.
-    skipped: Set[int] = set()
-    captioned = set(numbers)
-    enough_captions = len(captions) >= _MIN_CAPTIONS
-    if enough_captions:
-        citations: Dict[int, int] = {}
-        for _, _, cited in cited_in:
-            for key in cited:
-                if key.startswith("Tabel "):
-                    n = int(key.split()[1])
-                    citations[n] = citations.get(n, 0) + 1
-        problem = _numbering_problems(captions, citations)
-        if problem:
-            out.append(_numbering_result(captions, problem))
-        # A pointer to a number the numbering skips is that card's finding, not one per sentence.
-        skipped = set(_missing_numbers(captions))
-
-    printed = {key: _printed(text) for key, text in (table_texts or {}).items()}
-    for sentence, page, cited in cited_in:
-        absent = [key for key in cited if key.startswith("Tabel ")
-                  and int(key.split()[1]) not in captioned and int(key.split()[1]) not in skipped]
-        if enough_captions and absent:
-            out.append(_reference_result(
-                sentence, page, absent, f"Kalimat merujuk {absent[0]}, tetapi tidak ada judul "
-                                        f"{absent[0]} di dokumen", "judul tabel di dokumen"))
-            continue
-        # Against what the tables print: every cited table has to be one whose picture was read.
-        if not printed or any(key not in printed for key in cited):
-            continue
-        figures = _sentence_figures(sentence)
-        other = _printed_elsewhere(cited, list(figures), printed) if figures else None
-        if other is None:
-            continue
-        shown = ", ".join(as_printed for key, as_printed in figures.items() if key in printed[other])
-        out.append(_reference_result(
-            sentence, page, cited,
-            f"Kalimat merujuk {' dan '.join(cited)}, tetapi angkanya ({shown}) tidak ada di tabel "
-            f"itu; angka tersebut ada di {other}", "isi tabel di dokumen"))
+    found = _pointers(narrative_text, table_texts)
+    if found.numbering_problem:
+        out.append(_numbering_result(found.captions, found.numbering_problem))
+    for p in found.pointers:
+        if p.status == "absent":
+            out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "judul tabel di dokumen"))
+        elif p.status == "elsewhere":
+            out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "isi tabel di dokumen"))
     return out

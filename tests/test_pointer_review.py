@@ -1,0 +1,114 @@
+"""pointer_review: the table pointers the numbers leave open, judged by a model from the sentence's
+subject. The model is faked: what is tested is which sentences reach it and what its answer adds."""
+import asyncio
+from unittest.mock import Mock
+
+from langchain_core.runnables import RunnableLambda
+
+import document_checks as dc
+import pointer_review as pr
+
+APPENDIX = [(1, "Kegiatan Usaha"), (2, "Kapasitas Produksi Terpakai"), (3, "Kondisi Keuangan dan Akses Kredit"),
+            (4, "Penggunaan Tenaga Kerja")]
+PRINTED = {
+    "Tabel 1": "Kegiatan Usaha 11,46 12,97",
+    "Tabel 2": "Kapasitas Produksi 73,75 73,16",
+    "Tabel 3": "Akses Kredit Lebih Mudah 6,35 Lebih Sulit 4,12",
+    "Tabel 4": "Tenaga Kerja 0,16 -0,36",
+}
+
+
+def _narrative(*sentences):
+    lines = ["[== Halaman 1 ==]", " ".join(sentences), "[== Halaman 2 ==]", "LAMPIRAN"]
+    for number, title in APPENDIX:
+        lines += [f"Tabel {number}", title, "Keterangan: *) Angka prakiraan"]
+    return "\n".join(lines) + "\n"
+
+
+def _llm(answer, calls):
+    def _respond(prompt_value):
+        calls.append(prompt_value.to_string())
+        return pr._Judgements(items=answer)
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    return llm
+
+
+# --- which pointers reach the model ----------------------------------------------------------
+
+def test_a_pointer_whose_figures_only_the_cited_table_prints_is_settled():
+    text = _narrative("Kapasitas produksi terpakai sebesar 73,75% (Lampiran Tabel 2).")
+    assert dc.open_pointers(text, PRINTED)[1] == []
+
+
+def test_a_pointer_without_figures_or_with_unprinted_ones_is_open():
+    no_figure = "Peritel menerapkan potongan harga akhir tahun (Lampiran Tabel 2)."
+    wrong_figure = "Kapasitas produksi terpakai sebesar 73,57% (Lampiran Tabel 2)."
+    titles, opened = dc.open_pointers(_narrative(no_figure, wrong_figure), PRINTED)
+    assert titles == {"Tabel 1": "Kegiatan Usaha", "Tabel 2": "Kapasitas Produksi Terpakai",
+                      "Tabel 3": "Kondisi Keuangan dan Akses Kredit", "Tabel 4": "Penggunaan Tenaga Kerja"}
+    assert [p.sentence for p in opened] == [no_figure, wrong_figure]
+
+
+def test_figures_another_table_prints_more_of_leave_the_pointer_open_and_a_tie_holds():
+    # NPI: the cited Tabel 4 prints "10,3" by chance, Tabel 2 and Tabel 5 both print "17,9" and
+    # "10,3" (with one other table printing them, the code itself finds the pointer wrong).
+    sentence = "Kapasitas produksi terpakai sebesar 73,75%, dari 73,16% (Lampiran Tabel 1)."
+    more = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75", "Tabel 3": PRINTED["Tabel 3"] + " 73,75 73,16"}
+    assert [p.cited for p in dc.open_pointers(_narrative(sentence), more)[1]] == [["Tabel 1"]]
+    # SKDU prints a LU's SBT in several tables: as many figures in the cited one settles it.
+    tie = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75 73,16"}
+    assert dc.open_pointers(_narrative(sentence), tie)[1] == []
+
+
+def test_an_open_pointer_carries_the_sentences_before_it():
+    lead = "Penggunaan tenaga kerja pada triwulan II 2026 tercatat menurun."
+    sentence = "Hal tersebut tecermin dari SBT sebesar -0,45% (Lampiran Tabel 4)."
+    [opened] = dc.open_pointers(_narrative(lead, sentence), PRINTED)[1]
+    assert opened.sentence == sentence and opened.before == lead
+
+
+def test_a_pointer_the_code_already_found_wrong_is_not_sent():
+    sentence = "Lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 1)."
+    assert dc.open_pointers(_narrative(sentence), PRINTED)[1] == []
+
+
+def test_a_word_document_with_no_table_read_leaves_every_pointer_open_and_a_pdf_none():
+    sentence = "Kapasitas produksi terpakai sebesar 73,75% (Lampiran Tabel 2)."
+    assert len(dc.open_pointers(_narrative(sentence), {})[1]) == 1
+    assert dc.open_pointers(_narrative(sentence)) == ({}, [])
+
+
+# --- what the model's answer adds ------------------------------------------------------------
+
+def test_a_pointer_the_model_says_names_another_table_is_tidak_sesuai():
+    sentence = "Peritel menerapkan potongan harga akhir tahun (Lampiran Tabel 2)."
+    calls = []
+    llm = _llm([pr._Judgement(index=0, fits=False, table="Tabel 1", about="kegiatan usaha peritel")], calls)
+    out = asyncio.run(pr.review_pointers(_narrative(sentence), [], PRINTED, llm))
+    [card] = out
+    assert card.operation == "reference" and card.verdict == "Refuted" and card.resolved_via == pr.RESOLVED_VIA
+    assert card.metric_label == "Rujukan Tabel 2" and card.context_quote == sentence
+    assert card.reasoning.startswith("Kalimat ini tentang kegiatan usaha peritel, yang ditampilkan di Tabel 1 "
+                                     "('Kegiatan Usaha'), bukan di Tabel 2 ('Kapasitas Produksi Terpakai')")
+    assert "Tabel 2: Kapasitas Produksi Terpakai | baris: Kapasitas Produksi" in calls[0]
+    assert "0. [Tabel 2] Peritel menerapkan" in calls[0]
+
+
+def test_an_unsure_answer_or_an_unlisted_or_cited_table_adds_nothing():
+    sentences = ["Peritel menerapkan potongan harga akhir tahun (Lampiran Tabel 2).",
+                 "Kapasitas produksi terpakai sebesar 73,57% (Lampiran Tabel 2).",
+                 "Tenaga kerja diprakirakan meningkat (Lampiran Tabel 4)."]
+    answer = [pr._Judgement(index=0, fits=True, table="Tabel 1", about="x"),
+              pr._Judgement(index=1, fits=False, table="Tabel 9", about="x"),
+              pr._Judgement(index=2, fits=False, table="Tabel 4", about="x"),
+              pr._Judgement(index=7, fits=False, table="Tabel 1", about="x")]
+    assert asyncio.run(pr.review_pointers(_narrative(*sentences), [], PRINTED, _llm(answer, []))) == []
+
+
+def test_no_open_pointer_means_no_call():
+    calls = []
+    text = _narrative("Kapasitas produksi terpakai sebesar 73,75% (Lampiran Tabel 2).")
+    assert asyncio.run(pr.review_pointers(text, [], PRINTED, _llm([], calls))) == []
+    assert calls == []
