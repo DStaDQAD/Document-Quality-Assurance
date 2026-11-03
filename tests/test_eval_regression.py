@@ -224,7 +224,7 @@ def test_replay_rejudges_strict_claims(tmp_path: Path, monkeypatch):
     table._data[("Aset", 2025, "Q4")] = 558496.4949
     monkeypatch.setattr(run_regression, "_parsed_sources",
                         lambda doc, root: [_ExcelSource(table=table, filename="t.xls", sheet="5.39")])
-    monkeypatch.setattr(run_regression, "_narrative_of", lambda doc, root: None)
+    monkeypatch.setattr(run_regression, "_word_of", lambda doc, root: None)
     claim = Claim(operation="value", subject="Posisi AFLN",
                   cells=[Cell("S1", "Aset", "Q4 2025", "Aset", (2025, "Q4"))],
                   context_quote="Posisi AFLN tercatat 558,5 miliar dolar AS.", claimed_value=558.5,

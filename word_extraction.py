@@ -153,11 +153,26 @@ _INVISIBLE_RE = re.compile(r'[­​‌‍﻿]')
 _CAPTION_Y = 1e9
 
 
+# Any table caption, with or without the period _TABLE_CAPTION_RE needs: "Tabel 1" over SKDU's
+# appendix, "Lampiran 4. Kredit …" in UB. document_checks only wants what is printed under each,
+# not a table built from it, so the looser match costs nothing there.
+_ANY_CAPTION_RE = re.compile(r'^(Tabel|Lampiran)\s*(\d+)\b', re.IGNORECASE)
+_ANY_CHART_CAPTION_RE = re.compile(r'^Grafik\s*\d+\b', re.IGNORECASE)
+# A caption is a short line; a longer one is the narrative coming back, which ends the caption.
+_CAPTION_MAX_WORDS = 20
+# A decimal written the English way ("6.3", "10,432.0") or the Indonesian way ("6,3", "8.110,6").
+_EN_DECIMAL_RE = re.compile(r'\d\.\d{1,2}(?!\d)')
+_ID_DECIMAL_RE = re.compile(r'\d,\d{1,2}(?!\d)')
+
+
 @dataclass
 class WordDocument:
     narrative_text: str
     tables: List[PdfTable] = field(default_factory=list)
     unread_tables: List[str] = field(default_factory=list)   # "<caption> — <reason>"
+    # "Tabel 3" / "Lampiran 4" → the text of the EMF picture(s) under that caption, numbers written
+    # the Indonesian way. A caption whose picture keeps no text (PNG, JPEG) has no entry.
+    table_texts: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -324,13 +339,55 @@ def _picture_tables(
     return tables, unread
 
 
+def _as_indonesian(text: str, document_format: str) -> str:
+    """`text` with its numbers in the Indonesian convention. A picture pasted from an English
+    Excel ("8,110.6", UB Juli 2026) is told by its decimals; one with no decimal either way
+    follows the rest of the document."""
+    english, indonesian = len(_EN_DECIMAL_RE.findall(text)), len(_ID_DECIMAL_RE.findall(text))
+    if english > indonesian or (english == indonesian and document_format == "en"):
+        return text.translate(str.maketrans({",": ".", ".": ","}))
+    return text
+
+
+def _caption_texts(paragraphs: List[_Paragraph], rels: Dict[str, str],
+                   z: zipfile.ZipFile) -> Dict[str, str]:
+    """The text of the EMF picture(s) under each 'Tabel N' / 'Lampiran N' caption. Every picture
+    up to the next caption counts: UB prints a table's levels and its growth as two pictures."""
+    names = set(z.namelist())
+    runs_of: Dict[str, List[str]] = {}
+    current: Optional[str] = None
+    for p in paragraphs:
+        if p.word_table:
+            current = None
+            continue
+        short = len(p.text.split()) <= _CAPTION_MAX_WORDS
+        m = _ANY_CAPTION_RE.match(p.text) if short else None
+        if m:
+            current = f"{m.group(1).capitalize()} {int(m.group(2))}"
+        elif _ANY_CHART_CAPTION_RE.match(p.text) or not short:
+            current = None
+        for rid in p.pictures:
+            path = rels.get(rid, "")
+            if current is None or not path.lower().endswith(".emf") or path not in names:
+                continue
+            runs = emf_text_runs(z.read(path))
+            if runs:
+                runs_of.setdefault(current, []).append(" ".join(r.text for r in runs))
+    texts = {key: " ".join(parts) for key, parts in runs_of.items()}
+    document_format = detect_number_format(" ".join(texts.values()))
+    return {key: _as_indonesian(text, document_format) for key, text in texts.items()}
+
+
 def read_word_document(data: bytes) -> WordDocument:
     with zipfile.ZipFile(io.BytesIO(data)) as z:
         body = ET.fromstring(z.read("word/document.xml")).find(_W + "body")
         paragraphs: List[_Paragraph] = []
         if body is not None:
             _walk(body, paragraphs)
-        tables, unread = _picture_tables(paragraphs, _relationships(z), z)
+        rels = _relationships(z)
+        tables, unread = _picture_tables(paragraphs, rels, z)
+        table_texts = _caption_texts(paragraphs, rels, z)
     logger.info("Word document: %d paragraph(s), %d table(s) read, %d caption(s) unread.",
                 len(paragraphs), len(tables), len(unread))
-    return WordDocument(narrative_text=_narrative(paragraphs), tables=tables, unread_tables=unread)
+    return WordDocument(narrative_text=_narrative(paragraphs), tables=tables, unread_tables=unread,
+                        table_texts=table_texts)

@@ -89,6 +89,7 @@ async def run_check(
     on_extract_gap: Optional[Callable],
     excel_parsers: List[str],
     mode: str = "excel",
+    table_texts: Optional[Dict[str, str]] = None,
 ) -> PairedVerificationResponse:
     def emit(stage: str, status: str, **extra) -> None:
         if progress_cb is not None:
@@ -127,7 +128,7 @@ async def run_check(
             logger.warning("Tinjauan AI gagal; vonis kode dipertahankan", exc_info=True)
     # After the review, which never sees them: the report's own comparisons, table pointers and
     # table numbering, checked by the code alone.
-    results = check_document(text, results, sources)
+    results = check_document(text, results, table_texts)
     entailed =sum(r.verdict == "Entailed" for r in results)
     refuted = sum(r.verdict == "Refuted" for r in results)
     inconclusive = sum(r.verdict == "Inconclusive" for r in results)

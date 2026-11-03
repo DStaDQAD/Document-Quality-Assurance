@@ -4,13 +4,15 @@ Three mistakes no workbook can show, all planted by the mentor in SKDU Tw III-20
   - a sentence that compares two of its own numbers the wrong way round ("22,68%, lebih rendah
     dibandingkan 22,34%") — the numbers are right, the word is not;
   - a sentence citing the wrong appendix table ("akses kredit … (Lampiran Tabel 1)", the
-    Kegiatan Usaha table, while its figures are Tabel 3's);
+    Kegiatan Usaha table, while its figures are printed in Tabel 3) — told from what each table
+    of a Word document prints, read out of its picture, never from the Excel;
   - the appendix's own numbering ("Tabel 10" printed twice, no Tabel 9).
 
 Each finding is one Tidak Sesuai card (operation "comparison" or "reference"), added after the
 claims are judged, so it never changes how a claim is read.
 """
 import re
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from schemas import FactVerificationResult
@@ -181,10 +183,12 @@ def _is_same_comparison(result: FactVerificationResult, sentence: str, a: float,
 # the same line needs the period or colon a caption puts after its number.
 _CAPTION_RE = re.compile(r"^\s*(?:lampiran\s+)?tabel\s+(\d+)\s*(?:[.:]\s*(.*))?$", re.IGNORECASE)
 _CAPTION_MAX_WORDS = 14
-# "(Lampiran Tabel 3)", "Tabel 3": a sentence's pointer to the table it reads.
-_CITED_RE = re.compile(r"\b(?:lampiran\s+)?tabel\s+(\d+)\b", re.IGNORECASE)
-_TITLE_FILLER = {"tabel", "dan", "atau", "yang", "per", "kondisi", "perkembangan", "lampiran", "menurut",
-                 "lapangan", "usaha"}
+# A sentence's pointers: "(Lampiran Tabel 3)", "(Tabel 3)", "(Lampiran 4 dan 5)", "(Tabel 1 dan Grafik 1)".
+_CITED_RE = re.compile(r"\b(lampiran\s+tabel|tabel|lampiran)\s+(\d+(?:\s*(?:,|dan|&)\s*\d+)*)\b",
+                       re.IGNORECASE)
+# A "Lampiran N" caption of its own (UB's "Lampiran 1. Tabel Uang Beredar …"). Without one, as in
+# SKDU, whose appendix is "Tabel 1 … Tabel 11" under one LAMPIRAN heading, "Lampiran 1" is Tabel 1.
+_LAMPIRAN_CAPTION_RE = re.compile(r"^\s*lampiran\s+\d+\b", re.IGNORECASE | re.MULTILINE)
 
 
 def table_captions(narrative_text: str) -> List[Tuple[int, str]]:
@@ -205,9 +209,15 @@ def table_captions(narrative_text: str) -> List[Tuple[int, str]]:
     return captions
 
 
-def _words(text: str) -> Set[str]:
-    words = {w for w in re.findall(r"[a-z]+", (text or "").lower()) if len(w) >= 3}
-    return words - _TITLE_FILLER
+def _cited(sentence: str, lampiran_captions: bool) -> List[str]:
+    """The tables a sentence points to, as 'Tabel N' / 'Lampiran N', in the order it names them."""
+    keys: List[str] = []
+    for m in _CITED_RE.finditer(sentence):
+        kind = "Lampiran" if m.group(1).lower() == "lampiran" and lampiran_captions else "Tabel"
+        for n in re.findall(r"\d+", m.group(2)):
+            if f"{kind} {int(n)}" not in keys:
+                keys.append(f"{kind} {int(n)}")
+    return keys
 
 
 def _missing_numbers(captions: Sequence[Tuple[int, str]]) -> List[int]:
@@ -242,44 +252,81 @@ def _numbering_result(captions: Sequence[Tuple[int, str]], problem: str) -> Fact
     )
 
 
-def _source_words(label: str, sources: Sequence) -> Set[str]:
-    src = next((s for s in sources if s.label == label), None)
-    if src is None:
-        return set()
-    return _words(f"{src.sheet} {src.table.title or ''}")
+# --- what a table prints ---------------------------------------------------------------------
+
+# A number as a table or a sentence prints it, the Indonesian way: "9.732,8", "7,7", "-0,58".
+_PRINTED_RE = re.compile(r"(?<![\w.,])-?\d{1,3}(?:\.\d{3})*(?:,\d+)?(?![\w]|[.,]\d)")
+_POINTER_RE = re.compile(r"\b(?:lampiran\s+tabel|tabel|lampiran|grafik|gambar|boks)\s+\d+"
+                         r"(?:\s*(?:,|dan|&)\s*\d+)*\b", re.IGNORECASE)
 
 
-def _best_caption(words: Set[str], titles: Dict[int, Set[str]]) -> Optional[int]:
-    """The one caption whose title shares the most words with a table, when one alone does."""
-    scored = sorted(((len(words & t), n) for n, t in titles.items()), reverse=True)
-    if not scored or scored[0][0] == 0 or (len(scored) > 1 and scored[1][0] == scored[0][0]):
+def _key(printed: str) -> str:
+    """'9.732,8' → '9732,8': the digits as printed, sign and thousands dots left out."""
+    return printed.lstrip("-").replace(".", "")
+
+
+def _printed(table_text: str) -> Set[str]:
+    return {_key(m) for m in _PRINTED_RE.findall(table_text)}
+
+
+def _sentence_figures(sentence: str) -> Dict[str, str]:
+    """The sentence's figures (key → as printed), without its pointers ("Tabel 3", "Grafik 1")
+    and its years."""
+    text = _POINTER_RE.sub(" ", sentence)
+    figures: Dict[str, str] = {}
+    for m in _PRINTED_RE.findall(text):
+        if not re.fullmatch(r"(?:19|20)\d\d", m):
+            figures.setdefault(_key(m), m.lstrip("-"))
+    return figures
+
+
+def _distinctive(figure: str) -> bool:
+    """A figure unlikely to be printed in a table by chance: one with decimals, or a level of
+    four digits or more. "3" or "10" turns up in every table."""
+    return "," in figure or len(figure) >= 4
+
+
+def _rounds_to(figure: str, printed: Set[str]) -> bool:
+    """The table prints `figure`, or a longer number the sentence rounded to it (1,58 → 1,6)."""
+    if figure in printed:
+        return True
+    decimals = len(figure.split(",")[1]) if "," in figure else 0
+    try:
+        target = Decimal(figure.replace(",", "."))
+    except InvalidOperation:
+        return False
+    step = Decimal(1).scaleb(-decimals)
+    for p in printed:
+        if "," not in p or len(p.split(",")[1]) <= decimals:
+            continue
+        if Decimal(p.replace(",", ".")).quantize(step, rounding=ROUND_HALF_UP) == target:
+            return True
+    return False
+
+
+# Two figures of the sentence printed in another table, and none in the one it cites: one shared
+# figure could be chance (a "2,6%" sits in many tables), two in the same table is where they come from.
+_MIN_FIGURES_ELSEWHERE = 2
+
+
+def _printed_elsewhere(cited: List[str], figures: List[str], printed: Dict[str, Set[str]]) -> Optional[str]:
+    """The one other table that prints the sentence's figures when the cited ones print none."""
+    if any(_rounds_to(f, printed[c]) for c in cited for f in figures):
+        return None
+    distinctive = [f for f in figures if _distinctive(f)]
+    scored = sorted(((sum(f in found for f in distinctive), key) for key, found in printed.items()
+                     if key not in cited), reverse=True)
+    if not scored or scored[0][0] < _MIN_FIGURES_ELSEWHERE or (len(scored) > 1 and scored[1][0] == scored[0][0]):
         return None
     return scored[0][1]
 
 
-def _reference_problem(cited: int, labels: Set[str], sources: Sequence,
-                       titles: Dict[int, Set[str]], caption_title: Dict[int, str]) -> Optional[str]:
-    if cited not in titles:
-        return f"Kalimat merujuk Tabel {cited}, tetapi tidak ada judul Tabel {cited} di dokumen"
-    tables = {label: _source_words(label, sources) for label in labels}
-    # Any figure of the sentence read from a table that fits the cited caption: the pointer holds.
-    if any(words & titles[cited] for words in tables.values()):
-        return None
-    fits = {_best_caption(words, titles) for words in tables.values()}
-    if len(fits) != 1 or None in fits:
-        return None
-    other = fits.pop()
-    if other == cited:
-        return None
-    return (f"Kalimat merujuk Tabel {cited} ('{caption_title[cited]}'), tetapi angkanya dari tabel "
-            f"'{next(iter(labels)).split(' / ')[-1]}', yang sesuai dengan Tabel {other} ('{caption_title[other]}')")
-
-
-def _reference_result(sentence: str, page: Optional[int], cited: int, problem: str) -> FactVerificationResult:
+def _reference_result(sentence: str, page: Optional[int], cited: List[str], problem: str,
+                      checked_from: str) -> FactVerificationResult:
     return FactVerificationResult(
-        operation="reference", metric_label=f"Rujukan Tabel {cited}", verdict="Refuted",
+        operation="reference", metric_label=f"Rujukan {' dan '.join(cited)}", verdict="Refuted",
         context_quote=sentence, page_number=page, resolved_via=RESOLVED_VIA,
-        reasoning=f"{problem} | Dicek dari judul tabel di dokumen dan tabel Excel yang menjawab kalimat ini",
+        reasoning=f"{problem} | Dicek dari {checked_from}, tanpa LLM",
     )
 
 
@@ -293,10 +340,14 @@ _MIN_CAPTIONS = 3
 
 
 def check_document(narrative_text: str, results: List[FactVerificationResult],
-                   sources: Sequence) -> List[FactVerificationResult]:
+                   table_texts: Optional[Dict[str, str]] = None) -> List[FactVerificationResult]:
     """`results` with the document's own mistakes added as Tidak Sesuai cards (see the module
     docstring). A trend claim that read a wrongly worded comparison the way the numbers go is
-    replaced by the comparison's card, so the sentence is not shown as both."""
+    replaced by the comparison's card, so the sentence is not shown as both.
+
+    `table_texts`: what each table of a Word document prints ('Tabel 3' → its picture's text,
+    word_extraction.WordDocument.table_texts). Without it, as for a PDF, a sentence's pointer is
+    only checked against the captions, not against what the table holds."""
     out = list(results)
     sentences = _sentences(narrative_text)
 
@@ -309,40 +360,53 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
             out.append(_comparison_result(sentence, page, a, b, word))
 
     captions = table_captions(narrative_text)
-    if len(captions) < _MIN_CAPTIONS:
-        return out
     # Numbering that starts again (NPI: the body's tables, each box's, the appendix's) or a
-    # two-column layout read across (1, 7, 2, 8, …) leaves "Tabel 3" naming several tables.
+    # two-column layout read across (1, 7, 2, 8, …) leaves "Tabel 3" naming several tables, and
+    # a picture under it may belong to another caption.
     numbers = [n for n, _ in captions]
     if any(b < a for a, b in zip(numbers, numbers[1:])):
         return out
-    cited_in: List[Tuple[str, Optional[int], int]] = []
-    for sentence, page in sentences:
-        cited = {int(n) for n in _CITED_RE.findall(sentence)}
-        if len(cited) == 1:
-            cited_in.append((sentence, page, cited.pop()))
-    citations: Dict[int, int] = {}
-    for _, _, number in cited_in:
-        citations[number] = citations.get(number, 0) + 1
-    problem = _numbering_problems(captions, citations)
-    if problem:
-        out.append(_numbering_result(captions, problem))
-    # A pointer to a number the numbering skips is that card's finding, not one per sentence.
-    skipped = set(_missing_numbers(captions))
-    titles: Dict[int, Set[str]] = {}
-    caption_title: Dict[int, str] = {}
-    for n, title in captions:
-        titles.setdefault(n, set()).update(_words(title))
-        caption_title.setdefault(n, title)
-    by_sentence: Dict[str, Set[str]] = {}
-    for r in results:
-        if r.verdict != "Inconclusive" and r.matched_excel_source and r.resolved_via != RESOLVED_VIA:
-            by_sentence.setdefault(_normalize_ws(r.context_quote), set()).add(r.matched_excel_source)
-    for sentence, page, number in cited_in:
-        labels = by_sentence.get(sentence, set())
-        if number in skipped or (number in titles and not labels):
+    lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(narrative_text)) or any(
+        key.startswith("Lampiran") for key in (table_texts or {}))
+    cited_in = [(sentence, page, _cited(sentence, lampiran_captions)) for sentence, page in sentences]
+    cited_in = [(sentence, page, cited) for sentence, page, cited in cited_in if cited]
+
+    # Against the captions: the numbering, and a pointer to a number no caption carries.
+    skipped: Set[int] = set()
+    captioned = set(numbers)
+    enough_captions = len(captions) >= _MIN_CAPTIONS
+    if enough_captions:
+        citations: Dict[int, int] = {}
+        for _, _, cited in cited_in:
+            for key in cited:
+                if key.startswith("Tabel "):
+                    n = int(key.split()[1])
+                    citations[n] = citations.get(n, 0) + 1
+        problem = _numbering_problems(captions, citations)
+        if problem:
+            out.append(_numbering_result(captions, problem))
+        # A pointer to a number the numbering skips is that card's finding, not one per sentence.
+        skipped = set(_missing_numbers(captions))
+
+    printed = {key: _printed(text) for key, text in (table_texts or {}).items()}
+    for sentence, page, cited in cited_in:
+        absent = [key for key in cited if key.startswith("Tabel ")
+                  and int(key.split()[1]) not in captioned and int(key.split()[1]) not in skipped]
+        if enough_captions and absent:
+            out.append(_reference_result(
+                sentence, page, absent, f"Kalimat merujuk {absent[0]}, tetapi tidak ada judul "
+                                        f"{absent[0]} di dokumen", "judul tabel di dokumen"))
             continue
-        found = _reference_problem(number, labels, sources, titles, caption_title)
-        if found:
-            out.append(_reference_result(sentence, page, number, found))
+        # Against what the tables print: every cited table has to be one whose picture was read.
+        if not printed or any(key not in printed for key in cited):
+            continue
+        figures = _sentence_figures(sentence)
+        other = _printed_elsewhere(cited, list(figures), printed) if figures else None
+        if other is None:
+            continue
+        shown = ", ".join(as_printed for key, as_printed in figures.items() if key in printed[other])
+        out.append(_reference_result(
+            sentence, page, cited,
+            f"Kalimat merujuk {' dan '.join(cited)}, tetapi angkanya ({shown}) tidak ada di tabel "
+            f"itu; angka tersebut ada di {other}", "isi tabel di dokumen"))
     return out

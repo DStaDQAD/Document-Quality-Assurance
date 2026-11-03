@@ -206,13 +206,19 @@ def _parsed_sources(doc: Document, data_root: Path):
     return sources
 
 
-def _narrative_of(doc: Document, data_root: Path) -> Optional[str]:
-    """The Word document's narrative as the endpoint reads it; None for a PDF (needs OCR)."""
+def _word_of(doc: Document, data_root: Path):
+    """The Word document as the endpoint reads it; None for a PDF (needs OCR)."""
     path = _resolve(doc.doc, data_root)
     if path.suffix.lower() != ".docx":
         return None
     from word_extraction import read_word_document
-    return read_word_document(path.read_bytes()).narrative_text
+    return read_word_document(path.read_bytes())
+
+
+def _narrative_of(doc: Document, data_root: Path) -> Optional[str]:
+    """The Word document's narrative as the endpoint reads it; None for a PDF (needs OCR)."""
+    word = _word_of(doc, data_root)
+    return word.narrative_text if word is not None else None
 
 
 def _catch_up_on_quotes(facts, narrative: str) -> None:
@@ -279,13 +285,13 @@ def cmd_replay(args) -> int:
             sources = _parsed_sources(doc, data_root)
             views = build_views(sources)
             judged = [evaluate_claim(claim_from_dict(c), views) for c in body["strict_claims"]]
-            narrative = _narrative_of(doc, data_root)
-            if narrative is not None:
+            word = _word_of(doc, data_root)
+            if word is not None:
                 from document_checks import check_document
                 from publication_parsers import skipped_sections
                 from structured_extractor import drop_sections
-                judged = check_document(drop_sections(narrative, skipped_sections(doc.publication)),
-                                        judged, sources)
+                judged = check_document(drop_sections(word.narrative_text, skipped_sections(doc.publication)),
+                                        judged, word.table_texts)
             (out / f"{doc.id}.json").write_text(json.dumps(
                 {"results": [r.model_dump() for r in judged], "_replay": {"strict": True}},
                 ensure_ascii=False, indent=1), encoding="utf-8")

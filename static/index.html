@@ -2373,7 +2373,7 @@ body.auth-locked .app {
             const against = {
               formula: "terhadap rumus klaim",
               comparison: "terhadap angka di kalimat itu sendiri",
-              reference: "terhadap judul tabel di dokumen",
+              reference: "terhadap judul dan isi tabel di dokumen",
             }[item.operation] || "terhadap klaim tren";
             comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">${against}</span>`;
           }

@@ -825,6 +825,7 @@ async def _run_paired_pipeline(
             publication=publication,
             review_llm=(get_review_llm(callbacks=callbacks) if _ai_review_enabled() else None),
             review_new_refuted=_ai_review_new_refuted(),
+            table_texts=word.table_texts if word is not None else None,
         ),
         _maybe_typo_check(),
     )

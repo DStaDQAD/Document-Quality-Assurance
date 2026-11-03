@@ -153,6 +153,34 @@ def test_a_chart_picture_is_neither_a_table_nor_unread():
     assert doc.tables == [] and doc.unread_tables == []
 
 
+# --- what each table prints (document_checks' table pointers) -------------------------------
+
+def test_every_picture_under_a_caption_without_a_period_is_its_text():
+    # SKDU: "Tabel 1" alone, the title on the next line; UB: levels and growth as two pictures.
+    doc = read_word_document(docx_bytes(
+        para("LAMPIRAN") + para("Tabel 1") + para("Kegiatan Usaha") + picture("rId1") + picture("rId2"),
+        {"image1.emf": emf_bytes([(0, 10, "Pertanian"), (50, 10, "11,46")]),
+         "image2.emf": emf_bytes([(0, 10, "Pertanian"), (50, 10, "-0,58")])}))
+    assert doc.table_texts == {"Tabel 1": "Pertanian 11,46 Pertanian -0,58"}
+
+
+def test_a_picture_pasted_from_an_english_excel_reads_the_indonesian_way():
+    doc = read_word_document(docx_bytes(
+        para(_CAPTION) + picture("rId1"),
+        {"image1.emf": emf_bytes([(0, 10, "Rupiah"), (50, 10, "8,110.6"), (90, 10, "6.3")])}))
+    assert doc.table_texts == {"Tabel 1": "Rupiah 8.110,6 6,3"}
+
+
+def test_lampiran_captions_are_their_own_and_pictures_without_text_or_after_a_chart_are_not():
+    doc = read_word_document(docx_bytes(
+        para("Lampiran 4. Kredit yang Disalurkan (Triliun Rp)") + picture("rId1")
+        + para("Tabel 2. Kredit UMKM") + picture("rId2")
+        + para("Grafik 1. Kredit") + picture("rId3"),
+        {"image1.emf": emf_bytes([(0, 10, "Kredit"), (50, 10, "7.800,8")]), "image2.png": _PNG,
+         "image3.emf": emf_bytes([(0, 10, "Kredit"), (50, 10, "10,9")])}))
+    assert doc.table_texts == {"Lampiran 4": "Kredit 7.800,8"}
+
+
 # --- narrative ------------------------------------------------------------------------------
 
 def test_narrative_is_clean_text_in_page_blocks():
