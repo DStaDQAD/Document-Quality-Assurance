@@ -440,8 +440,10 @@ table.history-table td.history-duration { white-space: nowrap; }
   .add-grid .arrow { display: none; }
   .change-item { grid-template-columns: minmax(0, 1fr); gap: 2px; }
 }
+/* The way back on the left, what the result is on the right. */
+.history-banner-info { margin-left: auto; display: inline-flex; align-items: center; gap: 8px; text-align: right; }
 .history-back {
-  margin-left: auto; border: none; background: none; cursor: pointer;
+  flex-shrink: 0; padding: 0; border: none; background: none; cursor: pointer;
   color: var(--blue-600); font-family: inherit; font-size: 13px; font-weight: 600;
 }
 .history-back:hover { text-decoration: underline; text-underline-offset: 3px; }
@@ -2779,9 +2781,9 @@ body.auth-locked .app {
     const who = summary.checker_name ? ` · oleh ${escapeHtml(summary.checker_name)}` : "";
     const pub = summary.publication ? ` · ${escapeHtml(publicationLabel(summary.publication))}` : "";
     return `<div class="history-banner">
-      <span class="material-symbols-outlined">history</span>
-      <span>Dari History · ${escapeHtml(formatWib(summary.created_at))}${pub}${who}</span>
       <button type="button" class="history-back">← Kembali ke History</button>
+      <span class="history-banner-info"><span class="material-symbols-outlined">history</span>
+        <span>Dari History · ${escapeHtml(formatWib(summary.created_at))}${pub}${who}</span></span>
     </div>`;
   }
 
@@ -3259,9 +3261,9 @@ body.auth-locked .app {
     container.classList.add("result-only");
     const bar = document.createElement("div");
     bar.className = "history-banner";
-    bar.innerHTML = `<span class="material-symbols-outlined">task_alt</span>
-      <span>Pengecekan selesai</span>
-      <button type="button" class="history-back">← Pengecekan baru</button>`;
+    bar.innerHTML = `<button type="button" class="history-back">← Pengecekan baru</button>
+      <span class="history-banner-info"><span class="material-symbols-outlined">task_alt</span>
+        <span>Pengecekan selesai</span></span>`;
     bar.querySelector(".history-back").addEventListener("click", resetPairedForm);
     resultEl.prepend(bar);
   }
