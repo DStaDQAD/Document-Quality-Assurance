@@ -354,7 +354,8 @@ table.history-table td.history-duration { white-space: nowrap; }
 }
 .settings-who .checker-field { margin-right: 0; }
 .settings-who .checker-field input { width: 220px; }
-.settings-who.is-missing .checker-field { border-color: var(--red-700); box-shadow: 0 0 0 3px var(--red-100); }
+.settings-who.is-missing .checker-field,
+.checker-field.is-missing { border-color: var(--red-700); box-shadow: 0 0 0 3px var(--red-100); }
 .pub-list { list-style: none; margin: 0; padding: 6px; }
 .pub-item {
   display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r);
@@ -1324,8 +1325,8 @@ body.auth-locked .app {
             <div class="card-footer">
               <label class="checker-field" title="Nama ini ikut tersimpan di History">
                 <span class="material-symbols-outlined">person</span>
-                <input type="text" id="checker-name" maxlength="80" autocomplete="name"
-                       placeholder="Nama pemeriksa (opsional)">
+                <input type="text" id="checker-name" maxlength="80" autocomplete="off"
+                       list="checker-names" placeholder="Pilih nama pemeriksa" aria-required="true">
               </label>
               <button type="button" class="cancel-btn" id="cancel-btn" hidden>
                 <span class="material-symbols-outlined">close</span>
@@ -1375,8 +1376,8 @@ body.auth-locked .app {
           <div class="card-footer">
             <label class="checker-field" title="Nama ini ikut tersimpan di History">
               <span class="material-symbols-outlined">person</span>
-              <input type="text" id="tr-checker-name" maxlength="80" autocomplete="name"
-                     placeholder="Nama pemeriksa (opsional)">
+              <input type="text" id="tr-checker-name" maxlength="80" autocomplete="off"
+                     list="checker-names" placeholder="Pilih nama pemeriksa" aria-required="true">
             </label>
             <button type="button" class="run-btn" id="tr-run">
               <span class="material-symbols-outlined">translate</span>
@@ -1439,9 +1440,12 @@ body.auth-locked .app {
         <div class="settings-who" id="settings-who">
           <label class="checker-field" title="Setiap perubahan dicatat dengan nama ini">
             <span class="material-symbols-outlined">person</span>
-            <input type="text" id="settings-name" maxlength="80" autocomplete="name" placeholder="Nama Anda">
+            <input type="text" id="settings-name" maxlength="80" autocomplete="off"
+                   list="checker-names" placeholder="Pilih nama Anda" aria-required="true">
           </label>
           <span id="settings-who-help"></span>
+          <!-- The team's checkers, for all three name fields (CHECKERS in the script). -->
+          <datalist id="checker-names"></datalist>
         </div>
         <div class="error-banner" id="settings-error" hidden></div>
         <div class="settings-layout">
@@ -2659,13 +2663,69 @@ body.auth-locked .app {
   }
 
   // ══ Check history: checker name + "saved" note ══════════════════════
-  // The checker's name is remembered per browser so it is typed once. Storage can be
-  // unavailable (private window, blocked site data); that must never break the form.
+  // The checker is picked from the team's list (typing filters it), so History and the Settings
+  // log spell each person one way, and no check runs without one. The name is remembered per
+  // browser so it is picked once. Storage can be unavailable (private window, blocked site data);
+  // that must never break the form.
+  const CHECKERS = [
+    "Agatha Yosephine Situmorang", "Aditya Wisnugraha Sugiyarto", "Akhmad Zacky Nugraha",
+    "Ais Nisa Maruntum", "Ahmad Rasyid Fadlilah Putera A", "Anggraini Widjanarti", "Arma Paramita",
+    "Asep B.Muhtar", "Berry A Harahap", "Candra Puspita Dewi", "Bartiana Sari",
+    "Binapri Vindy Turningtias", "Citra Mufidah Lestari", "Cendani Tri Meilani", "Diah Indira",
+    "Detasya Avri Magfira", "Desthy V.B. Sianipar", "Dwi Cahyo Ardianto", "Fathaliati Zikri Musev Putri",
+    "Farhan Hafizh", "Felicia Erinna Puspitaningtyas", "Firman Riyudha", "Fiona Rebecca Hutagaol",
+    "Hendro Binsar Sirait", "Ian Adicahya", "Insan Istafada", "Habibulloh Adi Negoro",
+    "Hanif Galih Pratama", "Linda Nurliana P.", "Lisbandiah Nurmalasari", "M. Rafid Farhan",
+    "Luthfi Ardiansyah", "Marlina Novita Uligoma", "Muhammad Azkaenza", "Mohammad Khoyrul Hidayat",
+    "Minda Putri Dwinanda", "Netha Aliffia", "Novia Nafisah", "Novita Suzanna", "Nur Isfandiarie Puteri",
+    "Nur Fikriyah Dzakiyah", "Putri Nurul Khasanah", "Oktefvia Aruda Lisjana",
+    "Putra Ramadhan Heru Hermawan", "Raesha Br Sebayang", "Retno Andrini", "Retno Wulan Sari",
+    "Rizqa Fatika Fajrianti", "Shafa Fathinah Salma", "Siti Rahmawati", "She Asa Handarzeni",
+    "Siti Selvina", "Sri Pujilestari", "syafrida amelia lubis", "Sony Panji Wicaksono", "Tiar Triyana",
+    "Vita Rosiana Dewi", "Larasati P. Ratusinkaya", "Rio Khasananda", "Ari Susanto",
+    "Inayatus Sholikhah", "Mutiara Shofa Amatullah", "Natasha Sonia Adityarini",
+  ].sort((a, b) => a.localeCompare(b, "id", { sensitivity: "base" }));
+  document.getElementById("checker-names").innerHTML =
+    CHECKERS.map((name) => `<option value="${escapeHtml(name)}"></option>`).join("");
+
+  // The listed name a typed one stands for, whatever its case and spacing; "" for any other text.
+  function listedChecker(value) {
+    const wanted = (value || "").trim().replace(/\s+/g, " ").toLowerCase();
+    return CHECKERS.find((name) => name.toLowerCase() === wanted) || "";
+  }
+
+  // After a name field changes: a listed name is written back as the list spells it and
+  // remembered; other text stays for the user to correct, and the field shows it is not listed.
+  function settleChecker(el) {
+    const name = listedChecker(el.value);
+    if (name) {
+      el.value = name;
+      try { localStorage.setItem(CHECKER_NAME_KEY, name); } catch (_) {}
+    }
+    el.closest(".checker-field").classList.toggle("is-missing", Boolean(el.value.trim()) && !name);
+    return name;
+  }
+
+  // Before a check: the field's listed name, or "" with the field marked and focused.
+  function requireChecker(el) {
+    const name = listedChecker(el.value);
+    if (!name) {
+      el.closest(".checker-field").classList.add("is-missing");
+      el.focus();
+    }
+    return name;
+  }
+  const CHECKER_REQUIRED = "Pilih nama pemeriksa dari daftar terlebih dahulu.";
+
   const CHECKER_NAME_KEY = "dqa.checkerName";
+  function rememberedChecker() {
+    try { return listedChecker(localStorage.getItem(CHECKER_NAME_KEY)); } catch (_) { return ""; }
+  }
   const checkerNameEl = document.getElementById("checker-name");
-  try { checkerNameEl.value = localStorage.getItem(CHECKER_NAME_KEY) || ""; } catch (_) {}
-  checkerNameEl.addEventListener("change", () => {
-    try { localStorage.setItem(CHECKER_NAME_KEY, checkerNameEl.value.trim()); } catch (_) {}
+  checkerNameEl.value = rememberedChecker();
+  checkerNameEl.addEventListener("change", () => settleChecker(checkerNameEl));
+  checkerNameEl.addEventListener("input", () => {
+    if (listedChecker(checkerNameEl.value)) checkerNameEl.closest(".checker-field").classList.remove("is-missing");
   });
 
   function renderHistoryNote(result) {
@@ -2990,10 +3050,13 @@ body.auth-locked .app {
   trPublication.insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
     .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
   const trCheckerEl = document.getElementById("tr-checker-name");
-  try { trCheckerEl.value = localStorage.getItem(CHECKER_NAME_KEY) || ""; } catch (_) {}
+  trCheckerEl.value = rememberedChecker();
   trCheckerEl.addEventListener("change", () => {
-    try { localStorage.setItem(CHECKER_NAME_KEY, trCheckerEl.value.trim()); } catch (_) {}
-    checkerNameEl.value = trCheckerEl.value.trim();
+    const name = settleChecker(trCheckerEl);
+    if (name) checkerNameEl.value = name;
+  });
+  trCheckerEl.addEventListener("input", () => {
+    if (listedChecker(trCheckerEl.value)) trCheckerEl.closest(".checker-field").classList.remove("is-missing");
   });
 
   // A publication without a press release (PPKom) or a report (M0, Cadev, SULNI) shows one row.
@@ -3061,7 +3124,7 @@ body.auth-locked .app {
     const form = new FormData();
     form.append("id_file", idFile);
     form.append("en_file", enFile);
-    const params = new URLSearchParams({ document: document_, checker_name: trCheckerEl.value.trim(),
+    const params = new URLSearchParams({ document: document_, checker_name: listedChecker(trCheckerEl.value),
                                          publication: trPublication.value || "" });
     const res = await fetch(`/api/check-translation?${params}`, { method: "POST", body: form });
     if (!res.ok) {
@@ -3082,6 +3145,10 @@ body.auth-locked .app {
     })).filter((j) => !j.row.hidden && j.id && j.en);
     if (!jobs.length) {
       resultEl.innerHTML = `<div class="error-banner">Upload versi Indonesia dan versi Inggris untuk minimal satu dokumen.</div>`;
+      return;
+    }
+    if (!requireChecker(trCheckerEl)) {
+      resultEl.innerHTML = `<div class="error-banner">${CHECKER_REQUIRED}</div>`;
       return;
     }
     const button = document.getElementById("tr-run");
@@ -3283,7 +3350,7 @@ body.auth-locked .app {
     const withTypo = document.getElementById("rule-typo").checked;
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
     const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
-    const checkerName = checkerNameEl.value.trim();
+    const checkerName = listedChecker(checkerNameEl.value);
     if (!publication) {
       resultEl.innerHTML = `<div class="error-banner">Pilih jenis publikasi terlebih dahulu.</div>`;
       return;
@@ -3294,6 +3361,10 @@ body.auth-locked .app {
     }
     if (!mode) {
       resultEl.innerHTML = `<div class="error-banner">Unggah tabel Excel terlebih dahulu: narasi dicek terhadap tabel Excel.</div>`;
+      return;
+    }
+    if (!requireChecker(checkerNameEl)) {
+      resultEl.innerHTML = `<div class="error-banner">${CHECKER_REQUIRED}</div>`;
       return;
     }
     // Internal mode compares against the PDF's own tables, so the Excel column is ignored
@@ -3401,11 +3472,12 @@ body.auth-locked .app {
                        document: "dokumen", reset: "pengaturan" };
 
   function settingsName() {
-    return settingsNameEl.value.trim();
+    return listedChecker(settingsNameEl.value);
   }
   function syncNameFields(value) {
     settingsNameEl.value = value;
     checkerNameEl.value = value;
+    trCheckerEl.value = value;
     try { localStorage.setItem(CHECKER_NAME_KEY, value); } catch (_) {}
   }
   // The line beside the name field is empty until a change is tried without a name.
@@ -3414,15 +3486,21 @@ body.auth-locked .app {
     settingsWho.classList.remove("is-missing");
     document.getElementById("settings-who-help").textContent = "";
   });
-  settingsNameEl.addEventListener("change", () => syncNameFields(settingsName()));
-  checkerNameEl.addEventListener("change", () => { settingsNameEl.value = checkerNameEl.value.trim(); });
+  settingsNameEl.addEventListener("change", () => {
+    const name = settleChecker(settingsNameEl);
+    if (name) syncNameFields(name);
+  });
+  checkerNameEl.addEventListener("change", () => {
+    const name = listedChecker(checkerNameEl.value);
+    if (name) settingsNameEl.value = trCheckerEl.value = name;
+  });
 
   // The name is asked for at the moment it is needed, next to the field, never in a dialog.
   function requireName() {
     if (settingsName()) return true;
     settingsWho.classList.add("is-missing");
     document.getElementById("settings-who-help").textContent =
-      "Isi nama Anda dulu: setiap perubahan dicatat dengan nama pengubahnya.";
+      "Pilih nama Anda dari daftar dulu: setiap perubahan dicatat dengan nama pengubahnya.";
     settingsNameEl.focus();
     return false;
   }
@@ -3447,7 +3525,7 @@ body.auth-locked .app {
 
   async function loadSettings(keepTab) {
     const request = ++settingsRequest;
-    settingsNameEl.value = checkerNameEl.value.trim();
+    settingsNameEl.value = listedChecker(checkerNameEl.value);
     if (!keepTab) settingsResetOpen = false;
     // The copy fetched at sign-in (refreshHiddenPublications) or on the last visit shows at once;
     // the fresh one replaces it when it arrives.
