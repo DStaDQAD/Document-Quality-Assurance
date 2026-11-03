@@ -53,7 +53,7 @@ def test_verify_paired_saves_the_check_and_returns_its_id(mock_vision, mock_extr
     assert response.status_code == 200
     history_id = response.json()["history_id"]
     assert history_id
-    items, _ = check_history.list_checks()
+    items, _, _ = check_history.list_checks()
     assert len(items) == 1
     saved = items[0]
     assert saved.id == history_id
@@ -81,7 +81,7 @@ def test_stream_saves_the_check_too(mock_vision, mock_extract, mock_verify):
 
     lines = [json.loads(line) for line in response.text.splitlines() if line.strip()]
     result = next(line["data"] for line in lines if line["type"] == "result")
-    items, _ = check_history.list_checks()
+    items, _, _ = check_history.list_checks()
     assert [i.id for i in items] == [result["history_id"]]
     assert items[0].checker_name is None
     assert items[0].publication is None
@@ -100,7 +100,7 @@ def test_both_endpoints_store_the_publication(mock_vision, mock_extract, mock_ve
                 params={"run_typo_check": "false", "publication": "shpr"},
                 files=[_PDF, _XLS])
 
-    items, _ = check_history.list_checks()
+    items, _, _ = check_history.list_checks()
     assert sorted(i.publication for i in items) == ["shpr", "uang-beredar"]
 
 
@@ -167,7 +167,7 @@ def test_a_failed_check_is_not_saved(mock_vision, mock_extract, mock_verify):
     )
 
     assert response.status_code == 400
-    assert check_history.list_checks() == ([], False)
+    assert check_history.list_checks() == ([], False, 0)
 
 
 def _seed(filename="laporan.pdf", **overrides):
@@ -205,9 +205,20 @@ def test_history_list_searches_and_pages():
 
 @pytest.mark.parametrize("asked, used", [(0, 1), (-5, 1), (1000, 100), (20, 20)])
 def test_history_list_clamps_limit(asked, used):
-    with patch("main.check_history.list_checks", return_value=([], False)) as mock_list:
+    with patch("main.check_history.list_checks", return_value=([], False, 0)) as mock_list:
         client.get("/api/history", params={"limit": asked, "offset": -3})
     assert mock_list.call_args.args[:2] == (used, 0)
+
+
+def test_history_list_passes_the_filters_and_the_total():
+    _seed("skdu.docx", publication="skdu")
+    _seed("ub.docx", publication="uang-beredar")
+
+    body = client.get("/api/history", params={"publication": "skdu", "date_from": "2026-01-01"}).json()
+    assert [i["filename"] for i in body["items"]] == ["skdu.docx"] and body["total"] == 1
+    # An unknown publication filters nothing; a malformed date is refused.
+    assert client.get("/api/history", params={"publication": "bukan"}).json()["total"] == 2
+    assert client.get("/api/history", params={"date_to": "kemarin"}).status_code == 422
 
 
 def test_history_detail_returns_summary_and_result():
@@ -225,7 +236,7 @@ def test_history_detail_returns_summary_and_result():
 def test_history_detail_unknown_id_is_404():
     response = client.get("/api/history/not-a-real-id")
     assert response.status_code == 404
-    assert "riwayat" in response.json()["detail"].lower()
+    assert "history" in response.json()["detail"].lower()
 
 
 def test_history_endpoints_answer_503_when_the_database_is_down():

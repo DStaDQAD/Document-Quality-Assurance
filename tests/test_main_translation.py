@@ -41,7 +41,7 @@ def test_check_translation_returns_the_report_and_saves_it(mock_check, mock_llm)
     assert mock_check.call_args.kwargs["document"] == "laporan"
     # Word documents are located by section, not page.
     assert mock_check.call_args.kwargs["id_is_word"] is True and mock_check.call_args.kwargs["en_is_word"] is True
-    items, _ = check_history.list_translation_checks()
+    items, _, _ = check_history.list_translation_checks()
     assert [(i.id, i.checker_name, i.publication, i.n_number) for i in items] == [
         (body["history_id"], "Ivan", "uang-beredar", 1)]
 

@@ -61,6 +61,7 @@ import re
 import secrets
 import time
 from collections import OrderedDict
+from datetime import date
 from pathlib import Path
 
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
@@ -1061,20 +1062,28 @@ _HISTORY_UNAVAILABLE = "History tidak dapat dibuka saat ini: database History ti
 
 
 @app.get("/api/history", response_model=CheckHistoryListResponse)
-async def list_history_endpoint(limit: int = 50, offset: int = 0, q: str = "") -> CheckHistoryListResponse:
+async def list_history_endpoint(limit: int = 50, offset: int = 0, q: str = "", publication: str = "",
+                                date_from: Optional[date] = None, date_to: Optional[date] = None,
+                                mismatch_only: bool = False) -> CheckHistoryListResponse:
     """The shared check history, newest first, without the stored results.
 
     q: matches the document's file name or the checker's name, case-insensitively.
-    limit: page size, 1-100. has_more says whether another page follows.
+    publication: one publication key; an unknown one filters nothing.
+    date_from, date_to: whole days in WIB, both included.
+    mismatch_only: only the checks with at least one Tidak Sesuai.
+    limit: page size, 1-100. has_more says whether another page follows; total counts every match.
     """
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     try:
-        items, has_more = await asyncio.to_thread(check_history.list_checks, limit, offset, q)
+        items, has_more, total = await asyncio.to_thread(
+            lambda: check_history.list_checks(
+                limit, offset, q, publication=check_history.normalize_publication(publication),
+                date_from=date_from, date_to=date_to, mismatch_only=mismatch_only))
     except Exception as exc:
         logger.warning("History list failed", exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
-    return CheckHistoryListResponse(items=items, has_more=has_more)
+    return CheckHistoryListResponse(items=items, has_more=has_more, total=total)
 
 
 @app.get("/api/history/{check_id}")
@@ -1088,7 +1097,7 @@ async def get_history_endpoint(check_id: str) -> JSONResponse:
         logger.warning("History read failed for %s", check_id, exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
     if entry is None:
-        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
+        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di History.")
     summary, result = entry
     return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
 
@@ -1162,17 +1171,22 @@ async def check_translation_endpoint(
 
 
 @app.get("/api/translation-history", response_model=TranslationHistoryListResponse)
-async def list_translation_history_endpoint(limit: int = 50, offset: int = 0,
-                                            q: str = "") -> TranslationHistoryListResponse:
-    """Stored Cek Terjemahan checks, newest first; q matches either file name or the checker."""
+async def list_translation_history_endpoint(limit: int = 50, offset: int = 0, q: str = "",
+                                            publication: str = "", date_from: Optional[date] = None,
+                                            date_to: Optional[date] = None) -> TranslationHistoryListResponse:
+    """Stored Cek Terjemahan checks, newest first; q matches either file name or the checker; the
+    other filters as /api/history has them."""
     limit = max(1, min(limit, 100))
     offset = max(0, offset)
     try:
-        items, has_more = await asyncio.to_thread(check_history.list_translation_checks, limit, offset, q)
+        items, has_more, total = await asyncio.to_thread(
+            lambda: check_history.list_translation_checks(
+                limit, offset, q, publication=check_history.normalize_publication(publication),
+                date_from=date_from, date_to=date_to))
     except Exception as exc:
         logger.warning("Translation history list failed", exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
-    return TranslationHistoryListResponse(items=items, has_more=has_more)
+    return TranslationHistoryListResponse(items=items, has_more=has_more, total=total)
 
 
 @app.get("/api/translation-history/{check_id}")
@@ -1184,7 +1198,7 @@ async def get_translation_history_endpoint(check_id: str) -> JSONResponse:
         logger.warning("Translation history read failed for %s", check_id, exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
     if entry is None:
-        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di riwayat.")
+        raise HTTPException(status_code=404, detail="Pengecekan ini tidak ada di History.")
     summary, result = entry
     return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
 

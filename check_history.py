@@ -16,7 +16,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -31,6 +31,8 @@ from schemas import CheckSummary, TranslationCheckSummary
 logger = logging.getLogger("fact-checker")
 
 LOCAL_DB_PATH = Path(__file__).parent / "history.db"
+# A History date filter means a day in Jakarta, where the team works.
+WIB = timezone(timedelta(hours=7))
 CHECKER_NAME_MAX_CHARS = 80
 
 # The publication types the upload card offers (its "Jenis publikasi" radios use these values;
@@ -213,22 +215,55 @@ def _row_to_summary(row) -> CheckSummary:
     return CheckSummary(**data)
 
 
-def list_checks(limit: int = 50, offset: int = 0, q: str = "") -> Tuple[List[CheckSummary], bool]:
-    """A page of summaries, newest first, and whether more follow.
+def _wib_day_start(day: date) -> datetime:
+    # In UTC: SQLite keeps no offset and compares the stored UTC text as written.
+    return datetime.combine(day, time.min, tzinfo=WIB).astimezone(timezone.utc)
 
-    `q` matches the file name or the checker's name, case-insensitively, as plain text: report
-    names are full of underscores, which LIKE would otherwise read as a wildcard.
-    """
-    query = select(*_SUMMARY_COLUMNS).order_by(checks.c.created_at.desc(), checks.c.id.desc())
+
+def _filters(table: Table, text_columns: List[Column], q: str, publication: Optional[str],
+             date_from: Optional[date], date_to: Optional[date]) -> list:
+    """The WHERE conditions the History filters share. `q` matches any of `text_columns` or the
+    checker's name, case-insensitively, as plain text: report names are full of underscores,
+    which LIKE would otherwise read as a wildcard. The dates are whole WIB days, both included."""
+    conditions = []
     needle = q.strip().lower()
     if needle:
-        query = query.where(or_(
-            func.lower(checks.c.filename).contains(needle, autoescape=True),
-            func.lower(func.coalesce(checks.c.checker_name, "")).contains(needle, autoescape=True),
+        conditions.append(or_(
+            *(func.lower(c).contains(needle, autoescape=True) for c in text_columns),
+            func.lower(func.coalesce(table.c.checker_name, "")).contains(needle, autoescape=True),
         ))
+    if publication:
+        conditions.append(table.c.publication == publication)
+    if date_from:
+        conditions.append(table.c.created_at >= _wib_day_start(date_from))
+    if date_to:
+        conditions.append(table.c.created_at < _wib_day_start(date_to + timedelta(days=1)))
+    return conditions
+
+
+def _page(columns: list, table: Table, conditions: list, limit: int, offset: int) -> Tuple[list, bool, int]:
+    """Newest first: the rows of one page, whether more follow, and how many match in all."""
+    query = (select(*columns).where(*conditions)
+             .order_by(table.c.created_at.desc(), table.c.id.desc()))
     with _get_engine().connect() as conn:
         rows = conn.execute(query.limit(limit + 1).offset(offset)).all()
-    return [_row_to_summary(r) for r in rows[:limit]], len(rows) > limit
+        total = conn.execute(select(func.count()).select_from(table).where(*conditions)).scalar_one()
+    return rows[:limit], len(rows) > limit, total
+
+
+def list_checks(limit: int = 50, offset: int = 0, q: str = "", *, publication: Optional[str] = None,
+                date_from: Optional[date] = None, date_to: Optional[date] = None,
+                mismatch_only: bool = False) -> Tuple[List[CheckSummary], bool, int]:
+    """A page of summaries, newest first, whether more follow, and how many match in all.
+
+    `q` matches the file name or the checker's name; `publication` is a key of PUBLICATIONS;
+    `mismatch_only` keeps the checks with at least one Tidak Sesuai.
+    """
+    conditions = _filters(checks, [checks.c.filename], q, publication, date_from, date_to)
+    if mismatch_only:
+        conditions.append(checks.c.n_mismatch > 0)
+    rows, has_more, total = _page(_SUMMARY_COLUMNS, checks, conditions, limit, offset)
+    return [_row_to_summary(r) for r in rows], has_more, total
 
 
 def get_check(check_id: str) -> Optional[Tuple[CheckSummary, Dict[str, Any]]]:
@@ -257,22 +292,15 @@ def _translation_summary(row) -> TranslationCheckSummary:
     return TranslationCheckSummary(**data)
 
 
-def list_translation_checks(limit: int = 50, offset: int = 0,
-                            q: str = "") -> Tuple[List[TranslationCheckSummary], bool]:
-    """A page of Cek Terjemahan summaries, newest first, and whether more follow; `q` matches
-    either file name or the checker's name, as list_checks does."""
+def list_translation_checks(limit: int = 50, offset: int = 0, q: str = "", *,
+                            publication: Optional[str] = None, date_from: Optional[date] = None,
+                            date_to: Optional[date] = None) -> Tuple[List[TranslationCheckSummary], bool, int]:
+    """A page of Cek Terjemahan summaries, as list_checks gives them; `q` matches either file
+    name or the checker's name."""
     t = translation_checks
-    query = select(*_TRANSLATION_SUMMARY_COLUMNS).order_by(t.c.created_at.desc(), t.c.id.desc())
-    needle = q.strip().lower()
-    if needle:
-        query = query.where(or_(
-            func.lower(t.c.id_filename).contains(needle, autoescape=True),
-            func.lower(t.c.en_filename).contains(needle, autoescape=True),
-            func.lower(func.coalesce(t.c.checker_name, "")).contains(needle, autoescape=True),
-        ))
-    with _get_engine().connect() as conn:
-        rows = conn.execute(query.limit(limit + 1).offset(offset)).all()
-    return [_translation_summary(r) for r in rows[:limit]], len(rows) > limit
+    conditions = _filters(t, [t.c.id_filename, t.c.en_filename], q, publication, date_from, date_to)
+    rows, has_more, total = _page(_TRANSLATION_SUMMARY_COLUMNS, t, conditions, limit, offset)
+    return [_translation_summary(r) for r in rows], has_more, total
 
 
 def get_translation_check(check_id: str) -> Optional[Tuple[TranslationCheckSummary, Dict[str, Any]]]:

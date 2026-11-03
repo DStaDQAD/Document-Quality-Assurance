@@ -277,6 +277,27 @@ table.history-table td.history-duration { white-space: nowrap; }
   font-size: 13px; color: var(--text-900);
 }
 .history-banner .material-symbols-outlined { font-size: 18px; color: var(--blue-400); }
+/* Under the search: publication, period, "Ada Tidak Sesuai", and how many checks match. */
+.history-filters {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 18px; border-bottom: 1px solid var(--border);
+}
+.history-filters select { width: auto; max-width: 260px; font-size: 12px; padding: 7px 10px; }
+.history-dates { display: inline-flex; align-items: center; gap: 6px; color: var(--text-400); }
+.history-dates[hidden] { display: none; }
+.history-dates input {
+  border: 1px solid var(--border); border-radius: var(--r); background: var(--page-bg);
+  padding: 6px 8px; font-size: 12px; color: var(--text-900);
+}
+.history-dates input:focus { outline: none; border-color: var(--blue-500); background: var(--white); }
+.history-flag { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-500); cursor: pointer; }
+.history-flag[hidden] { display: none; }
+.history-count { margin-left: auto; font-size: 12px; color: var(--text-400); white-space: nowrap; }
+.history-clear {
+  border: none; background: none; padding: 0; cursor: pointer;
+  color: var(--blue-600); font-family: inherit; font-size: 12px; font-weight: 600;
+}
+.history-clear:hover { text-decoration: underline; text-underline-offset: 3px; }
 /* Riwayat lists Verifikasi and Cek Terjemahan apart; the switch reuses the settings tab look. */
 .history-kinds { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--border); }
 
@@ -1381,6 +1402,27 @@ body.auth-locked .app {
                  aria-label="Cari di History menurut nama dokumen atau pemeriksa">
           <span class="history-legend" id="history-legend" aria-hidden="true">Hasil: <span class="is-match">✓ Sesuai</span> ·
             <span class="is-mismatch">✗ Tidak Sesuai</span> · <span class="is-unverified">? Tidak Cukup Data</span></span>
+        </div>
+        <div class="history-filters">
+          <select id="history-publication" aria-label="Filter publikasi">
+            <option value="">Semua publikasi</option>
+          </select>
+          <select id="history-period" aria-label="Filter waktu">
+            <option value="">Semua waktu</option>
+            <option value="0">Hari ini</option>
+            <option value="6">7 hari terakhir</option>
+            <option value="29">30 hari terakhir</option>
+            <option value="custom">Pilih tanggal…</option>
+          </select>
+          <span class="history-dates" id="history-dates" hidden>
+            <input type="date" id="history-from" aria-label="Dari tanggal">
+            <span aria-hidden="true">–</span>
+            <input type="date" id="history-to" aria-label="Sampai tanggal">
+          </span>
+          <label class="history-flag" id="history-flag">
+            <input type="checkbox" id="history-mismatch"> Ada Tidak Sesuai
+          </label>
+          <span class="history-count" id="history-count" aria-live="polite"></span>
         </div>
         <div class="error-banner history-busy" id="history-busy" hidden></div>
         <div id="history-list"></div>
@@ -2640,6 +2682,9 @@ body.auth-locked .app {
   const MODE_LABELS = { excel: "Excel", internal: "Intra-file", both: "Excel + intra-file", none: "Antar-file" };
   let historyItems = [];   // the summaries listed, by position; a row's data-idx points here
   let historyQuery = "";
+  // The filters under the search, sent to the server so "Muat lagi" pages through the matches.
+  // Dates are YYYY-MM-DD days in WIB; "" leaves that end open.
+  const historyFilter = { publication: "", from: "", to: "", mismatch: false };
   let historyRequest = 0;  // a newer search makes an older answer still in flight stale
   let historySearchTimer = null;
   // True while the Verifikasi button's run is in flight (set by its click handler). An entry
@@ -2716,8 +2761,12 @@ body.auth-locked .app {
       historyItems = [];
       listEl.innerHTML = `<p class="muted-text history-empty">Memuat History…</p>`;
     }
-    const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
     const translation = historyKind === "translation";
+    const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
+    if (historyFilter.publication) params.set("publication", historyFilter.publication);
+    if (historyFilter.from) params.set("date_from", historyFilter.from);
+    if (historyFilter.to) params.set("date_to", historyFilter.to);
+    if (historyFilter.mismatch && !translation) params.set("mismatch_only", "true");
     let page;
     try {
       page = await fetchJson(`${translation ? "/api/translation-history" : "/api/history"}?${params}`);
@@ -2732,8 +2781,9 @@ body.auth-locked .app {
     if (request !== historyRequest) return;
     historyItems = historyItems.concat(page.items);
     moreRow.hidden = !page.has_more;
+    renderHistoryCount(page.total);
     if (!historyItems.length) {
-      listEl.innerHTML = `<p class="muted-text history-empty">${historyQuery
+      listEl.innerHTML = `<p class="muted-text history-empty">${historyFiltered()
         ? "Tidak ada pengecekan yang cocok." : "Belum ada pengecekan yang tersimpan."}</p>`;
       return;
     }
@@ -2774,6 +2824,8 @@ body.auth-locked .app {
     });
     // The Sesuai / Tidak Sesuai legend belongs to Verifikasi's counts only.
     document.getElementById("history-legend").hidden = historyKind !== "paired";
+    // Cek Terjemahan has no Tidak Sesuai count to filter on.
+    document.getElementById("history-flag").hidden = historyKind !== "paired";
     loadHistory(true);
   });
 
@@ -2858,6 +2910,69 @@ body.auth-locked .app {
     if (row && e.key === "Enter") openListedEntry(Number(row.dataset.idx));
   });
   document.getElementById("history-more").addEventListener("click", () => loadHistory(false));
+  // Whether the list is narrowed at all: the search or any filter that applies to this list.
+  function historyFiltered() {
+    return Boolean(historyQuery || historyFilter.publication || historyFilter.from || historyFilter.to
+      || (historyFilter.mismatch && historyKind === "paired"));
+  }
+
+  function renderHistoryCount(total) {
+    const el = document.getElementById("history-count");
+    el.innerHTML = historyFiltered()
+      ? `${total} pengecekan cocok · <button type="button" class="history-clear">Hapus filter</button>`
+      : `${total} pengecekan`;
+  }
+
+  // A day in WIB as YYYY-MM-DD, `back` days before today.
+  function wibDay(back) {
+    const d = new Date(Date.now() - back * 86400000);
+    return d.toLocaleDateString("en-CA", { timeZone: "Asia/Jakarta" });
+  }
+
+  const historyPeriodEl = document.getElementById("history-period");
+  const historyFromEl = document.getElementById("history-from");
+  const historyToEl = document.getElementById("history-to");
+  document.getElementById("history-publication").insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
+    .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
+  document.getElementById("history-publication").addEventListener("change", (e) => {
+    historyFilter.publication = e.target.value;
+    loadHistory(true);
+  });
+  historyPeriodEl.addEventListener("change", () => {
+    const custom = historyPeriodEl.value === "custom";
+    document.getElementById("history-dates").hidden = !custom;
+    if (custom) {
+      // The two date fields take over; whatever they hold is the period.
+      historyFilter.from = historyFromEl.value;
+      historyFilter.to = historyToEl.value;
+    } else {
+      historyFilter.from = historyPeriodEl.value === "" ? "" : wibDay(Number(historyPeriodEl.value));
+      historyFilter.to = historyPeriodEl.value === "" ? "" : wibDay(0);
+    }
+    loadHistory(true);
+  });
+  [historyFromEl, historyToEl].forEach((el) => el.addEventListener("change", () => {
+    historyFilter.from = historyFromEl.value;
+    historyFilter.to = historyToEl.value;
+    loadHistory(true);
+  }));
+  document.getElementById("history-mismatch").addEventListener("change", (e) => {
+    historyFilter.mismatch = e.target.checked;
+    loadHistory(true);
+  });
+  document.getElementById("history-count").addEventListener("click", (e) => {
+    if (!e.target.closest(".history-clear")) return;
+    Object.assign(historyFilter, { publication: "", from: "", to: "", mismatch: false });
+    historyQuery = "";
+    document.getElementById("history-search").value = "";
+    document.getElementById("history-publication").value = "";
+    historyPeriodEl.value = "";
+    historyFromEl.value = historyToEl.value = "";
+    document.getElementById("history-dates").hidden = true;
+    document.getElementById("history-mismatch").checked = false;
+    loadHistory(true);
+  });
+
   document.getElementById("history-search").addEventListener("input", (e) => {
     clearTimeout(historySearchTimer);
     historySearchTimer = setTimeout(() => {

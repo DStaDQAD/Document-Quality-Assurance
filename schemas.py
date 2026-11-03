@@ -309,6 +309,7 @@ class CheckSummary(BaseModel):
 class CheckHistoryListResponse(BaseModel):
     items: List[CheckSummary]
     has_more: bool
+    total: int = 0       # every match of the filters, not just this page
 
 
 # ── Cek Terjemahan: the English version checked against the Indonesian one ────────────────────
@@ -372,3 +373,4 @@ class TranslationCheckSummary(BaseModel):
 class TranslationHistoryListResponse(BaseModel):
     items: List[TranslationCheckSummary]
     has_more: bool
+    total: int = 0       # every match of the filters, not just this page

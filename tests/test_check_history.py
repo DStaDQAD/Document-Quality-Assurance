@@ -1,7 +1,7 @@
 import gzip
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import create_engine, select, text
@@ -64,7 +64,7 @@ def test_list_is_newest_first_and_carries_no_result(clock):
     first = _save("a.pdf")
     second = _save("b.pdf")
 
-    items, has_more = check_history.list_checks()
+    items, has_more, _ = check_history.list_checks()
 
     assert [i.id for i in items] == [second, first]
     assert has_more is False
@@ -74,7 +74,7 @@ def test_list_is_newest_first_and_carries_no_result(clock):
 def test_created_at_comes_back_as_utc(clock):
     _save()
 
-    items, _ = check_history.list_checks()
+    items, _, _ = check_history.list_checks()
 
     assert items[0].created_at == datetime(2026, 9, 28, 7, 0, tzinfo=timezone.utc)
     assert items[0].created_at.utcoffset() == timedelta(0)
@@ -83,7 +83,7 @@ def test_created_at_comes_back_as_utc(clock):
 def test_lists_round_trip(clock):
     _save(excel_files=["TABEL1_1.xls", "TABEL2_1.xls"], reference_files=["M2_Juli.pdf"])
 
-    items, _ = check_history.list_checks()
+    items, _, _ = check_history.list_checks()
 
     assert items[0].excel_files == ["TABEL1_1.xls", "TABEL2_1.xls"]
     assert items[0].reference_files == ["M2_Juli.pdf"]
@@ -109,13 +109,58 @@ def test_search_treats_like_wildcards_literally(clock):
 def test_limit_offset_and_has_more(clock):
     ids = [_save(f"r{i}.pdf") for i in range(5)]
 
-    page1, more1 = check_history.list_checks(limit=2)
-    page3, more3 = check_history.list_checks(limit=2, offset=4)
+    page1, more1, _ = check_history.list_checks(limit=2)
+    page3, more3, _ = check_history.list_checks(limit=2, offset=4)
 
     assert [p.id for p in page1] == [ids[4], ids[3]]
     assert more1 is True
     assert [p.id for p in page3] == [ids[0]]
     assert more3 is False
+
+
+def test_filter_by_publication_and_mismatch_with_the_total(clock):
+    _save("skdu_a.docx", publication="skdu", n_mismatch=2)
+    _save("skdu_b.docx", publication="skdu")
+    _save("ub.docx", publication="uang-beredar", n_mismatch=1)
+
+    skdu, more, total = check_history.list_checks(publication="skdu")
+    assert [i.filename for i in skdu] == ["skdu_b.docx", "skdu_a.docx"] and not more and total == 2
+    flagged = check_history.list_checks(mismatch_only=True)[0]
+    assert [i.filename for i in flagged] == ["ub.docx", "skdu_a.docx"]
+    assert [i.filename for i in check_history.list_checks(publication="skdu", mismatch_only=True)[0]] == ["skdu_a.docx"]
+
+
+def test_total_counts_every_match_not_just_the_page(clock):
+    for i in range(5):
+        _save(f"r{i}.pdf")
+    items, more, total = check_history.list_checks(limit=2)
+    assert len(items) == 2 and more and total == 5
+
+
+def test_date_filter_is_whole_wib_days(monkeypatch):
+    # 27 Sep 23:30 WIB, 28 Sep 00:30 WIB, 28 Sep 23:30 WIB, 29 Sep 00:30 WIB — in UTC.
+    times = iter([datetime(2026, 9, 27, 16, 30, tzinfo=timezone.utc), datetime(2026, 9, 27, 17, 30, tzinfo=timezone.utc),
+                  datetime(2026, 9, 28, 16, 30, tzinfo=timezone.utc), datetime(2026, 9, 28, 17, 30, tzinfo=timezone.utc)])
+    monkeypatch.setattr(check_history, "_now", lambda: next(times))
+    for name in ("27-late", "28-early", "28-late", "29-early"):
+        _save(name)
+
+    def names(**kw):
+        return [i.filename for i in check_history.list_checks(**kw)[0]]
+
+    day = date(2026, 9, 28)
+    assert names(date_from=day, date_to=day) == ["28-late", "28-early"]
+    assert names(date_from=day) == ["29-early", "28-late", "28-early"]
+    assert names(date_to=day) == ["28-late", "28-early", "27-late"]
+
+
+def test_translation_list_filters_by_publication_and_date(clock):
+    _tsave("sk.docx", publication="sk")
+    _tsave("ub.docx", publication="uang-beredar")
+
+    items, _, total = check_history.list_translation_checks(publication="sk")
+    assert [i.en_filename for i in items] == ["sk.docx"] and total == 1
+    assert check_history.list_translation_checks(date_from=date(2026, 9, 29))[0] == []
 
 
 def test_unknown_id_is_none():
@@ -219,7 +264,7 @@ def _tsave(en_filename="UB_EN.docx", result=None, **overrides):
 def test_translation_check_round_trips_and_lists_apart_from_checks(clock):
     tid = _tsave(n_number=1, n_meaning=2, result={"pairs": [{"index": 0}]})
 
-    items, more = check_history.list_translation_checks()
+    items, more, _ = check_history.list_translation_checks()
     assert [i.id for i in items] == [tid] and not more
     assert items[0].n_number == 1 and items[0].n_meaning == 2
     assert check_history.list_checks()[0] == []
