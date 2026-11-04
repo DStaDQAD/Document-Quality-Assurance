@@ -2142,7 +2142,7 @@ body.auth-locked .app {
     is_increasing: "Tren Naik", is_decreasing: "Tren Turun", is_stable: "Tren Stabil",
     above_threshold: "Di Atas Ambang", below_threshold: "Di Bawah Ambang",
     ranking: "Tertinggi/Terendah", formula: "Perhitungan",
-    comparison: "Perbandingan", reference: "Rujukan Tabel",
+    comparison: "Perbandingan", reference: "Rujukan Tabel/Grafik",
   };
 
   function fmtNumber(val) {
@@ -2250,13 +2250,19 @@ body.auth-locked .app {
     })() : "";
 
     // A Word report names a table by caption but its picture could not be read (a PNG, or no
-    // picture at all). Claims only that table could answer come back Tidak Cukup Data; say why.
+    // picture at all), and its charts are never read. Say which, and what was checked instead.
     const unread = data.unread_tables || [];
-    const unreadStrip = unread.length ? `<div class="conflict-strip gap-strip">
+    const charts = data.charts_title_only || 0;
+    const ownTables = data.mode === "internal" || data.mode === "both";
+    const unreadLine = unread.length ? `<strong>Isi ${unread.length} tabel tidak bisa dibaca dari dokumen ini.</strong>
+        ${ownTables ? "Klaim yang hanya bisa dijawab tabel tersebut akan berstatus Tidak Cukup Data; rujukan ke tabel itu dicek dari judulnya."
+                    : "Rujukan &ldquo;(Tabel N)&rdquo; ke tabel tersebut hanya dicek dari judulnya."}
+        <span class="gap-reason">${unread.map(escapeHtml).join("<br>")}</span>` : "";
+    const chartLine = charts ? `<span class="gap-reason">${charts} grafik: isinya tidak dibaca;
+        rujukan &ldquo;(Grafik N)&rdquo; dicek dari judul grafiknya.</span>` : "";
+    const unreadStrip = unread.length || charts ? `<div class="conflict-strip gap-strip">
         <span class="material-symbols-outlined">table_chart</span>
-        <span><strong>${unread.length} tabel tidak bisa dibaca dari dokumen ini.</strong>
-        Klaim yang hanya bisa dijawab tabel tersebut akan berstatus Tidak Cukup Data.
-        <span class="gap-reason">${unread.map(escapeHtml).join("<br>")}</span></span>
+        <span>${unreadLine}${chartLine}</span>
       </div>` : "";
 
     const header = `<div class="report-top">
@@ -2377,7 +2383,7 @@ body.auth-locked .app {
             const against = {
               formula: "terhadap rumus klaim",
               comparison: "terhadap angka di kalimat itu sendiri",
-              reference: "terhadap judul dan isi tabel di dokumen",
+              reference: "terhadap judul dan isi tabel/grafik di dokumen",
             }[item.operation] || "terhadap klaim tren";
             comparison = `<span class="fact-val ${valCls}">${escapeHtml(VERDICT_LABEL[verdict] || verdict)}</span> <span class="fact-val-label">${against}</span>`;
           }

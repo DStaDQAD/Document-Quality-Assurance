@@ -236,3 +236,45 @@ def test_a_list_of_tables_is_not_a_run_of_captions():
 def test_a_document_with_few_captions_has_no_missing_caption_check():
     sentence = "Margin usaha terendah sebesar 11,29% (Lampiran Tabel 12)."
     assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX[:2]), [], {})) == []
+
+
+# --- charts: captions, numbering, pointers (never their content) ------------------------------
+
+CHARTS = ["Grafik 1. Neraca Pembayaran Indonesia", "Grafik 2", "Transaksi Berjalan",
+          "Grafik 3. Neraca Perdagangan Nonmigas", "Grafik 4. Pertumbuhan Ekspor Nonmigas"]
+
+
+def _with_charts(*sentences, charts=CHARTS):
+    return _narrative(*sentences, appendix=APPENDIX) + "\n".join(charts) + "\n"
+
+
+def test_chart_captions_are_read_and_a_list_of_charts_is_not():
+    contents = ["DAFTAR GRAFIK", "Grafik 1", "Neraca Pembayaran Indonesia", "3", "Grafik 13", "Posisi PMI", "14"]
+    text = "\n".join(["[== Halaman 1 ==]"] + contents) + "\n" + _with_charts("Teks.")
+    assert dc.chart_titles(text) == {"Grafik 1": "Neraca Pembayaran Indonesia", "Grafik 2": "Transaksi Berjalan",
+                                     "Grafik 3": "Neraca Perdagangan Nonmigas",
+                                     "Grafik 4": "Pertumbuhan Ekspor Nonmigas"}
+
+
+def test_a_sentence_citing_a_chart_the_document_lacks_is_tidak_sesuai():
+    sentence = "Ekspor nonmigas tumbuh 10,5% (Grafik 12)."
+    [found] = _findings(dc.check_document(_with_charts(sentence), [], PRINTED))
+    assert found.metric_label == "Rujukan Grafik 12" and "tidak ada judul Grafik 12" in found.reasoning
+
+
+def test_chart_numbering_is_checked_like_table_numbering():
+    charts = CHARTS[:4] + ["Grafik 3. Pertumbuhan Ekspor Nonmigas"]
+    [found] = _findings(dc.check_document(_with_charts("Teks.", charts=charts), [], PRINTED))
+    assert found.metric_label == "Nomor grafik" and "Grafik 3 dipakai 2 kali" in found.reasoning
+
+
+def test_every_chart_pointer_with_a_caption_is_left_to_the_model():
+    sentence = "Ekspor nonmigas tumbuh 10,5% (Tabel 1 dan Grafik 4)."
+    titles, items = dc.open_pointers(_with_charts(sentence), PRINTED)
+    assert titles["Grafik 4"] == "Pertumbuhan Ekspor Nonmigas"
+    assert [keys for _, keys in items] == [["Tabel 1"], ["Grafik 4"]]
+
+
+def test_a_pdf_has_no_chart_check_either():
+    sentence = "Ekspor nonmigas tumbuh 10,5% (Grafik 12)."
+    assert _findings(dc.check_document(_with_charts(sentence), [])) == []

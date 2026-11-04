@@ -115,7 +115,8 @@ from schemas import (
 from translation_check import check_translation
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
-from word_extraction import is_legacy_word_document, is_word_document, read_word_document
+from word_extraction import WordDocument, is_legacy_word_document, is_word_document, read_word_document
+from document_checks import chart_titles
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("fact-checker")
@@ -604,6 +605,17 @@ async def _record_in_history(
     return response.model_copy(update={"history_id": check_id})
 
 
+def _unread_tables(word: Optional[WordDocument], mode: str) -> List[str]:
+    """The Word report's tables whose content was not read. Against its own tables ("internal",
+    "both") every caption the reader could not build a table from; against the Excel only, the
+    ones whose picture holds no text (a PNG, a JPEG), whose pointers are judged from the caption."""
+    if word is None:
+        return []
+    if mode in ("internal", "both"):
+        return word.unread_tables
+    return list(word.unreadable_tables.values())
+
+
 async def _run_paired_pipeline(
     pdf_bytes: bytes,
     pdf_filename: str,
@@ -826,6 +838,7 @@ async def _run_paired_pipeline(
             review_llm=(get_review_llm(callbacks=callbacks) if _ai_review_enabled() else None),
             review_new_refuted=_ai_review_new_refuted(),
             table_texts=word.table_texts if word is not None else None,
+            unreadable_tables=word.unreadable_tables if word is not None else None,
         ),
         _maybe_typo_check(),
     )
@@ -863,8 +876,8 @@ async def _run_paired_pipeline(
         "typo_check": typo_result,
         "number_format_notice": notice,
         "coverage_gaps": coverage_gaps,
-        "unread_tables": (word.unread_tables
-                          if word is not None and mode in ("internal", "both") else []),
+        "unread_tables": _unread_tables(word, mode),
+        "charts_title_only": len(chart_titles(word.narrative_text)) if word is not None else 0,
     })
     return await _record_in_history(
         response,

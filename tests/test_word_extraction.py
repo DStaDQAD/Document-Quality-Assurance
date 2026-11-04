@@ -280,3 +280,20 @@ def test_a_layout_table_holding_the_picture_does_not_close_the_caption():
     doc = read_word_document(docx_bytes(para(_CAPTION) + layout,
                                         {"image1.emf": emf_bytes(SNIPPET_RUNS)}))
     assert len(doc.tables) == 2 and doc.unread_tables == []
+
+
+def test_a_table_whose_picture_holds_no_text_is_named_with_its_title():
+    doc = read_word_document(docx_bytes(
+        para("Tabel 1") + para("Indeks Keyakinan Konsumen") + picture("rId1")
+        + para("Tabel 2. Kredit UMKM") + picture("rId2"),
+        {"image1.png": _PNG, "image2.emf": emf_bytes([(0, 10, "Kredit"), (50, 10, "2,6")])}))
+    assert doc.unreadable_tables == {
+        "Tabel 1": "Tabel 1. Indeks Keyakinan Konsumen — gambar PNG, isinya tidak bisa dibaca"}
+
+
+def test_a_png_beside_the_tables_emf_does_not_make_it_unread():
+    # SHPR, PPKom: a small PNG and the table's EMF under one caption.
+    doc = read_word_document(docx_bytes(
+        para("Tabel 3. Indeks Harga") + picture("rId1") + picture("rId2"),
+        {"image1.png": _PNG, "image2.emf": emf_bytes([(0, 10, "Kota"), (50, 10, "1,9")])}))
+    assert doc.unreadable_tables == {} and doc.table_texts == {"Tabel 3": "Kota 1,9"}

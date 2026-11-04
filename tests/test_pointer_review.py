@@ -48,7 +48,7 @@ def test_a_pointer_without_figures_or_with_unprinted_ones_is_open():
     titles, opened = dc.open_pointers(_narrative(no_figure, wrong_figure), PRINTED)
     assert titles == {"Tabel 1": "Kegiatan Usaha", "Tabel 2": "Kapasitas Produksi Terpakai",
                       "Tabel 3": "Kondisi Keuangan dan Akses Kredit", "Tabel 4": "Penggunaan Tenaga Kerja"}
-    assert [p.sentence for p in opened] == [no_figure, wrong_figure]
+    assert [(p.sentence, keys) for p, keys in opened] == [(no_figure, ["Tabel 2"]), (wrong_figure, ["Tabel 2"])]
 
 
 def test_figures_another_table_prints_more_of_leave_the_pointer_open_and_a_tie_holds():
@@ -56,7 +56,7 @@ def test_figures_another_table_prints_more_of_leave_the_pointer_open_and_a_tie_h
     # "10,3" (with one other table printing them, the code itself finds the pointer wrong).
     sentence = "Kapasitas produksi terpakai sebesar 73,75%, dari 73,16% (Lampiran Tabel 1)."
     more = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75", "Tabel 3": PRINTED["Tabel 3"] + " 73,75 73,16"}
-    assert [p.cited for p in dc.open_pointers(_narrative(sentence), more)[1]] == [["Tabel 1"]]
+    assert [keys for _, keys in dc.open_pointers(_narrative(sentence), more)[1]] == [["Tabel 1"]]
     # SKDU prints a LU's SBT in several tables: as many figures in the cited one settles it.
     tie = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75 73,16"}
     assert dc.open_pointers(_narrative(sentence), tie)[1] == []
@@ -65,7 +65,7 @@ def test_figures_another_table_prints_more_of_leave_the_pointer_open_and_a_tie_h
 def test_an_open_pointer_carries_the_sentences_before_it():
     lead = "Penggunaan tenaga kerja pada triwulan II 2026 tercatat menurun."
     sentence = "Hal tersebut tecermin dari SBT sebesar -0,45% (Lampiran Tabel 4)."
-    [opened] = dc.open_pointers(_narrative(lead, sentence), PRINTED)[1]
+    [(opened, _)] = dc.open_pointers(_narrative(lead, sentence), PRINTED)[1]
     assert opened.sentence == sentence and opened.before == lead
 
 
@@ -78,7 +78,7 @@ def test_a_pointer_that_also_names_a_chart_is_left_to_the_model():
     # UB Juli 2026: Tabel 1 prints the levels, Grafik 1 the growth; Tabel 2 prints both.
     printed = {**PRINTED, "Tabel 1": "M2 10.371,1", "Tabel 2": "M2 10.371,1 8,3 8,7"}
     sentence = "M2 tercatat Rp10.371,1 triliun, tumbuh 8,3%, dari 8,7% (Tabel 1 dan Grafik 1)."
-    assert [p.cited for p in dc.open_pointers(_narrative(sentence), printed)[1]] == [["Tabel 1"]]
+    assert [keys for _, keys in dc.open_pointers(_narrative(sentence), printed)[1]] == [["Tabel 1"]]
     assert [r for r in dc.check_document(_narrative(sentence), [], printed) if r.operation == "reference"] == []
 
 
@@ -125,3 +125,42 @@ def test_no_open_pointer_means_no_call():
     text = _narrative("Kapasitas produksi terpakai sebesar 73,75% (Lampiran Tabel 2).")
     assert asyncio.run(pr.review_pointers(text, [], PRINTED, _llm([], calls))) == []
     assert calls == []
+
+
+# --- charts and unreadable tables --------------------------------------------------------------
+
+def _with_charts(*sentences):
+    return _narrative(*sentences) + "Grafik 1. Kegiatan Usaha\nGrafik 2. Harga Jual\n"
+
+
+def test_a_chart_pointer_the_model_says_names_another_chart_is_tidak_sesuai():
+    sentence = "Harga jual diprakirakan meningkat (Grafik 1)."
+    llm = _llm([pr._Judgement(index=0, fits=False, table="Grafik 2", about="harga jual")], [])
+    [card] = asyncio.run(pr.review_pointers(_with_charts(sentence), [], PRINTED, llm))
+    assert card.metric_label == "Rujukan Grafik 1"
+    assert card.reasoning.startswith("Kalimat ini tentang harga jual, yang ditampilkan di Grafik 2 "
+                                     "('Harga Jual'), bukan di Grafik 1 ('Kegiatan Usaha')")
+    assert "judul grafik; isi grafik tidak dibaca" in card.reasoning
+
+
+def test_a_chart_pointer_answered_with_a_table_adds_nothing():
+    sentence = "Harga jual diprakirakan meningkat (Grafik 1)."
+    llm = _llm([pr._Judgement(index=0, fits=False, table="Tabel 3", about="x")], [])
+    assert asyncio.run(pr.review_pointers(_with_charts(sentence), [], PRINTED, llm)) == []
+
+
+def test_a_card_on_an_unread_table_says_so():
+    sentence = "Peritel menerapkan potongan harga akhir tahun (Lampiran Tabel 2)."
+    printed = {key: text for key, text in PRINTED.items() if key != "Tabel 2"}
+    unreadable = {"Tabel 2": "Tabel 2. Kapasitas Produksi Terpakai — gambar PNG, isinya tidak bisa dibaca"}
+    llm = _llm([pr._Judgement(index=0, fits=False, table="Tabel 1", about="kegiatan usaha")], [])
+    [card] = asyncio.run(pr.review_pointers(_narrative(sentence), [], printed, llm, unreadable))
+    assert "isi Tabel 2 tidak terbaca (gambar PNG)" in card.reasoning
+
+
+def test_a_chart_whose_title_names_what_the_sentence_names_keeps_its_pointer():
+    # SK Agustus 2026: saving to income ratio (Grafik 18, "Komposisi Penggunaan Pendapatan …").
+    sentence = "Proporsi pendapatan konsumen yang disimpan sebesar 15,8% (Grafik 1)."
+    text = _narrative(sentence) + "Grafik 1. Komposisi Penggunaan Pendapatan Rumah Tangga\nGrafik 2. Rasio Konsumsi\n"
+    llm = _llm([pr._Judgement(index=0, fits=False, table="Grafik 2", about="rasio tabungan")], [])
+    assert asyncio.run(pr.review_pointers(text, [], PRINTED, llm)) == []

@@ -201,3 +201,13 @@ def test_a_docx_with_broken_xml_is_refused_as_a_word_file():
     response = client.post("/api/verify-paired?mode=internal", files=upload)
     assert response.status_code == 400
     assert "rusak" in response.json()["detail"]
+
+
+
+def test_excel_mode_names_the_tables_whose_picture_holds_no_text():
+    from word_extraction import WordDocument
+    word = WordDocument(narrative_text="", unread_tables=["Tabel 9. X — tidak bisa disusun"],
+                        unreadable_tables={"Tabel 3": "Tabel 3. Y — gambar PNG, isinya tidak bisa dibaca"})
+    assert main._unread_tables(word, "excel") == ["Tabel 3. Y — gambar PNG, isinya tidak bisa dibaca"]
+    assert main._unread_tables(word, "both") == ["Tabel 9. X — tidak bisa disusun"]
+    assert main._unread_tables(None, "excel") == []

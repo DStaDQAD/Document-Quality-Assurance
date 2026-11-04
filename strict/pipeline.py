@@ -91,6 +91,7 @@ async def run_check(
     excel_parsers: List[str],
     mode: str = "excel",
     table_texts: Optional[Dict[str, str]] = None,
+    unreadable_tables: Optional[Dict[str, str]] = None,
 ) -> PairedVerificationResponse:
     def emit(stage: str, status: str, **extra) -> None:
         if progress_cb is not None:
@@ -130,9 +131,10 @@ async def run_check(
     # After the review, which never sees them: the report's own comparisons, table pointers and
     # table numbering, checked by the code alone.
     results = check_document(text, results, table_texts)
-    # The table pointers the numbers leave open, read by the model from each sentence's subject.
+    # The table pointers the numbers leave open, and every chart pointer, read by the model from
+    # each sentence's subject and the titles.
     try:
-        results = await review_pointers(text, results, table_texts, llm)
+        results = await review_pointers(text, results, table_texts, llm, unreadable_tables)
     except Exception:
         logger.warning("Tinjauan AI rujukan tabel gagal; kartu dari kode tetap dipakai", exc_info=True)
     entailed =sum(r.verdict == "Entailed" for r in results)

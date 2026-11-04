@@ -12,7 +12,7 @@ Each finding is one Tidak Sesuai card (operation "comparison" or "reference"), a
 claims are judged, so it never changes how a claim is read.
 """
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Dict, List, Optional, Sequence, Set, Tuple
 
@@ -187,6 +187,10 @@ _CAPTION_MAX_WORDS = 14
 # A sentence's pointers: "(Lampiran Tabel 3)", "(Tabel 3)", "(Lampiran 4 dan 5)", "(Tabel 1 dan Grafik 1)".
 _CITED_RE = re.compile(r"\b(lampiran\s+tabel|tabel|lampiran)\s+(\d+(?:\s*(?:,|dan|&)\s*\d+)*)\b",
                        re.IGNORECASE)
+# "Grafik 4. Pertumbuhan Ekspor Nonmigas", or "Grafik 4" with its title on the next line.
+_CHART_CAPTION_RE = re.compile(r"^\s*grafik\s+(\d+)\s*(?:[.:]\s*(.*))?$", re.IGNORECASE)
+# A sentence's pointers to charts: "(Grafik 3)", "(Tabel 1 dan Grafik 1)", "(Grafik 2 dan 3)".
+_CHART_CITED_RE = re.compile(r"\bgrafik\s+(\d+(?:\s*(?:,|dan|&)\s*\d+)*)\b", re.IGNORECASE)
 # A "Lampiran N" caption of its own (UB's "Lampiran 1. Tabel Uang Beredar …"). Without one, as in
 # SKDU, whose appendix is "Tabel 1 … Tabel 11" under one LAMPIRAN heading, "Lampiran 1" is Tabel 1.
 _LAMPIRAN_CAPTION_RE = re.compile(r"^\s*lampiran\s+\d+\b", re.IGNORECASE | re.MULTILINE)
@@ -196,9 +200,10 @@ _LAMPIRAN_CAPTION_RE = re.compile(r"^\s*lampiran\s+\d+\b", re.IGNORECASE | re.MU
 _CONTENTS_TAIL_RE = re.compile(r"^(?:\d{1,3}|[.…·\s]{3,}\d{0,3})$")
 
 
-def _caption_lines(narrative_text: str) -> List[Tuple[int, int, str]]:
-    """(offset in the text, number, title) of each 'Tabel N' caption, in document order. A list of
-    tables ("Tabel 8 / Perkembangan Ekspor Gas / 12" in NPI's Daftar Tabel) is not a caption."""
+def _caption_lines(narrative_text: str, caption_re: "re.Pattern" = _CAPTION_RE) -> List[Tuple[int, int, str]]:
+    """(offset in the text, number, title) of each 'Tabel N' caption (or 'Grafik N', with
+    _CHART_CAPTION_RE), in document order. A list of tables ("Tabel 8 / Perkembangan Ekspor Gas /
+    12" in NPI's Daftar Tabel) is not a caption."""
     lines: List[Tuple[int, str]] = []
     offset = 0
     for raw in narrative_text.split("\n"):
@@ -208,12 +213,12 @@ def _caption_lines(narrative_text: str) -> List[Tuple[int, int, str]]:
         offset += len(raw) + 1
     captions: List[Tuple[int, int, str]] = []
     for index, (at, line) in enumerate(lines):
-        m = _CAPTION_RE.match(line)
+        m = caption_re.match(line)
         if not m or len(line.split()) > _CAPTION_MAX_WORDS:
             continue
         following = []
         for _, after in lines[index + 1:index + 4]:
-            if _CAPTION_RE.match(after):
+            if caption_re.match(after):
                 break
             following.append(after)
         if any(_CONTENTS_TAIL_RE.match(after) for after in following):
@@ -223,6 +228,16 @@ def _caption_lines(narrative_text: str) -> List[Tuple[int, int, str]]:
             title = following[0]
         captions.append((at, int(m.group(1)), title))
     return captions
+
+
+def _chart_part(report_text: str) -> List[Tuple[int, str]]:
+    """The report's own run of 'Grafik N' captions, up to numbering that starts again."""
+    run: List[Tuple[int, str]] = []
+    for _, n, title in _caption_lines(report_text, _CHART_CAPTION_RE):
+        if run and n < run[-1][0]:
+            break
+        run.append((n, title))
+    return run
 
 
 def table_captions(narrative_text: str) -> List[Tuple[int, str]]:
@@ -263,7 +278,8 @@ def _missing_numbers(captions: Sequence[Tuple[int, str]]) -> List[int]:
     return sorted(set(range(1, max(numbers) + 1)) - numbers)
 
 
-def _numbering_problems(captions: Sequence[Tuple[int, str]], cited: Dict[int, int]) -> Optional[str]:
+def _numbering_problems(captions: Sequence[Tuple[int, str]], cited: Dict[int, int],
+                        kind: str = "Tabel") -> Optional[str]:
     """What is wrong with the captions' numbering; `cited` counts the sentences citing each number."""
     counts: Dict[int, int] = {}
     for n, _ in captions:
@@ -275,18 +291,20 @@ def _numbering_problems(captions: Sequence[Tuple[int, str]], cited: Dict[int, in
     parts = []
     for n in twice:
         titles = ", ".join(f"'{t}'" for m, t in captions if m == n and t)
-        parts.append(f"Tabel {n} dipakai {counts[n]} kali" + (f" ({titles})" if titles else ""))
+        parts.append(f"{kind} {n} dipakai {counts[n]} kali" + (f" ({titles})" if titles else ""))
     for n in missing:
-        parts.append(f"tidak ada Tabel {n}" + (f", padahal dirujuk {cited[n]} kalimat" if cited.get(n) else ""))
+        parts.append(f"tidak ada {kind} {n}" + (f", padahal dirujuk {cited[n]} kalimat" if cited.get(n) else ""))
     return "; ".join(parts)
 
 
-def _numbering_result(captions: Sequence[Tuple[int, str]], problem: str) -> FactVerificationResult:
+def _numbering_result(captions: Sequence[Tuple[int, str]], problem: str,
+                      kind: str = "Tabel") -> FactVerificationResult:
     listed = ", ".join(str(n) for n, _ in captions)
+    word = kind.lower()
     return FactVerificationResult(
-        operation="reference", metric_label="Nomor tabel", verdict="Refuted",
-        context_quote=f"Judul tabel di dokumen: Tabel {listed}", resolved_via=RESOLVED_VIA,
-        reasoning=f"Nomor tabel tidak berurutan: {problem} | Dicek dari judul tabel di dokumen, tanpa LLM",
+        operation="reference", metric_label=f"Nomor {word}", verdict="Refuted",
+        context_quote=f"Judul {word} di dokumen: {kind} {listed}", resolved_via=RESOLVED_VIA,
+        reasoning=f"Nomor {word} tidak berurutan: {problem} | Dicek dari judul {word} di dokumen, tanpa LLM",
     )
 
 
@@ -400,6 +418,11 @@ class Pointer:
     status: str = "open"
     problem: str = ""
     before: str = ""    # the sentences just before it: "Hal tersebut tecermin dari SBT …" needs them
+    # Its pointers to charts ('Grafik 3'). A chart's content is never read: "absent" when no
+    # caption carries the number, else "open" — judged from the chart's title alone.
+    charts: List[str] = field(default_factory=list)
+    chart_status: str = "open"
+    chart_problem: str = ""
 
 
 # How many sentences before a pointer's own come with it, for a reader judging its subject.
@@ -411,9 +434,30 @@ _LAMPIRAN_TITLE_RE = re.compile(r"^\s*lampiran\s+(\d+)\s*[.:]\s*(.+?)\s*$", re.I
 @dataclass
 class _Pointers:
     captions: List[Tuple[int, str]]
-    titles: Dict[str, str]           # 'Tabel 3' / 'Lampiran 4' → its title, the report's own run
+    titles: Dict[str, str]           # 'Tabel 3' / 'Lampiran 4' / 'Grafik 2' → its title, the report's own run
     pointers: List[Pointer]
     numbering_problem: Optional[str]
+    charts: List[Tuple[int, str]] = field(default_factory=list)
+    chart_numbering_problem: Optional[str] = None
+
+
+def _cited_charts(sentence: str) -> List[str]:
+    keys: List[str] = []
+    for m in _CHART_CITED_RE.finditer(sentence):
+        for n in re.findall(r"\d+", m.group(1)):
+            if f"Grafik {int(n)}" not in keys:
+                keys.append(f"Grafik {int(n)}")
+    return keys
+
+
+def _count_citations(pointers: List["Pointer"], kind: str) -> Dict[int, int]:
+    counted: Dict[int, int] = {}
+    for p in pointers:
+        for key in (p.charts if kind == "Grafik" else p.cited):
+            if key.startswith(f"{kind} "):
+                n = int(key.split()[1])
+                counted[n] = counted.get(n, 0) + 1
+    return counted
 
 
 def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Pointers:
@@ -432,29 +476,39 @@ def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Po
     lampiran_captions = bool(_LAMPIRAN_CAPTION_RE.search(report_text)) or any(
         key.startswith("Lampiran") for key in (table_texts or {}))
     appendix_apart = report_text is not narrative_text
+    charts = _chart_part(report_text)
+    titles.update({f"Grafik {n}": title for n, title in charts})
     sentences = _sentences(report_text)
     pointers = [Pointer(sentence, page, _cited(sentence, lampiran_captions, appendix_apart),
-                        before=" ".join(s for s, at in sentences[max(0, i - _CONTEXT_SENTENCES):i] if at == page))
+                        before=" ".join(s for s, at in sentences[max(0, i - _CONTEXT_SENTENCES):i] if at == page),
+                        charts=_cited_charts(sentence))
                 for i, (sentence, page) in enumerate(sentences)]
-    pointers = [p for p in pointers if p.cited]
+    pointers = [p for p in pointers if p.cited or p.charts]
 
     # Against the captions: the numbering, and a pointer to a number no caption carries.
     skipped: Set[int] = set()
     numbering_problem = None
     enough_captions = len(captions) >= _MIN_CAPTIONS
     if enough_captions:
-        citations: Dict[int, int] = {}
-        for p in pointers:
-            for key in p.cited:
-                if key.startswith("Tabel "):
-                    n = int(key.split()[1])
-                    citations[n] = citations.get(n, 0) + 1
-        numbering_problem = _numbering_problems(captions, citations)
+        numbering_problem = _numbering_problems(captions, _count_citations(pointers, "Tabel"))
         # A pointer to a number the numbering skips is that card's finding, not one per sentence.
         skipped = set(_missing_numbers(captions))
+    chart_numbering_problem = None
+    if len(charts) >= _MIN_CAPTIONS:
+        chart_numbering_problem = _numbering_problems(charts, _count_citations(pointers, "Grafik"), "Grafik")
+        charted = {n for n, _ in charts}
+        chart_skipped = set(_missing_numbers(charts))
+        for p in pointers:
+            absent = [key for key in p.charts if int(key.split()[1]) not in charted
+                      and int(key.split()[1]) not in chart_skipped]
+            if absent:
+                p.chart_status = "absent"
+                p.chart_problem = f"Kalimat merujuk {absent[0]}, tetapi tidak ada judul {absent[0]} di dokumen"
 
     printed = {key: _printed(text) for key, text in (table_texts or {}).items()}
     for p in pointers:
+        if not p.cited:
+            continue
         absent = [key for key in p.cited if key.startswith("Tabel ")
                   and int(key.split()[1]) not in numbers and int(key.split()[1]) not in skipped]
         if enough_captions and absent:
@@ -481,16 +535,28 @@ def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Po
             p.status = "elsewhere"
             p.problem = (f"Kalimat merujuk {' dan '.join(p.cited)}, tetapi angkanya ({shown}) tidak ada "
                          f"di tabel itu; angka tersebut ada di {other}")
-    return _Pointers(captions, titles, pointers, numbering_problem)
+    return _Pointers(captions, titles, pointers, numbering_problem, charts, chart_numbering_problem)
 
 
 def open_pointers(narrative_text: str, table_texts: Optional[Dict[str, str]] = None
-                  ) -> Tuple[Dict[str, str], List[Pointer]]:
-    """The report's tables (key → title) and the pointers the numbers leave open, each citing only
-    tables that have a caption: what is left for a reader who goes by the sentence's subject."""
+                  ) -> Tuple[Dict[str, str], List[Tuple[Pointer, List[str]]]]:
+    """The report's tables and charts (key → title) and the pointers left for a reader who goes by
+    the sentence's subject, each as (pointer, the cited keys to judge): its tables when the numbers
+    settle nothing, its charts always (a chart is never read), each only when every cited key has
+    a caption."""
     found = _pointers(narrative_text, table_texts)
-    return found.titles, [p for p in found.pointers if p.status == "open"
-                          and all(key in found.titles for key in p.cited)]
+    items: List[Tuple[Pointer, List[str]]] = []
+    for p in found.pointers:
+        if p.cited and p.status == "open" and all(key in found.titles for key in p.cited):
+            items.append((p, p.cited))
+        if p.charts and p.chart_status == "open" and all(key in found.titles for key in p.charts):
+            items.append((p, p.charts))
+    return found.titles, items
+
+
+def chart_titles(narrative_text: str) -> Dict[str, str]:
+    """The report's own charts ('Grafik 4' → its title), read from their captions."""
+    return {f"Grafik {n}": title for n, title in _chart_part(_report_part(narrative_text)[1])}
 
 
 def check_document(narrative_text: str, results: List[FactVerificationResult],
@@ -514,9 +580,13 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
     found = _pointers(narrative_text, table_texts)
     if found.numbering_problem:
         out.append(_numbering_result(found.captions, found.numbering_problem))
+    if found.chart_numbering_problem:
+        out.append(_numbering_result(found.charts, found.chart_numbering_problem, "Grafik"))
     for p in found.pointers:
-        if p.status == "absent":
+        if p.cited and p.status == "absent":
             out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "judul tabel di dokumen"))
-        elif p.status == "elsewhere":
+        elif p.cited and p.status == "elsewhere":
             out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "isi tabel di dokumen"))
+        if p.chart_status == "absent":
+            out.append(_reference_result(p.sentence, p.page, p.charts, p.chart_problem, "judul grafik di dokumen"))
     return out

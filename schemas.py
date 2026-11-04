@@ -248,6 +248,9 @@ class PairedVerificationResponse(BaseModel):
     # an EMF, a caption with no picture, or a picture whose columns do not fit its periods). A
     # claim only such a table could answer comes back Inconclusive; this says why.
     unread_tables: List[str] = Field(default_factory=list)
+    # How many charts a Word report captions ("Grafik N"). Their content is never read; a
+    # sentence's "(Grafik N)" is checked against the chart's title only.
+    charts_title_only: int = 0
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)

@@ -175,6 +175,9 @@ class WordDocument:
     # "Tabel 3" / "Lampiran 4" → the text of the EMF picture(s) under that caption, numbers written
     # the Indonesian way. A caption whose picture keeps no text (PNG, JPEG) has no entry.
     table_texts: Dict[str, str] = field(default_factory=dict)
+    # The report's own tables whose content none of that reads: "Tabel 3" → "<caption> — gambar
+    # JPEG, isinya tidak bisa dibaca". Their pointers are judged from the caption alone.
+    unreadable_tables: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -368,9 +371,20 @@ def _is_contents_entry(paragraphs: List[_Paragraph], index: int) -> bool:
     return False
 
 
+def _with_title(caption: str, paragraphs: List[_Paragraph], index: int) -> str:
+    """'Tabel 3' and the title on the line under it (SKDU, NPI), or the caption as it stands."""
+    if not re.fullmatch(r'(?:Tabel|Lampiran)\s*\d+', caption.strip(), re.IGNORECASE):
+        return caption
+    following = next((p.text for p in paragraphs[index + 1:index + 4] if p.text), "")
+    if following and len(following.split()) <= _CAPTION_MAX_WORDS and not _ANY_CAPTION_RE.match(following):
+        return f"{caption.strip()}. {following}"
+    return caption
+
+
 def _caption_texts(paragraphs: List[_Paragraph], rels: Dict[str, str],
-                   z: zipfile.ZipFile) -> Dict[str, str]:
-    """The text of the EMF picture(s) under each 'Tabel N' / 'Lampiran N' caption. Every picture
+                   z: zipfile.ZipFile) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """The text of the EMF picture(s) under each 'Tabel N' / 'Lampiran N' caption, and the
+    captions whose table could not be read that way (key → "<caption> — <why>"). Every picture
     up to the next caption counts: UB prints a table's levels and its growth as two pictures.
 
     Only the report's own run of tables: a list of tables is skipped, and numbering that starts
@@ -378,10 +392,15 @@ def _caption_texts(paragraphs: List[_Paragraph], rels: Dict[str, str],
     always means the report's Tabel 1."""
     names = set(z.namelist())
     runs_of: Dict[str, List[str]] = {}
+    caption_of: Dict[str, str] = {}
+    formats_of: Dict[str, List[str]] = {}     # the extension of each picture under a caption
+    word_tables: set = set()
     current: Optional[str] = None
     last: Dict[str, int] = {}
     for index, p in enumerate(paragraphs):
         if p.word_table:
+            if current is not None and not formats_of.get(current):
+                word_tables.add(current)
             current = None
             continue
         short = len(p.text.split()) <= _CAPTION_MAX_WORDS
@@ -394,18 +413,36 @@ def _caption_texts(paragraphs: List[_Paragraph], rels: Dict[str, str],
                 break
             last[kind] = number
             current = f"{kind} {number}"
+            caption_of.setdefault(current, _with_title(p.text, paragraphs, index))
         elif _ANY_CHART_CAPTION_RE.match(p.text) or not short:
             current = None
         for rid in p.pictures:
             path = rels.get(rid, "")
-            if current is None or not path.lower().endswith(".emf") or path not in names:
+            if current is None:
+                continue
+            formats_of.setdefault(current, []).append(path.rsplit(".", 1)[-1].lower() if "." in path else "?")
+            if not path.lower().endswith(".emf") or path not in names:
                 continue
             runs = emf_text_runs(z.read(path))
             if runs:
                 runs_of.setdefault(current, []).append(" ".join(r.text for r in runs))
     texts = {key: " ".join(parts) for key, parts in runs_of.items()}
     document_format = detect_number_format(" ".join(texts.values()))
-    return {key: _as_indonesian(text, document_format) for key, text in texts.items()}
+    unreadable: Dict[str, str] = {}
+    for key, caption in caption_of.items():
+        if key in texts:
+            continue
+        others = [f for f in formats_of.get(key, []) if f != "emf"]
+        if key in word_tables:
+            why = "tabel Word, isinya belum dibaca"
+        elif others:
+            why = f"gambar {others[0].upper()}, isinya tidak bisa dibaca"
+        elif formats_of.get(key):
+            why = "gambar tanpa teks, isinya tidak bisa dibaca"
+        else:
+            continue
+        unreadable[key] = f"{caption} — {why}"
+    return {key: _as_indonesian(text, document_format) for key, text in texts.items()}, unreadable
 
 
 def read_word_document(data: bytes) -> WordDocument:
@@ -416,8 +453,8 @@ def read_word_document(data: bytes) -> WordDocument:
             _walk(body, paragraphs)
         rels = _relationships(z)
         tables, unread = _picture_tables(paragraphs, rels, z)
-        table_texts = _caption_texts(paragraphs, rels, z)
+        table_texts, unreadable_tables = _caption_texts(paragraphs, rels, z)
     logger.info("Word document: %d paragraph(s), %d table(s) read, %d caption(s) unread.",
                 len(paragraphs), len(tables), len(unread))
     return WordDocument(narrative_text=_narrative(paragraphs), tables=tables, unread_tables=unread,
-                        table_texts=table_texts)
+                        table_texts=table_texts, unreadable_tables=unreadable_tables)
