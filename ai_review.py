@@ -634,6 +634,9 @@ async def ask_reviews(
 class ReviewStats:
     candidates: int = 0
     answered: int = 0
+    # Asked, and still without an answer after both rounds (a batch that failed or stopped short):
+    # those claims keep the code's verdict.
+    unanswered: int = 0
     outcomes: Dict[str, int] = field(default_factory=dict)
 
     @property
@@ -663,6 +666,7 @@ async def review_claims(
         return list(results), stats
     answers = await ask_reviews(results, indices, codes, llm, batch_size, team_notes=team_notes)
     stats.answered = len(answers)
+    stats.unanswered = len(indices) - len(answers)
     reviewed = list(results)
     counts: Counter = Counter()
     outcomes: Dict[int, str] = {}

@@ -87,3 +87,16 @@ def test_each_model_gets_its_own_async_connection(openscale):
 
     assert first.root_async_client is not second.root_async_client
     assert first.root_async_client._client is not second.root_async_client._client
+
+
+def test_openscale_answers_stream_and_only_a_stalled_call_is_cut(openscale):
+    # A Tinjauan AI batch thinks for minutes; unstreamed, a 180 s timeout cut it and asked again
+    # twice (Render 2026-10-30, 2026-11-03). Streamed, only 90 s with nothing arriving cuts a call,
+    # and it is asked once more at most.
+    for llm in (openscale.get_llm(), openscale.get_review_llm()):
+        assert llm.streaming is True and llm.stream_usage is True
+        assert llm.max_retries == 1
+        for client in (llm.root_client, llm.root_async_client):
+            assert client.max_retries == 1
+            assert client.timeout.read == 90.0 and client.timeout.connect == 15.0
+        assert llm.root_async_client._client.timeout.read == 90.0

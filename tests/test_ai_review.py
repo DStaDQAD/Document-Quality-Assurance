@@ -656,3 +656,18 @@ def test_second_look_tells_the_model_reports_are_usually_right(monkeypatch):
         asyncio.run(review_claims(results, [_source(_KREDIT)], llm))
         assert ("hampir selalu benar" in calls[0]) is expected
         assert ("hasil program: Tidak Sesuai" in calls[0]) is expected
+
+
+def test_review_stats_count_the_claims_left_unanswered(monkeypatch):
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    results = ["r0", "r1", "r2"]
+    monkeypatch.setattr(ai_review, "reviewable_sources", lambda sources: {"S1"})
+    monkeypatch.setattr(ai_review, "review_candidates", lambda res: [0, 1, 2])
+    monkeypatch.setattr(ai_review, "ask_reviews", AsyncMock(return_value={1: "answer"}))
+    monkeypatch.setattr(ai_review, "judge_review", lambda result, review, codes, **kw: (result, "kept"))
+
+    _, stats = asyncio.run(ai_review.review_claims(results, [], llm=None))
+
+    assert (stats.candidates, stats.answered, stats.unanswered) == (3, 1, 2)

@@ -119,6 +119,7 @@ async def run_check(
     emit("compare", "running", detail=f"{len(claims)} klaim")
     results = [evaluate_claim(claim, views) for claim in claims]
     n_reviewed = 0
+    ai_notes: List[str] = []
     if review_llm is not None and results:
         # Imported here as verify_paired does: ai_review builds on paired_verifier.
         from ai_review import review_claims
@@ -126,8 +127,12 @@ async def run_check(
             results, stats = await review_claims(results, [v.source for v in views], review_llm,
                                                  new_refuted=review_new_refuted, team_notes=team_notes)
             n_reviewed = stats.changed
+            if stats.unanswered:
+                ai_notes.append(f"Tinjauan AI tidak menjawab {stats.unanswered} klaim; "
+                                "klaim itu memakai vonis dari pencocokan kode.")
         except Exception:
             logger.warning("Tinjauan AI gagal; vonis kode dipertahankan", exc_info=True)
+            ai_notes.append("Tinjauan AI tidak selesai; semua klaim memakai vonis dari pencocokan kode.")
     # After the review, which never sees them: the report's own comparisons, table pointers and
     # table numbering, checked by the code alone.
     results = check_document(text, results, table_texts)
@@ -137,6 +142,8 @@ async def run_check(
         results = await review_pointers(text, results, table_texts, llm, unreadable_tables)
     except Exception:
         logger.warning("Tinjauan AI rujukan tabel gagal; kartu dari kode tetap dipakai", exc_info=True)
+        ai_notes.append("Rujukan tabel/grafik yang tidak bisa dipastikan dari angka tidak ditinjau AI; "
+                        "hanya hasil pemeriksaan kode yang ditampilkan.")
     entailed =sum(r.verdict == "Entailed" for r in results)
     refuted = sum(r.verdict == "Refuted" for r in results)
     inconclusive = sum(r.verdict == "Inconclusive" for r in results)
@@ -155,4 +162,5 @@ async def run_check(
         inconclusive_count=inconclusive,
         results=results,
         strict_claims=[claim_to_dict(c) for c in claims],
+        ai_notes=ai_notes,
     )

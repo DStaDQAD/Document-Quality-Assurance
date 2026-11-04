@@ -1,6 +1,7 @@
 """LLM provider selection (Google Gemini / Groq / Ollama) driven by environment config."""
 
 import os
+import warnings
 from typing import List, Optional
 
 from dotenv import load_dotenv
@@ -95,6 +96,25 @@ def _callback_kwargs(callbacks: Callbacks) -> dict:
     return {"callbacks": callbacks} if callbacks else {}
 
 
+# Every OpenScale answer is streamed, so "slow" and "stuck" can be told apart. A Tinjauan AI batch
+# thinks for ~110 s and sometimes past 180; unstreamed, the old 180 s timeout cut it and asked
+# again from scratch, twice (Render 2026-10-30 and 2026-11-03: one call took 180+180+110 s, a
+# check 10 minutes). Streamed, the model sends its thinking from the first seconds (probe
+# 2026-11-04: first chunk at 4 s), so a call is only cut after this long with nothing arriving.
+OPENSCALE_STALL_S = 90.0
+# One more try after a stall or a server error; a second stall is the provider's, not ours.
+OPENSCALE_MAX_RETRIES = 1
+# LangChain's structured output over a stream trips a harmless pydantic serializer warning on
+# every call ("Expected `none`" for the parsed field); it would fill the Render log.
+warnings.filterwarnings("ignore", message="Pydantic serializer warnings", category=UserWarning)
+
+
+def _openscale_timeout():
+    import httpx
+    # read is the gap between two chunks of the stream, not the whole answer.
+    return httpx.Timeout(connect=15.0, read=OPENSCALE_STALL_S, write=60.0, pool=60.0)
+
+
 def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
     # Imported here: only this provider needs langchain-openai.
     import httpx
@@ -105,11 +125,14 @@ def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) 
         api_key=OPENSCALE_API_KEY,
         temperature=temperature,
         reasoning_effort=reasoning_effort,
-        timeout=180,
+        streaming=True,
+        stream_usage=True,  # the token counts (perf line, History) come in the stream's last chunk
+        timeout=_openscale_timeout(),
+        max_retries=OPENSCALE_MAX_RETRIES,
         # Its own async connection pool: langchain-openai otherwise shares one across every model,
         # and a pool opened on an event loop that has since closed fails with "Event loop is
         # closed" (the regression runner's test client runs each request on a new loop).
-        http_async_client=httpx.AsyncClient(timeout=180),
+        http_async_client=httpx.AsyncClient(timeout=_openscale_timeout()),
         **_callback_kwargs(callbacks),
     )
 

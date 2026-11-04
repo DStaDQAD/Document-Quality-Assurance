@@ -2322,6 +2322,16 @@ body.auth-locked .app {
         <span>${unreadLine}${chartLine}</span>
       </div>` : "";
 
+    // An AI step that did not finish (the provider stalled, or answered short): what kept the
+    // code's result instead, so a quiet "0 Tidak Sesuai" is not read as reviewed.
+    const aiNotes = data.ai_notes || [];
+    const aiStrip = aiNotes.length ? `<div class="conflict-strip gap-strip">
+        <span class="material-symbols-outlined">smart_toy</span>
+        <span><strong>Sebagian tinjauan AI tidak selesai</strong> (server AI tidak merespons tepat waktu).
+        Jalankan ulang pemeriksaan bila bagian ini perlu ditinjau.
+        <span class="gap-reason">${aiNotes.map(escapeHtml).join("<br>")}</span></span>
+      </div>` : "";
+
     const header = `<div class="report-top">
       <div class="donut-wrap">${renderDonutSVG(e, r, i)}</div>
       <div class="report-stats">
@@ -2334,7 +2344,7 @@ body.auth-locked .app {
           <div class="stat-card total"><div class="stat-num">${total}</div><div class="stat-label">Jumlah klaim</div></div>
         </div>
       </div>
-    </div>${gapStrip}${unreadStrip}${formatStrip}`;
+    </div>${gapStrip}${aiStrip}${unreadStrip}${formatStrip}`;
 
     const defaultFilter = r > 0 ? "Refuted" : "all";
     const filterBar = `<div class="filter-bar">

@@ -251,6 +251,9 @@ class PairedVerificationResponse(BaseModel):
     # How many charts a Word report captions ("Grafik N"). Their content is never read; a
     # sentence's "(Grafik N)" is checked against the chart's title only.
     charts_title_only: int = 0
+    # The AI steps that did not finish (the provider did not answer, or answered short): which
+    # part kept the code's result instead. Empty when every AI step finished.
+    ai_notes: List[str] = Field(default_factory=list)
     # Populated when Inconclusive claims match a known BI table family the user did not
     # upload — tells them WHICH statistical table would make those claims checkable.
     table_suggestions: List[TableSuggestion] = Field(default_factory=list)

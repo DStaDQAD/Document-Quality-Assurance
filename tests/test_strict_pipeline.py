@@ -119,6 +119,43 @@ def test_a_review_failure_keeps_the_verdicts(mock_parse, _review, monkeypatch):
     response = _verify(llm=_llm([]), review_llm=Mock())
 
     assert [r.verdict for r in response.results] == ["Entailed"]
+    assert response.ai_notes == ["Tinjauan AI tidak selesai; semua klaim memakai vonis dari pencocokan kode."]
+
+
+@patch("ai_review.review_claims", new_callable=AsyncMock)
+@patch("paired_verifier.parse_bi_table")
+def test_claims_the_review_left_unanswered_are_named(mock_parse, mock_review, monkeypatch):
+    from ai_review import ReviewStats
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    mock_review.side_effect = lambda results, *a, **k: (results, ReviewStats(candidates=3, answered=1, unanswered=2))
+
+    response = _verify(llm=_llm([]), review_llm=Mock())
+
+    assert response.ai_notes == ["Tinjauan AI tidak menjawab 2 klaim; klaim itu memakai vonis dari pencocokan kode."]
+
+
+@patch("ai_review.review_claims", new_callable=AsyncMock)
+@patch("paired_verifier.parse_bi_table")
+def test_a_finished_review_leaves_no_note(mock_parse, mock_review, monkeypatch):
+    from ai_review import ReviewStats
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+    mock_review.side_effect = lambda results, *a, **k: (results, ReviewStats(candidates=1, answered=1))
+
+    assert _verify(llm=_llm([]), review_llm=Mock()).ai_notes == []
+
+
+@patch("strict.pipeline.review_pointers", new_callable=AsyncMock, side_effect=RuntimeError("stalled"))
+@patch("paired_verifier.parse_bi_table")
+def test_a_pointer_review_failure_is_named(mock_parse, _pointers, monkeypatch):
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    mock_parse.return_value = _table()
+
+    response = _verify(llm=_llm([]))
+
+    assert [r.verdict for r in response.results] == ["Entailed"]
+    assert response.ai_notes and response.ai_notes[0].startswith("Rujukan tabel/grafik")
 
 
 @pytest.mark.parametrize("value, on", [("1", True), (" ON ", True), ("yes", True), ("", False), ("0", False)])
