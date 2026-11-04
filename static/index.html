@@ -742,10 +742,12 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 }
 .remove-excel-btn:hover { color: #DC2626; border-color: #DC2626; }
 .remove-excel-btn .material-symbols-outlined { font-size: 14px; }
-.source-sheet-row { display: flex; align-items: center; gap: 8px; }
+/* Ends where the upload box above it ends: the header keeps the remove button's 26px + 6px gap
+   on the right even while that button is hidden. */
+.source-sheet-row { display: flex; align-items: center; gap: 8px; padding-right: 32px; }
 .source-sheet-row label { font-size: 11px; color: var(--text-500); white-space: nowrap; }
 /* Multi-select sheet picker: a select-look toggle opening a checkbox panel */
-.sheet-multiselect { position: relative; flex: 1; min-width: 0; max-width: 240px; }
+.sheet-multiselect { position: relative; flex: 1; min-width: 0; }
 .sheet-ms-toggle {
   display: flex; align-items: center; gap: 6px; width: 100%;
   font-size: 12px; font-family: inherit; color: var(--text-900);
