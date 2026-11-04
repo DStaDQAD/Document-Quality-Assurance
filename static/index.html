@@ -360,7 +360,6 @@ table.history-table th.history-th { padding: 0; }
 
 /* ── Cek Terjemahan: one card per paragraph pair with findings, ID beside EN. ── */
 .tr-container.from-history .tr-form { display: none; }
-.tr-subtitle { margin: 0 0 14px; font-size: 13px; color: var(--text-500); }
 /* One card per document: its Indonesian and English versions side by side, the pair compared. */
 .tr-pairs { display: grid; gap: 14px; }
 .tr-pair-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px 16px; background: var(--white); }
@@ -373,7 +372,8 @@ table.history-table th.history-th { padding: 0; }
 .tr-pair-boxes .dropzone-sm .dz-sub { font-size: 12px; }
 .tr-lang { font-size: 13px; font-weight: 600; color: var(--text-900); }
 /* Jenis publikasi sits above the uploads, ruled off from them as on Verifikasi. */
-.tr-form fieldset.rules { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+/* First in the card, as on Verifikasi: no rule above it. */
+.tr-form fieldset.rules { border-top: none; margin: 0 0 14px; padding: 0 0 14px; border-bottom: 1px solid var(--border); }
 @media (max-width: 560px) {
   .tr-pair-boxes { grid-template-columns: minmax(0, 1fr); }
   .tr-pair-link { justify-self: center; transform: rotate(90deg); }
@@ -1427,7 +1427,6 @@ body.auth-locked .app {
       <div class="tr-container" id="tr-container">
         <div class="card tr-form">
           <div class="card-header">
-            <p class="tr-subtitle">Cek konsistensi versi Inggris terhadap versi Indonesia</p>
             <fieldset class="rules">
               <legend class="upload-label section-title">Jenis publikasi</legend>
               <select id="tr-publication" aria-label="Jenis publikasi">
