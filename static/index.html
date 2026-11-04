@@ -1281,10 +1281,10 @@ body.auth-locked .app {
   </div>
 
   <nav class="sidebar-nav">
-    <div class="nav-section-label">Verifikasi</div>
-    <button type="button" class="nav-item active-nav" data-tab="paired" title="Verifikasi">
+    <div class="nav-section-label">Pengecekan</div>
+    <button type="button" class="nav-item active-nav" data-tab="paired" title="Quality Assurance">
       <span class="material-symbols-outlined">compare_arrows</span>
-      <span class="nav-text">Verifikasi</span>
+      <span class="nav-text">Quality Assurance</span>
     </button>
     <button type="button" class="nav-item inactive-nav" data-tab="translation" title="Cek Terjemahan">
       <span class="material-symbols-outlined">translate</span>
@@ -1321,7 +1321,7 @@ body.auth-locked .app {
 <!-- ═══ MAIN ═══ -->
 <div class="main">
   <header class="topbar">
-    <h1 class="topbar-title" id="header-title">Verifikasi</h1>
+    <h1 class="topbar-title" id="header-title">Quality Assurance</h1>
   </header>
 
   <main class="content">
@@ -1415,7 +1415,7 @@ body.auth-locked .app {
               </button>
               <button class="run-btn" data-action="paired">
                 <span class="material-symbols-outlined">search</span>
-                Verifikasi
+                Cek
               </button>
             </div>
           </div>
@@ -1479,7 +1479,7 @@ body.auth-locked .app {
     <div class="panel" id="panel-history">
       <div class="card">
         <div class="history-kinds" id="history-kind" role="tablist" aria-label="Jenis pengecekan">
-          <button type="button" role="tab" class="settings-tab active" data-kind="paired" aria-selected="true">Verifikasi</button>
+          <button type="button" role="tab" class="settings-tab active" data-kind="paired" aria-selected="true">Quality Assurance</button>
           <button type="button" role="tab" class="settings-tab" data-kind="translation" aria-selected="false">Cek Terjemahan</button>
         </div>
         <div class="card-header history-toolbar">
@@ -1615,7 +1615,7 @@ body.auth-locked .app {
     if (n.matches(".material-symbols-outlined")) n.setAttribute("aria-hidden", "true"); else hideIconNames(n);
   }))).observe(document.body, { childList: true, subtree: true });
 
-  const PANEL_TITLES = { paired: "Verifikasi", translation: "Cek Terjemahan", history: "History", settings: "Settings", data: "Lihat Data" };
+  const PANEL_TITLES = { paired: "Quality Assurance", translation: "Cek Terjemahan", history: "History", settings: "Settings", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
   function showTab(tab) {
@@ -3834,7 +3834,7 @@ body.auth-locked .app {
     }
 
     if (cancelled) {
-      resultEl.innerHTML = `<p class="muted-text">Verifikasi dibatalkan.</p>`;
+      resultEl.innerHTML = `<p class="muted-text">Pengecekan dibatalkan.</p>`;
       return;
     }
 
