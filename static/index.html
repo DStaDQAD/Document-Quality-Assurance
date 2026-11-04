@@ -565,7 +565,7 @@ table.history-table th.history-th { padding: 0; }
 .dropzone-sm .dz-sub     { font-size: 11px; color: var(--text-500); font-weight: 500; }
 /* Brief flash when a dropped/picked file is the wrong type and was ignored */
 .dropzone-sm.is-rejected { border-color: #EF4444; background: #FFF5F5; }
-.dropzone-sm.is-rejected .dz-sub { color: var(--red-700); }
+.dropzone-sm.is-rejected .dz-sub { color: var(--red-700); white-space: normal; }  /* the whole message, wrapped */
 
 /* ── Upload row ── */
 .upload-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -2010,7 +2010,7 @@ body.auth-locked .app {
     const assign = attachDropzoneBehavior(container.querySelector(`#dz-${uid}`), inp, container.querySelector(`#fn-${uid}`), {
       placeholder: "Pilih file PDF atau Word",
       accepts: isReportFile,
-      rejectText: "Satu file PDF atau Word saja; file lain diabaikan",
+      rejectText: "Hanya file PDF atau Word (.docx), satu file per kotak",
       onFile: () => syncRules(),
     });
     return { container, inp, role, assign, hint: container.querySelector(".dz-hint") };
@@ -3552,7 +3552,7 @@ body.auth-locked .app {
     attachDropzoneBehavior(dz, holder.querySelector("input"), holder.querySelector(".dz-sub"), {
       placeholder: "Pilih file PDF atau Word",
       accepts: isReportFile,
-      rejectText: "Satu file PDF atau Word saja; file lain diabaikan",
+      rejectText: "Hanya file PDF atau Word (.docx), satu file per kotak",
     });
     // Four boxes read the same; the label says which one this is.
     dz.setAttribute("aria-label", `${TRANSLATION_DOCUMENTS[doc]}, ${TR_LANGS[lang]}: pilih file PDF atau Word`);
