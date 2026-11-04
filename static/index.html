@@ -361,11 +361,23 @@ table.history-table th.history-th { padding: 0; }
 /* ── Cek Terjemahan: one card per paragraph pair with findings, ID beside EN. ── */
 .tr-container.from-history .tr-form { display: none; }
 .tr-subtitle { margin: 0 0 14px; font-size: 13px; color: var(--text-500); }
-.tr-form .upload-row { margin-top: 14px; }
-.tr-row-label { display: block; margin-bottom: 6px; }
-.tr-files { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.tr-files label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--text-500); min-width: 0; }
-.tr-files input[type="file"] { font-family: inherit; font-size: 12px; max-width: 100%; }
+/* One card per document: its Indonesian and English versions side by side, the pair compared. */
+.tr-pairs { display: grid; gap: 14px; }
+.tr-pair-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 14px 16px 16px; background: var(--white); }
+.tr-pair-card[hidden] { display: none; }
+.tr-pair-title { display: block; margin: 0 0 12px; }
+.tr-pair-boxes { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px; }
+.tr-pair-link { font-size: 22px; color: var(--text-400); }
+.tr-pair-boxes .dropzone-sm { padding: 26px 18px; }
+.tr-pair-boxes .dropzone-sm .material-symbols-outlined { font-size: 32px; }
+.tr-pair-boxes .dropzone-sm .dz-sub { font-size: 12px; }
+.tr-lang { font-size: 13px; font-weight: 600; color: var(--text-900); }
+/* Jenis publikasi sits above the uploads, ruled off from them as on Verifikasi. */
+.tr-form fieldset.rules { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--border); }
+@media (max-width: 560px) {
+  .tr-pair-boxes { grid-template-columns: minmax(0, 1fr); }
+  .tr-pair-link { justify-self: center; transform: rotate(90deg); }
+}
 .tr-doc { margin-top: 28px; }
 .tr-doc h3 { margin: 0 0 4px; font-size: 16px; color: var(--text-900); }
 /* The summary above a document's findings: publication, both files, the two counts. */
@@ -566,8 +578,10 @@ table.history-table th.history-th { padding: 0; }
 /* Verifikasi's form: its sections (Jenis publikasi, Upload, Aturan pemeriksaan) a step above the
    labels of the fields inside them (Siaran Pers, Laporan, Tabel Excel), both larger than the
    10px labels elsewhere. */
-#panel-paired .upload-label { font-size: 12px; letter-spacing: 0.06em; }
-#panel-paired .upload-label.section-title { font-size: 14px; color: var(--text-900); letter-spacing: 0.05em; }
+#panel-paired .upload-label, .tr-form .upload-label { font-size: 12px; letter-spacing: 0.06em; }
+#panel-paired .upload-label.section-title, .tr-form .upload-label.section-title {
+  font-size: 14px; color: var(--text-900); letter-spacing: 0.05em;
+}
 .upload-heading { display: block; margin: 0 0 12px; }
 /* "Contoh: …" inside an empty upload area, under "Pilih file …": how the team's SharePoint
    names this file. It wraps instead of truncating, and goes once a file is picked. */
@@ -1415,26 +1429,31 @@ body.auth-locked .app {
           <div class="card-header">
             <p class="tr-subtitle">Cek konsistensi versi Inggris terhadap versi Indonesia</p>
             <fieldset class="rules">
-              <legend class="upload-label">Jenis publikasi</legend>
+              <legend class="upload-label section-title">Jenis publikasi</legend>
               <select id="tr-publication" aria-label="Jenis publikasi">
                 <option value="" disabled selected>Pilih jenis publikasi…</option>
               </select>
             </fieldset>
-            <div class="upload-row">
-              <div class="upload-field" id="tr-row-siaran_pers">
-                <span class="upload-label tr-row-label">Siaran Pers</span>
-                <div class="tr-files">
-                  <label>Versi Indonesia<input type="file" id="tr-siaran_pers-id" accept=".docx,.pdf"></label>
-                  <label>Versi Inggris<input type="file" id="tr-siaran_pers-en" accept=".docx,.pdf"></label>
+            <h2 class="upload-label section-title upload-heading" id="tr-upload-heading">Upload</h2>
+            <!-- One card per document; makeTranslationSlot fills each box (a dropzone like
+                 Verifikasi's, holding the file input tr-<doc>-<id|en> the Cek button reads). -->
+            <div class="tr-pairs" role="group" aria-labelledby="tr-upload-heading">
+              <section class="tr-pair-card" id="tr-row-siaran_pers" aria-labelledby="tr-title-siaran_pers">
+                <h3 class="upload-label tr-pair-title" id="tr-title-siaran_pers">Siaran Pers</h3>
+                <div class="tr-pair-boxes">
+                  <div id="tr-slot-siaran_pers-id"></div>
+                  <span class="material-symbols-outlined tr-pair-link" aria-hidden="true">sync_alt</span>
+                  <div id="tr-slot-siaran_pers-en"></div>
                 </div>
-              </div>
-              <div class="upload-field" id="tr-row-laporan">
-                <span class="upload-label tr-row-label">Laporan</span>
-                <div class="tr-files">
-                  <label>Versi Indonesia<input type="file" id="tr-laporan-id" accept=".docx,.pdf"></label>
-                  <label>Versi Inggris<input type="file" id="tr-laporan-en" accept=".docx,.pdf"></label>
+              </section>
+              <section class="tr-pair-card" id="tr-row-laporan" aria-labelledby="tr-title-laporan">
+                <h3 class="upload-label tr-pair-title" id="tr-title-laporan">Laporan</h3>
+                <div class="tr-pair-boxes">
+                  <div id="tr-slot-laporan-id"></div>
+                  <span class="material-symbols-outlined tr-pair-link" aria-hidden="true">sync_alt</span>
+                  <div id="tr-slot-laporan-en"></div>
                 </div>
-              </div>
+              </section>
             </div>
           </div>
           <div class="card-footer">
@@ -3515,11 +3534,50 @@ body.auth-locked .app {
     if (listedChecker(trCheckerEl.value)) trCheckerEl.closest(".checker-field").classList.remove("is-missing");
   });
 
-  // A publication without a press release (PPKom) or a report (M0, Cadev, SULNI) shows one row.
+  // One upload box per version of a document, the same dropzone as Verifikasi's. Its file input
+  // keeps the id the Cek button reads (tr-<doc>-<id|en>).
+  const TR_LANGS = { id: "Versi Indonesia", en: "Versi Inggris" };
+  const trSlots = {};
+  function makeTranslationSlot(doc, lang) {
+    const holder = document.getElementById(`tr-slot-${doc}-${lang}`);
+    holder.innerHTML = `
+      <div class="dropzone-sm" id="tr-dz-${doc}-${lang}">
+        <span class="material-symbols-outlined">picture_as_pdf</span>
+        <div class="tr-lang">${TR_LANGS[lang]}</div>
+        <div class="dz-sub" id="tr-fn-${doc}-${lang}">Pilih file PDF atau Word</div>
+        <div class="dz-hint" id="tr-hint-${doc}-${lang}" hidden></div>
+        <input type="file" id="tr-${doc}-${lang}" accept="application/pdf,.pdf,.docx,${WORD_MIME}" style="display:none">
+      </div>`;
+    const dz = holder.querySelector(".dropzone-sm");
+    attachDropzoneBehavior(dz, holder.querySelector("input"), holder.querySelector(".dz-sub"), {
+      placeholder: "Pilih file PDF atau Word",
+      accepts: isReportFile,
+      rejectText: "Satu file PDF atau Word saja; file lain diabaikan",
+    });
+    // Four boxes read the same; the label says which one this is.
+    dz.setAttribute("aria-label", `${TRANSLATION_DOCUMENTS[doc]}, ${TR_LANGS[lang]}: pilih file PDF atau Word`);
+    trSlots[`${doc}-${lang}`] = { hint: holder.querySelector(".dz-hint") };
+  }
+  ["siaran_pers", "laporan"].forEach((doc) => ["id", "en"].forEach((lang) => makeTranslationSlot(doc, lang)));
+
+  // "Contoh: …" in the Indonesian boxes: the names Verifikasi shows for that publication's
+  // documents (Pengaturan). The English files have no such convention yet.
+  function showTranslationHints() {
+    const hints = uploadHints[trPublication.value] || {};
+    [["siaran_pers", hints.press], ["laporan", hints.report]].forEach(([doc, text]) => {
+      const el = trSlots[`${doc}-id`].hint;
+      text = (text || "").trim();
+      el.hidden = !text;
+      el.textContent = text ? `Contoh: ${text}` : "";
+    });
+  }
+
+  // A publication without a press release (PPKom) or a report (M0, Cadev, SULNI) shows one card.
   function showTranslationRows() {
     const pub = PUBLICATIONS[trPublication.value];
     document.getElementById("tr-row-siaran_pers").hidden = !!pub && pub.press === false;
     document.getElementById("tr-row-laporan").hidden = !!pub && !pub.report;
+    showTranslationHints();
   }
   trPublication.addEventListener("change", showTranslationRows);
 
@@ -4362,6 +4420,7 @@ body.auth-locked .app {
   function applyUploadHints(publications) {
     uploadHints = Object.fromEntries(publications.map((p) => [p.key, p.upload_hints || {}]));
     showUploadHints();
+    showTranslationHints();
   }
 
   // Sidebar toggle
