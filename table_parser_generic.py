@@ -40,6 +40,8 @@ structure-mapping tier):
 import io
 import logging
 import re
+import zipfile
+import xml.etree.ElementTree as ET
 from collections import Counter
 from datetime import date, datetime
 from typing import Dict, List, Optional, Tuple
@@ -245,36 +247,89 @@ def _xls_sheet_grid(wb, ws) -> List[List]:
     return grid
 
 
-def _open_xlsx(data: bytes):
+_MERGE_RE = re.compile(rb'<(?:\w+:)?mergeCell\b[^>]*\bref="([A-Z]+\d+:[A-Z]+\d+)"')
+
+
+def _xlsx_sheet_paths(z: zipfile.ZipFile) -> Dict[str, str]:
+    """Sheet name → its XML part, from the workbook and its relationships."""
+    ns_main = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    ns_pkg = "{http://schemas.openxmlformats.org/package/2006/relationships}"
+    targets = {}
+    for rel in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")).iter(ns_pkg + "Relationship"):
+        target = rel.get("Target", "")
+        targets[rel.get("Id")] = target.lstrip("/") if target.startswith("/") else f"xl/{target}"
+    return {sheet.get("name"): targets.get(sheet.get(ns_rel + "id"), "")
+            for sheet in ET.fromstring(z.read("xl/workbook.xml")).iter(ns_main + "sheet")}
+
+
+def _xlsx_merged_ranges(data: bytes, sheet_name: str) -> List[Tuple[int, int, int, int]]:
+    """The sheet's merged ranges in xlrd's convention, read from its XML: openpyxl only exposes
+    them on a fully loaded workbook, which costs a Python object per formatted cell."""
+    from openpyxl.utils.cell import range_boundaries
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as z:
+            xml = z.read(_xlsx_sheet_paths(z)[sheet_name])
+    except (KeyError, zipfile.BadZipFile, ET.ParseError):
+        return []
+    ranges = []
+    for ref in _MERGE_RE.findall(xml):
+        min_col, min_row, max_col, max_row = range_boundaries(ref.decode())
+        ranges.append((min_row - 1, max_row, min_col - 1, max_col))
+    return ranges
+
+
+def _xlsx_grid(data: bytes, sheet_name: str) -> List[List]:
+    """One sheet of an .xlsx, streamed: read-only openpyxl keeps no cell objects, so a wide
+    styled workbook (UB's September 2026 analysis, 13 sheets, ~840k cells) no longer has to fit
+    in memory whole, and only the asked sheet is read."""
     import openpyxl
 
-    # Not read_only: merged_cells.ranges is unavailable in read-only mode, and the
-    # workbooks handled here are small enough to load fully.
-    return openpyxl.load_workbook(io.BytesIO(data), data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    try:
+        if sheet_name not in wb.sheetnames:
+            raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
+        ws = wb[sheet_name]
+        grid = []
+        for row in ws.iter_rows():
+            out = []
+            for cell in row:
+                v = cell.value
+                # Excel scales %-formatted cells by 100 for DISPLAY only (0.0577
+                # shown as "5.77%"). Narrative claims quote the displayed number,
+                # so store the display scale. Quoted literals ('0"%"') don't scale
+                # in Excel and are excluded. (.xls path: xlrd format lookup is
+                # impractical, so this correction is xlsx-only.)
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    fmt = re.sub(r'"[^"]*"', "", getattr(cell, "number_format", None) or "")
+                    if "%" in fmt:
+                        v = v * 100
+                out.append(v)
+            grid.append(out)
+    finally:
+        wb.close()
+    ranges = _xlsx_merged_ranges(data, sheet_name)
+    # A merged range shows its anchor only: a value left in a covered cell (UB September 2026's
+    # "Tabel Dana" keeps zeros there) is not on screen, and a full load reads it as None.
+    for rlo, rhi, clo, chi in ranges:
+        for r in range(rlo, min(rhi, len(grid))):
+            row = grid[r]
+            for c in range(clo, min(chi, len(row))):
+                if (r, c) != (rlo, clo):
+                    row[c] = None
+    _apply_merged_fill(grid, ranges)
+    return _without_empty_edges(grid)
 
 
-def _xlsx_sheet_grid(ws) -> List[List]:
-    grid = []
-    for row in ws.iter_rows():
-        out = []
-        for cell in row:
-            v = cell.value
-            # Excel scales %-formatted cells by 100 for DISPLAY only (0.0577
-            # shown as "5.77%"). Narrative claims quote the displayed number,
-            # so store the display scale. Quoted literals ('0"%"') don't scale
-            # in Excel and are excluded. (.xls path: xlrd format lookup is
-            # impractical, so this correction is xlsx-only.)
-            if isinstance(v, (int, float)) and not isinstance(v, bool):
-                fmt = re.sub(r'"[^"]*"', "", cell.number_format or "")
-                if "%" in fmt:
-                    v = v * 100
-            out.append(v)
-        grid.append(out)
-    _apply_merged_fill(grid, [
-        (m.min_row - 1, m.max_row, m.min_col - 1, m.max_col)
-        for m in ws.merged_cells.ranges
-    ])
-    return grid
+def _without_empty_edges(grid: List[List]) -> List[List]:
+    """`grid` without its trailing empty rows and columns. Read-only openpyxl sizes a sheet by
+    the area its file declares, which can run far past the last value (SULNI's Tbl II.6: 200
+    rows declared, 88 used)."""
+    while grid and all(v is None for v in grid[-1]):
+        grid.pop()
+    width = max((max((i for i, v in enumerate(row) if v is not None), default=-1) + 1 for row in grid), default=0)
+    return [row[:width] + [None] * (width - len(row)) for row in grid]
 
 
 def _load_grid(data: bytes, sheet_name: str) -> List[List]:
@@ -288,33 +343,7 @@ def _load_grid(data: bytes, sheet_name: str) -> List[List]:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheet_names()}")
         return _xls_sheet_grid(wb, ws)
     elif data[:4] == b'PK\x03\x04':
-        wb = _open_xlsx(data)
-        if sheet_name not in wb.sheetnames:
-            raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
-        try:
-            return _xlsx_sheet_grid(wb[sheet_name])
-        finally:
-            wb.close()
-    else:
-        raise ValueError("Unrecognized file format: expected .xls or .xlsx bytes.")
-
-
-def load_workbook_grids(data: bytes) -> Dict[str, List[List]]:
-    """Every sheet's grid from ONE workbook load, keyed by sheet name in workbook order.
-
-    Opening a large .xlsx is the slow part (openpyxl must load all of it to see merged ranges;
-    about 9 s for a SULNI workbook) while converting a loaded sheet is cheap, so a caller that
-    needs several sheets of one workbook — publication_parsers.load_grid — takes them at once.
-    """
-    if data[:8] == _XLS_MAGIC:
-        wb = _open_xls(data)
-        return {ws.name: _xls_sheet_grid(wb, ws) for ws in wb.sheets()}
-    elif data[:4] == b'PK\x03\x04':
-        wb = _open_xlsx(data)
-        try:
-            return {ws.title: _xlsx_sheet_grid(ws) for ws in wb.worksheets}
-        finally:
-            wb.close()
+        return _xlsx_grid(data, sheet_name)
     else:
         raise ValueError("Unrecognized file format: expected .xls or .xlsx bytes.")
 

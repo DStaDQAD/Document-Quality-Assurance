@@ -96,30 +96,36 @@ def test_numbering_depth(raw, expected):
 # Loading
 # ---------------------------------------------------------------------------
 
-def test_load_grid_opens_each_workbook_once_and_hands_out_copies(monkeypatch):
-    opened = []
+def test_load_grid_reads_each_asked_sheet_once_and_hands_out_copies(monkeypatch):
+    read = []
 
-    def fake_load(data):
-        opened.append(data)
-        return {"A": [[1, 2]], "B": [[3]]}
+    def fake_load(data, sheet):
+        read.append((data, sheet))
+        return {"A": [[1, 2]], "B": [[3]]}[sheet]
 
-    monkeypatch.setattr(_common, "load_workbook_grids", fake_load)
-    _common._WORKBOOK_CACHE.clear()
+    monkeypatch.setattr(_common, "_load_grid", fake_load)
+    _common._GRID_CACHE.clear()
 
     first = load_grid(b"book-1", "A")
     first[0][0] = "edited by a caller"
 
     assert load_grid(b"book-1", "A") == [[1, 2]]
     assert load_grid(b"book-1", "B") == [[3]]
-    assert opened == [b"book-1"]
+    assert read == [(b"book-1", "A"), (b"book-1", "B")]
 
 
-def test_load_grid_names_the_available_sheets_when_one_is_missing(monkeypatch):
-    monkeypatch.setattr(_common, "load_workbook_grids", lambda data: {"A": []})
-    _common._WORKBOOK_CACHE.clear()
+def test_load_grid_names_the_available_sheets_when_one_is_missing():
+    from openpyxl import Workbook
+    import io as _io
+
+    wb = Workbook()
+    wb.active.title = "A"
+    buf = _io.BytesIO()
+    wb.save(buf)
+    _common._GRID_CACHE.clear()
 
     with pytest.raises(ValueError, match=r"Sheet 'Z' not found\. Available: \['A'\]"):
-        load_grid(b"book-2", "Z")
+        load_grid(buf.getvalue(), "Z")
 
 
 def test_label_indents_are_only_read_from_xls_files():

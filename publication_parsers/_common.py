@@ -21,8 +21,8 @@ from excel_parser_bi import parse_bi_table
 from table_model import QUAL_SEP, TableData
 from table_parser_generic import (
     _bare_period_token,
+    _load_grid,
     _parse_period,
-    load_workbook_grids,
     parse_generic_table,
 )
 
@@ -132,31 +132,29 @@ def numbering_depth(raw) -> int:
 # Reading the workbook
 # ---------------------------------------------------------------------------
 
-_WORKBOOK_CACHE: "OrderedDict[str, Dict[str, List[List]]]" = OrderedDict()
-_WORKBOOK_CACHE_SIZE = 4
+_GRID_CACHE: "OrderedDict[Tuple[str, str], List[List]]" = OrderedDict()
+_GRID_CACHE_SIZE = 32
 
 
 def load_grid(data: bytes, sheet_name: str) -> List[List]:
-    """The sheet's cell values with merged ranges filled; each workbook is opened once.
+    """The sheet's cell values with merged ranges filled; each sheet is read once.
 
-    openpyxl has to load a whole .xlsx to see its merged ranges — about 9 seconds for a SULNI
-    workbook — while turning a loaded sheet into a grid is cheap. So the first request for a
-    workbook converts every sheet, and later sheets of that workbook (and the cell-pointer grid
-    paired_verifier reads after parsing) come from memory. Rows are copied on the way out so a
-    caller that edits its grid cannot change the cached one.
+    Only the asked sheet is read, streamed (table_parser_generic._load_grid): loading a whole
+    styled .xlsx to reach one sheet cost UB's 13-sheet September 2026 workbook over 300 MB and
+    took the 512 MB server down. A sheet asked again (the cell-pointer grid paired_verifier reads
+    after parsing) comes from memory. Rows are copied on the way out so a caller that edits its
+    grid cannot change the cached one.
     """
-    digest = hashlib.sha1(data).hexdigest()
-    sheets = _WORKBOOK_CACHE.get(digest)
-    if sheets is None:
-        sheets = load_workbook_grids(data)
-        _WORKBOOK_CACHE[digest] = sheets
-        if len(_WORKBOOK_CACHE) > _WORKBOOK_CACHE_SIZE:
-            _WORKBOOK_CACHE.popitem(last=False)
+    key = (hashlib.sha1(data).hexdigest(), sheet_name)
+    grid = _GRID_CACHE.get(key)
+    if grid is None:
+        grid = _load_grid(data, sheet_name)
+        _GRID_CACHE[key] = grid
+        if len(_GRID_CACHE) > _GRID_CACHE_SIZE:
+            _GRID_CACHE.popitem(last=False)
     else:
-        _WORKBOOK_CACHE.move_to_end(digest)
-    if sheet_name not in sheets:
-        raise ValueError(f"Sheet '{sheet_name}' not found. Available: {list(sheets)}")
-    return [list(row) for row in sheets[sheet_name]]
+        _GRID_CACHE.move_to_end(key)
+    return [list(row) for row in grid]
 
 
 def load_label_indents(data: bytes, sheet_name: str, col: int) -> Dict[int, int]:

@@ -9,7 +9,6 @@ from table_parser_generic import (
     _load_grid,
     _parse_period,
     _parse_two_row_table,
-    load_workbook_grids,
     parse_generic_grid,
     parse_generic_table,
 )
@@ -421,29 +420,31 @@ def test_load_grid_forward_fills_merged_cells():
     assert [grid[r][0] for r in range(3, 6)] == ["Sektor Ekonomi"] * 3
 
 
-def test_load_workbook_grids_reads_every_sheet_in_one_go_like_load_grid():
+def test_an_xlsx_sheet_is_streamed_with_its_merges_and_percent_cells():
+    # Read-only openpyxl hides merged ranges; they come from the sheet's own XML.
     wb = Workbook()
     first = wb.active
     first.title = "Data"
     first["A1"] = "Judul"
     first.merge_cells("A1:C1")
+    first["A3"] = "Baris"
+    first.merge_cells("A3:A4")
     first["B2"] = 0.25
     first["B2"].number_format = "0.0%"
     wb.create_sheet("Catatan")["A1"] = 7
     data = _save(wb)
 
-    grids = load_workbook_grids(data)
+    grid = _load_grid(data, "Data")
 
-    assert list(grids) == ["Data", "Catatan"]
-    assert grids["Data"] == _load_grid(data, "Data")
-    assert grids["Catatan"] == _load_grid(data, "Catatan")
-    assert grids["Data"][0][:3] == ["Judul"] * 3
-    assert grids["Data"][1][1] == pytest.approx(25.0)
+    assert grid[0][:3] == ["Judul"] * 3
+    assert [grid[2][0], grid[3][0]] == ["Baris", "Baris"]
+    assert grid[1][1] == pytest.approx(25.0)
+    assert _load_grid(data, "Catatan") == [[7]]
 
 
-def test_load_workbook_grids_rejects_bytes_that_are_not_a_workbook():
+def test_load_grid_rejects_bytes_that_are_not_a_workbook():
     with pytest.raises(ValueError, match="Unrecognized file format"):
-        load_workbook_grids(b"not a workbook")
+        _load_grid(b"not a workbook", "Data")
 
 
 # ---------------------------------------------------------------------------
@@ -655,3 +656,26 @@ def test_unique_row_numbers_stay_part_of_the_label():
     ]))
     assert table.lookup("Simpanan > 1 > Rupiah", 2026, "Q1") == 1.0
     assert table.lookup("Simpanan > 2 > Rupiah", 2026, "Q1") == 2.0
+
+
+def test_a_value_hidden_under_a_merge_reads_as_empty_and_empty_edges_are_dropped():
+    # UB September 2026's "Tabel Dana": a 0 kept in a cell an empty merge covers is not on screen.
+    import zipfile as _zip
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    ws["B1"] = 0
+    ws["A2"] = "Baris"
+    ws["C2"] = 5
+    src = _save(wb)
+    out = io.BytesIO()
+    with _zip.ZipFile(io.BytesIO(src)) as zin, _zip.ZipFile(out, "w") as zout:
+        for item in zin.infolist():
+            body = zin.read(item.filename)
+            if item.filename == "xl/worksheets/sheet1.xml":
+                body = body.replace(b"</sheetData>", b'</sheetData><mergeCells count="1"><mergeCell ref="A1:B1"/></mergeCells>')
+                body = body.replace(b'<dimension ref="A1:C2"/>', b'<dimension ref="A1:F9"/>')
+            zout.writestr(item, body)
+
+    assert _load_grid(out.getvalue(), "Data") == [[None, None, None], ["Baris", None, 5]]
