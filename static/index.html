@@ -563,6 +563,12 @@ table.history-table th.history-th { padding: 0; }
   font-size: 10px; font-weight: 700; color: var(--text-500);
   text-transform: uppercase; letter-spacing: 0.07em;
 }
+/* Verifikasi's form: its sections (Jenis publikasi, Upload, Aturan pemeriksaan) a step above the
+   labels of the fields inside them (Siaran Pers, Laporan, Tabel Excel), both larger than the
+   10px labels elsewhere. */
+#panel-paired .upload-label { font-size: 12px; letter-spacing: 0.06em; }
+#panel-paired .upload-label.section-title { font-size: 14px; color: var(--text-900); letter-spacing: 0.05em; }
+.upload-heading { display: block; margin: 0 0 12px; }
 /* "Contoh: …" inside an empty upload area, under "Pilih file …": how the team's SharePoint
    names this file. It wraps instead of truncating, and goes once a file is picked. */
 .dz-hint { max-width: 100%; font-size: 11px; line-height: 1.35; color: var(--text-400); overflow-wrap: anywhere; }
@@ -598,6 +604,7 @@ table.history-table th.history-th { padding: 0; }
 .rules-note { clear: both; margin: -4px 0 10px; font-size: 11px; color: var(--text-400); }
 .rule-check:has(input:disabled), .rule-check input:disabled { cursor: default; }
 /* Aturan pemeriksaan folds under one summary line, closed on load */
+#panel-paired .rules-details summary::before { font-size: 20px; }
 .rules-details { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .rules-details summary {
   display: flex; align-items: center; gap: 6px; cursor: pointer;
@@ -1063,9 +1070,6 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .paired-container:not(.has-results) .upload-row {
   gap: 20px;
 }
-.paired-container:not(.has-results) .upload-label {
-  font-size: 11px;
-}
 
 /* Split state — activated by JS after first successful result */
 
@@ -1313,12 +1317,13 @@ body.auth-locked .app {
                    publication has none, press: false), plus a Laporan when it has one. The options are built from
                    PUBLICATIONS in the script; nothing is chosen on load. -->
               <fieldset class="rules" id="publication-types">
-                <legend class="upload-label">Jenis publikasi</legend>
+                <legend class="upload-label section-title">Jenis publikasi</legend>
                 <select id="publication-select" aria-label="Jenis publikasi">
                   <option value="" disabled selected>Pilih jenis publikasi…</option>
                 </select>
               </fieldset>
-              <div class="upload-row" id="upload-row">
+              <h2 class="upload-label section-title upload-heading" id="upload-heading">Upload</h2>
+              <div class="upload-row" id="upload-row" role="group" aria-labelledby="upload-heading">
                 <div class="upload-field" id="press-upload-field">
                   <span class="upload-label">Siaran Pers</span>
                   <div id="press-source-container"></div>
@@ -1337,7 +1342,7 @@ body.auth-locked .app {
               </div>
               <!-- Aturan pemeriksaan starts folded; the summary line opens it. -->
               <details class="rules-details" id="rules-details">
-                <summary class="upload-label" id="check-rules-legend">Aturan pemeriksaan</summary>
+                <summary class="upload-label section-title" id="check-rules-legend">Aturan pemeriksaan</summary>
               <fieldset class="rules" id="check-rules" aria-labelledby="check-rules-legend">
                 <div class="rules-note" id="rules-fixed-note">Pilih jenis publikasi untuk melihat aturannya.</div>
                 <div class="rules-grid">
