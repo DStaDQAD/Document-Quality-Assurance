@@ -290,3 +290,108 @@ def test_translation_publication_and_checker_are_normalised_like_checks(clock):
     assert (summary.publication, summary.checker_name) == ("sk", "Ivan Jehuda")
     other = [i for i in check_history.list_translation_checks()[0] if i.en_filename == "b.docx"][0]
     assert (other.publication, other.checker_name) == (None, None)
+
+
+# --- Column filters and sorting (the ▾ on each History column) --------------------------------
+
+from schemas import HistoryColumnFilter, HistoryQuery  # noqa: E402
+
+
+def _q(**kw):
+    columns = {k: HistoryColumnFilter(**v) for k, v in kw.pop("columns", {}).items()}
+    return HistoryQuery(columns=columns, **kw)
+
+
+def _names(query, kind="paired"):
+    items = check_history.search_history(kind, query)[0]
+    return [i.filename if kind == "paired" else i.en_filename for i in items]
+
+
+def test_a_column_filter_keeps_the_ticked_values_and_umum_is_the_empty_value(clock):
+    _save("a.docx", publication="sk", checker_name="Ivan")
+    _save("b.docx", publication="skdu", checker_name="Dita")
+    _save("c.docx", checker_name=None)
+
+    assert _names(_q(columns={"publication": {"values": ["sk", ""]}})) == ["c.docx", "a.docx"]
+    assert _names(_q(columns={"checker": {"values": [""]}})) == ["c.docx"]
+    # Unticked values instead: the rows without a value are kept, not lost to a NULL comparison.
+    assert _names(_q(columns={"publication": {"values": ["sk"], "exclude": True}})) == ["c.docx", "b.docx"]
+    assert _names(_q(columns={"checker": {"values": ["Ivan", ""], "exclude": True}})) == ["b.docx"]
+    # Nothing ticked keeps nothing; filters on two columns both apply.
+    assert _names(_q(columns={"mode": {"values": []}})) == []
+    assert _names(_q(columns={"publication": {"values": ["sk", "skdu"]},
+                              "checker": {"values": ["Dita"]}})) == ["b.docx"]
+
+
+def test_a_day_filter_ticks_whole_wib_days(monkeypatch):
+    times = iter([datetime(2026, 9, 27, 16, 30, tzinfo=timezone.utc), datetime(2026, 9, 27, 17, 30, tzinfo=timezone.utc),
+                  datetime(2026, 9, 28, 17, 30, tzinfo=timezone.utc)])
+    monkeypatch.setattr(check_history, "_now", lambda: next(times))
+    for name in ("27-late", "28-early", "29-early"):
+        _save(name)
+
+    assert _names(_q(columns={"day": {"values": ["2026-09-28", "2026-09-29"]}})) == ["29-early", "28-early"]
+    assert _names(_q(columns={"day": {"values": ["2026-09-28"], "exclude": True}})) == ["29-early", "27-late"]
+    assert _names(_q(columns={"day": {"values": ["bukan-tanggal"]}})) == []
+    assert check_history.history_facet("paired", _q(), "day") == [
+        ("2026-09-29", 1), ("2026-09-28", 1), ("2026-09-27", 1)]
+
+
+def test_sorting_by_a_column_breaks_ties_newest_first(clock):
+    _save("b.docx", n_mismatch=1, duration_s=30.0)
+    _save("A.docx", n_mismatch=3, duration_s=10.0)
+    _save("c.docx", n_mismatch=1, duration_s=20.0)
+
+    assert _names(_q(sort="filename", descending=False)) == ["A.docx", "b.docx", "c.docx"]
+    assert _names(_q(sort="result")) == ["A.docx", "c.docx", "b.docx"]
+    assert _names(_q(sort="duration", descending=False)) == ["A.docx", "c.docx", "b.docx"]
+    assert _names(_q(sort="created_at", descending=False)) == ["b.docx", "A.docx", "c.docx"]
+    items, more, total = check_history.search_history("paired", _q(sort="filename", limit=2, offset=1, descending=False))
+    assert [i.filename for i in items] == ["b.docx", "c.docx"] and not more and total == 3
+
+
+def test_search_keeps_the_other_filters(clock):
+    _save("skdu_a.docx", publication="skdu", n_mismatch=2, checker_name="Ivan")
+    _save("skdu_b.docx", publication="skdu")
+    _save("ub.docx", publication="uang-beredar", n_mismatch=1)
+
+    assert _names(_q(q="skdu", mismatch_only=True)) == ["skdu_a.docx"]
+    assert _names(_q(q="ivan")) == ["skdu_a.docx"]
+    assert _names(_q(date_from=date(2026, 9, 29))) == []
+
+
+def test_a_facet_lists_values_under_the_other_filters_but_not_its_own(clock):
+    _save("a.docx", publication="sk", checker_name="Ivan")
+    _save("b.docx", publication="sk", checker_name="Dita")
+    _save("c.docx", checker_name="Ivan")
+    _save("d.docx", publication="skdu", checker_name="Dita", n_mismatch=1)
+
+    narrowed = _q(columns={"publication": {"values": ["sk"]}, "checker": {"values": ["Ivan"]}})
+    assert check_history.history_facet("paired", narrowed, "publication") == [("", 1), ("sk", 1)]
+    assert check_history.history_facet("paired", narrowed, "checker") == [("Dita", 1), ("Ivan", 1)]
+    assert check_history.history_facet("paired", _q(mismatch_only=True), "filename") == [("d.docx", 1)]
+    assert check_history.history_facet("paired", _q(), "mode") == [("excel", 4)]
+
+
+def test_the_translation_list_filters_its_english_file_and_document_kind(clock):
+    _tsave("UB_EN.docx", document="laporan", n_number=1, n_meaning=1)
+    _tsave("SK_EN.docx", document="siaran_pers", n_number=3)
+    _tsave("PMI_EN.docx", document="laporan")
+
+    assert _names(_q(columns={"mode": {"values": ["laporan"]}}), "translation") == ["PMI_EN.docx", "UB_EN.docx"]
+    assert _names(_q(columns={"filename": {"values": ["SK_EN.docx"]}}), "translation") == ["SK_EN.docx"]
+    assert _names(_q(sort="result"), "translation") == ["SK_EN.docx", "UB_EN.docx", "PMI_EN.docx"]
+    # The Tidak Sesuai toggle is Verifikasi's; it narrows nothing here.
+    assert len(_names(_q(mismatch_only=True), "translation")) == 3
+    assert check_history.history_facet("translation", _q(), "mode") == [("laporan", 2), ("siaran_pers", 1)]
+
+
+def test_sorting_by_publication_follows_the_label_order_the_ui_sends(clock):
+    _save("skdu.docx", publication="skdu")      # "Laporan Survei Kegiatan Dunia Usaha"
+    _save("sk.docx", publication="sk")          # "Survei Konsumen"
+    _save("umum.docx")                          # "Umum"
+
+    assert _names(_q(sort="publication", descending=False)) == ["umum.docx", "sk.docx", "skdu.docx"]
+    by_label = _q(sort="publication", descending=False, publication_order=["skdu", "sk", ""])
+    assert _names(by_label) == ["skdu.docx", "sk.docx", "umum.docx"]
+    assert _names(_q(sort="publication", publication_order=["skdu", "sk", ""])) == ["umum.docx", "sk.docx", "skdu.docx"]

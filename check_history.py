@@ -16,17 +16,18 @@ import logging
 import os
 import threading
 import uuid
+from collections import Counter
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import (
     Column, DateTime, Float, Integer, LargeBinary, MetaData, String, Table, Text,
-    create_engine, func, inspect, or_, select, text,
+    and_, case, create_engine, false, func, inspect, not_, or_, select, text,
 )
 from sqlalchemy.engine import Engine
 
-from schemas import CheckSummary, TranslationCheckSummary
+from schemas import CheckSummary, HistoryColumnFilter, HistoryQuery, TranslationCheckSummary
 
 logger = logging.getLogger("fact-checker")
 
@@ -241,10 +242,12 @@ def _filters(table: Table, text_columns: List[Column], q: str, publication: Opti
     return conditions
 
 
-def _page(columns: list, table: Table, conditions: list, limit: int, offset: int) -> Tuple[list, bool, int]:
-    """Newest first: the rows of one page, whether more follow, and how many match in all."""
+def _page(columns: list, table: Table, conditions: list, limit: int, offset: int,
+          order_by: Optional[list] = None) -> Tuple[list, bool, int]:
+    """The rows of one page (newest first unless `order_by` says otherwise), whether more
+    follow, and how many match in all."""
     query = (select(*columns).where(*conditions)
-             .order_by(table.c.created_at.desc(), table.c.id.desc()))
+             .order_by(*(order_by or [table.c.created_at.desc(), table.c.id.desc()])))
     with _get_engine().connect() as conn:
         rows = conn.execute(query.limit(limit + 1).offset(offset)).all()
         total = conn.execute(select(func.count()).select_from(table).where(*conditions)).scalar_one()
@@ -301,6 +304,107 @@ def list_translation_checks(limit: int = 50, offset: int = 0, q: str = "", *,
     conditions = _filters(t, [t.c.id_filename, t.c.en_filename], q, publication, date_from, date_to)
     rows, has_more, total = _page(_TRANSLATION_SUMMARY_COLUMNS, t, conditions, limit, offset)
     return [_translation_summary(r) for r in rows], has_more, total
+
+
+# ── Column filters and sorting: the ▾ on each History column (POST /api/history/search and
+# /api/history/facets, and their translation-history twins). Both lists share one vocabulary:
+# Cek Terjemahan's "Dokumen" is its English file and its "Mode" column is the document kind.
+
+HISTORY_KINDS = ("paired", "translation")
+
+
+def _table_of(kind: str) -> Table:
+    return checks if kind == "paired" else translation_checks
+
+
+def _facet_columns(table: Table) -> Dict[str, Column]:
+    if table is checks:
+        return {"filename": checks.c.filename, "publication": checks.c.publication,
+                "checker": checks.c.checker_name, "mode": checks.c.mode}
+    t = translation_checks
+    return {"filename": t.c.en_filename, "publication": t.c.publication,
+            "checker": t.c.checker_name, "mode": t.c.document}
+
+
+def _sort_key(table: Table, sort: str, publication_order: List[str]):
+    if sort == "publication" and publication_order:
+        rank = {key: i for i, key in enumerate(publication_order)}
+        return case(rank, value=func.coalesce(table.c.publication, ""), else_=len(rank))
+    if sort == "created_at":
+        return table.c.created_at
+    if sort == "duration":
+        return table.c.duration_s
+    if sort == "result":
+        # Verifikasi: the Tidak Sesuai count; Cek Terjemahan: every finding.
+        return checks.c.n_mismatch if table is checks else table.c.n_number + table.c.n_meaning
+    return func.lower(func.coalesce(_facet_columns(table)[sort], ""))
+
+
+def _day_condition(table: Table, days: List[str]):
+    ranges = []
+    for raw in days:
+        try:
+            day = date.fromisoformat(raw)
+        except ValueError:
+            continue
+        ranges.append(and_(table.c.created_at >= _wib_day_start(day),
+                           table.c.created_at < _wib_day_start(day + timedelta(days=1))))
+    return or_(*ranges) if ranges else false()
+
+
+def _column_condition(table: Table, column: str, flt: HistoryColumnFilter):
+    if column == "day":
+        match = _day_condition(table, flt.values)
+    else:
+        # A missing publication or checker is "", so it can be ticked like any other value, and
+        # an excluded list never drops those rows by NULL comparison.
+        match = func.coalesce(_facet_columns(table)[column], "").in_(flt.values)
+    return not_(match) if flt.exclude else match
+
+
+def _query_conditions(table: Table, query: HistoryQuery, skip_column: Optional[str] = None) -> list:
+    text_columns = [checks.c.filename] if table is checks else [table.c.id_filename, table.c.en_filename]
+    conditions = _filters(table, text_columns, query.q, None, query.date_from, query.date_to)
+    if query.mismatch_only and table is checks:
+        conditions.append(checks.c.n_mismatch > 0)
+    for column, flt in query.columns.items():
+        if column != skip_column:
+            conditions.append(_column_condition(table, column, flt))
+    return conditions
+
+
+def search_history(kind: str, query: HistoryQuery) -> Tuple[list, bool, int]:
+    """A page of summaries of one list ("paired" or "translation") narrowed by every filter of
+    `query` and ordered by its column (ties newest first), whether more follow, and the total."""
+    table = _table_of(kind)
+    key = _sort_key(table, query.sort, query.publication_order)
+    order = [key.desc() if query.descending else key.asc()]
+    if query.sort != "created_at":
+        order.append(table.c.created_at.desc())
+    order.append(table.c.id.desc())
+    if table is checks:
+        rows, has_more, total = _page(_SUMMARY_COLUMNS, checks, _query_conditions(checks, query),
+                                      query.limit, query.offset, order)
+        return [_row_to_summary(r) for r in rows], has_more, total
+    rows, has_more, total = _page(_TRANSLATION_SUMMARY_COLUMNS, table, _query_conditions(table, query),
+                                  query.limit, query.offset, order)
+    return [_translation_summary(r) for r in rows], has_more, total
+
+
+def history_facet(kind: str, query: HistoryQuery, column: str) -> List[Tuple[str, int]]:
+    """The values `column` takes among the checks every other filter keeps, with how many checks
+    have each — what a column's ▾ lists, as Excel does. Days newest first, the rest A→Z."""
+    table = _table_of(kind)
+    conditions = _query_conditions(table, query, skip_column=column)
+    with _get_engine().connect() as conn:
+        if column == "day":
+            stamps = conn.execute(select(table.c.created_at).where(*conditions)).scalars().all()
+            counts = Counter(_utc(s).astimezone(WIB).date().isoformat() for s in stamps)
+            return sorted(counts.items(), reverse=True)
+        value = func.coalesce(_facet_columns(table)[column], "")
+        rows = conn.execute(select(value, func.count()).select_from(table)
+                            .where(*conditions).group_by(value)).all()
+    return sorted(((v, n) for v, n in rows), key=lambda r: (r[0].lower(), r[0]))
 
 
 def get_translation_check(check_id: str) -> Optional[Tuple[TranslationCheckSummary, Dict[str, Any]]]:

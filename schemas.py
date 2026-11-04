@@ -1,6 +1,6 @@
 """Shared Pydantic request/response models for the fact-checking API."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
@@ -313,6 +313,51 @@ class CheckHistoryListResponse(BaseModel):
     items: List[CheckSummary]
     has_more: bool
     total: int = 0       # every match of the filters, not just this page
+
+
+# ── History column filters (the Excel-style ▾ on each column of the History table) ────────────
+
+# The History columns a filter can tick values of. "day" is a WIB date (YYYY-MM-DD); "" stands
+# for "no value": a check without a publication ("Umum") or without a checker's name.
+HistoryFacetColumn = Literal["day", "filename", "publication", "checker", "mode"]
+HistorySortColumn = Literal["created_at", "filename", "publication", "checker", "mode", "result", "duration"]
+
+
+class HistoryColumnFilter(BaseModel):
+    """The ticked values of one column, or — with exclude — the unticked ones, whichever list is
+    shorter: unticking one file name out of hundreds sends one name, and a check saved later
+    with a new value still shows."""
+    values: List[str] = Field(default_factory=list, max_length=5000)
+    exclude: bool = False
+
+
+class HistoryQuery(BaseModel):
+    """Everything that narrows and orders the History list."""
+    q: str = ""
+    date_from: Optional[date] = None   # whole WIB days, both included
+    date_to: Optional[date] = None
+    mismatch_only: bool = False        # Verifikasi only: at least one Tidak Sesuai
+    columns: Dict[HistoryFacetColumn, HistoryColumnFilter] = Field(default_factory=dict)
+    sort: HistorySortColumn = "created_at"
+    descending: bool = True
+    # Publication keys ("" = Umum) in the order their labels sort, which only the UI knows:
+    # sorting by Publikasi follows it, and falls back to the keys without it.
+    publication_order: List[str] = Field(default_factory=list, max_length=100)
+    limit: int = Field(default=50, ge=1, le=100)
+    offset: int = Field(default=0, ge=0)
+
+
+class HistoryFacetRequest(HistoryQuery):
+    column: HistoryFacetColumn
+
+
+class HistoryFacetValue(BaseModel):
+    value: str
+    count: int
+
+
+class HistoryFacetResponse(BaseModel):
+    values: List[HistoryFacetValue]
 
 
 # ── Cek Terjemahan: the English version checked against the Indonesian one ────────────────────

@@ -101,6 +101,10 @@ from schemas import (
     CoverageGap,
     DocumentRequest,
     FactVerificationResult,
+    HistoryFacetRequest,
+    HistoryFacetResponse,
+    HistoryFacetValue,
+    HistoryQuery,
     NumberFormatNotice,
     PairedVerificationResponse,
     TableDataResponse,
@@ -1098,6 +1102,51 @@ async def list_history_endpoint(limit: int = 50, offset: int = 0, q: str = "", p
         logger.warning("History list failed", exc_info=True)
         raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
     return CheckHistoryListResponse(items=items, has_more=has_more, total=total)
+
+
+async def _search_history(kind: str, query: HistoryQuery):
+    try:
+        return await asyncio.to_thread(check_history.search_history, kind, query)
+    except Exception as exc:
+        logger.warning("History search failed (%s)", kind, exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+
+
+async def _history_facet(kind: str, request: HistoryFacetRequest) -> HistoryFacetResponse:
+    try:
+        values = await asyncio.to_thread(check_history.history_facet, kind, request, request.column)
+    except Exception as exc:
+        logger.warning("History facet failed (%s, %s)", kind, request.column, exc_info=True)
+        raise HTTPException(status_code=503, detail=_HISTORY_UNAVAILABLE) from exc
+    return HistoryFacetResponse(values=[HistoryFacetValue(value=v, count=n) for v, n in values])
+
+
+@app.post("/api/history/search", response_model=CheckHistoryListResponse)
+async def search_history_endpoint(query: HistoryQuery) -> CheckHistoryListResponse:
+    """The History list with the column filters (the ▾ on each column) and a sort column, on top
+    of the search, period, publication and "Ada Tidak Sesuai" filters GET /api/history has.
+    A POST because a column filter can list many values."""
+    items, has_more, total = await _search_history("paired", query)
+    return CheckHistoryListResponse(items=items, has_more=has_more, total=total)
+
+
+@app.post("/api/history/facets", response_model=HistoryFacetResponse)
+async def history_facets_endpoint(request: HistoryFacetRequest) -> HistoryFacetResponse:
+    """The values one column takes among the checks the other filters keep, with their counts."""
+    return await _history_facet("paired", request)
+
+
+@app.post("/api/translation-history/search", response_model=TranslationHistoryListResponse)
+async def search_translation_history_endpoint(query: HistoryQuery) -> TranslationHistoryListResponse:
+    """POST /api/history/search for the Cek Terjemahan list ("Dokumen" is the English file,
+    "Mode" the document kind; mismatch_only does not apply)."""
+    items, has_more, total = await _search_history("translation", query)
+    return TranslationHistoryListResponse(items=items, has_more=has_more, total=total)
+
+
+@app.post("/api/translation-history/facets", response_model=HistoryFacetResponse)
+async def translation_history_facets_endpoint(request: HistoryFacetRequest) -> HistoryFacetResponse:
+    return await _history_facet("translation", request)
 
 
 @app.get("/api/history/{check_id}")

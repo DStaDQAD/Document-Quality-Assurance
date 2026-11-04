@@ -298,6 +298,63 @@ table.history-table td.history-duration { white-space: nowrap; }
   color: var(--blue-600); font-family: inherit; font-size: 12px; font-weight: 600;
 }
 .history-clear:hover { text-decoration: underline; text-underline-offset: 3px; }
+/* The ▾ on each History column: sort, and tick the values to keep (as Excel's filter does). */
+table.history-table th.history-th { padding: 0; }
+.history-col-btn {
+  display: inline-flex; align-items: center; gap: 2px; width: 100%;
+  padding: 7px 6px 7px 12px; border: none; background: none; cursor: pointer;
+  font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; text-align: left;
+}
+.history-col-btn .material-symbols-outlined { font-size: 16px; color: var(--text-400); }
+.history-col-btn .history-sort-arrow { font-size: 13px; }
+.history-col-btn:hover, .history-col-btn[aria-expanded="true"],
+.history-col-btn:hover .material-symbols-outlined { color: var(--blue-600); }
+.history-col-btn.is-filtered, .history-col-btn.is-filtered .material-symbols-outlined { color: var(--blue-600); }
+.history-col-btn:focus-visible { outline: 2px solid var(--blue-400); outline-offset: -2px; }
+.history-pop {
+  position: fixed; z-index: 60; width: min(300px, calc(100vw - 32px));
+  background: var(--white); border: 1px solid var(--border-dark); border-radius: var(--r-lg);
+  box-shadow: 0 10px 28px rgba(11, 31, 58, 0.18); font-size: 13px; color: var(--text-900);
+}
+.history-pop[hidden] { display: none; }
+.pop-sort { display: flex; flex-direction: column; padding: 6px; border-bottom: 1px solid var(--border); }
+.pop-sort button {
+  display: flex; align-items: center; gap: 8px; border: none; background: none; padding: 6px 8px;
+  border-radius: var(--r); font: inherit; color: inherit; cursor: pointer; text-align: left;
+}
+.pop-sort button:hover { background: var(--blue-50); }
+.pop-sort button.is-active { color: var(--blue-600); font-weight: 600; }
+.pop-sort .material-symbols-outlined { font-size: 16px; }
+.pop-body { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.pop-search {
+  width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: var(--r);
+  padding: 6px 8px; font: inherit; font-size: 12px; margin-bottom: 6px; background: var(--page-bg);
+}
+.pop-search:focus { outline: none; border-color: var(--blue-500); background: var(--white); }
+.pop-list { max-height: 240px; overflow-y: auto; }
+.pop-item { display: flex; align-items: center; gap: 8px; padding: 3px 2px; cursor: pointer; }
+.pop-label { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pop-n { color: var(--text-400); font-size: 11px; }
+.pop-all { font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 5px; margin-bottom: 3px; }
+.pop-month { display: flex; align-items: center; gap: 2px; }
+.pop-month .pop-item { flex: 1; font-weight: 600; }
+.pop-toggle { border: none; background: none; padding: 0; cursor: pointer; color: var(--text-400); display: inline-flex; }
+.pop-toggle .material-symbols-outlined { font-size: 18px; transition: transform 0.15s; }
+.pop-toggle[aria-expanded="true"] .material-symbols-outlined { transform: rotate(90deg); }
+.pop-days { padding-left: 20px; }
+.pop-days[hidden] { display: none; }
+.pop-empty { color: var(--text-400); font-size: 12px; padding: 4px 2px; margin: 0; }
+.pop-flag { display: flex; align-items: center; gap: 8px; cursor: pointer; padding: 2px; }
+.pop-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 8px 10px; }
+.pop-foot .pop-clear { margin-right: auto; }
+.pop-btn {
+  border: 1px solid var(--border); background: var(--white); color: var(--text-500); border-radius: var(--r);
+  padding: 5px 12px; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.pop-btn:hover { border-color: var(--blue-400); color: var(--blue-600); }
+.pop-btn.primary { background: var(--blue-500); border-color: var(--blue-500); color: var(--white); }
+.pop-btn.primary:hover { background: var(--blue-600); }
+.pop-btn:disabled { opacity: 0.5; cursor: default; }
 /* Riwayat lists Verifikasi and Cek Terjemahan apart; the switch reuses the settings tab look. */
 .history-kinds { display: flex; gap: 2px; padding: 0 16px; border-bottom: 1px solid var(--border); }
 
@@ -2751,7 +2808,12 @@ body.auth-locked .app {
   let historyQuery = "";
   // The filters under the search, sent to the server so "Muat lagi" pages through the matches.
   // Dates are YYYY-MM-DD days in WIB; "" leaves that end open.
-  const historyFilter = { publication: "", from: "", to: "", mismatch: false };
+  const historyFilter = { from: "", to: "", mismatch: false };
+  // The ▾ on each column: per column the ticked values, or the unticked ones with exclude (see
+  // schemas.HistoryColumnFilter). The publication dropdown above edits the same entry.
+  let historyColumns = {};
+  const HISTORY_DEFAULT_SORT = { by: "created_at", desc: true };
+  let historySort = { ...HISTORY_DEFAULT_SORT };
   let historyRequest = 0;  // a newer search makes an older answer still in flight stale
   let historySearchTimer = null;
   // True while the Verifikasi button's run is in flight (set by its click handler). An entry
@@ -2771,7 +2833,16 @@ body.auth-locked .app {
   }
 
   async function fetchJson(url) {
-    const res = await fetch(url);
+    return jsonOrThrow(await fetch(url));
+  }
+
+  async function postJson(url, body) {
+    return jsonOrThrow(await fetch(url, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    }));
+  }
+
+  async function jsonOrThrow(res) {
     if (!res.ok) {
       let detail = `Server membalas ${res.status}.`;
       try { detail = (await res.json()).detail || detail; } catch (_) {}
@@ -2829,14 +2900,10 @@ body.auth-locked .app {
       listEl.innerHTML = `<p class="muted-text history-empty">Memuat History…</p>`;
     }
     const translation = historyKind === "translation";
-    const params = new URLSearchParams({ limit: HISTORY_PAGE, offset: historyItems.length, q: historyQuery });
-    if (historyFilter.publication) params.set("publication", historyFilter.publication);
-    if (historyFilter.from) params.set("date_from", historyFilter.from);
-    if (historyFilter.to) params.set("date_to", historyFilter.to);
-    if (historyFilter.mismatch && !translation) params.set("mismatch_only", "true");
     let page;
     try {
-      page = await fetchJson(`${translation ? "/api/translation-history" : "/api/history"}?${params}`);
+      page = await postJson(`${historyApi()}/search`,
+        { ...historyQueryBody(), limit: HISTORY_PAGE, offset: historyItems.length });
     } catch (err) {
       if (request !== historyRequest) return;
       const banner = `<div class="error-banner">${escapeHtml(err.message)}</div>`;
@@ -2849,15 +2916,361 @@ body.auth-locked .app {
     historyItems = historyItems.concat(page.items);
     moreRow.hidden = !page.has_more;
     renderHistoryCount(page.total);
-    if (!historyItems.length) {
-      listEl.innerHTML = `<p class="muted-text history-empty">${historyFiltered()
-        ? "Tidak ada pengecekan yang cocok." : "Belum ada pengecekan yang tersimpan."}</p>`;
+    if (!historyItems.length && !historyFiltered()) {
+      listEl.innerHTML = `<p class="muted-text history-empty">Belum ada pengecekan yang tersimpan.</p>`;
       return;
     }
+    // A filter that keeps nothing still shows the header, so its ▾ can undo it.
+    const rows = historyItems.length
+      ? historyItems.map(translation ? renderTranslationRow : renderHistoryRow).join("")
+      : `<tr><td colspan="8" class="muted-text history-empty">Tidak ada pengecekan yang cocok.</td></tr>`;
     listEl.innerHTML = `<div class="history-table-wrap"><table class="data-table history-table">
-      <thead><tr><th>Waktu</th><th>Dokumen</th><th>Publikasi</th><th>Pemeriksa</th><th>${translation ? "Jenis" : "Mode"}</th><th>${translation ? "Temuan" : "Hasil"}</th><th>Durasi</th><th><span class="sr-only">Buka</span></th></tr></thead>
-      <tbody>${historyItems.map(translation ? renderTranslationRow : renderHistoryRow).join("")}</tbody>
+      <thead><tr>${historyHeader()}<th><span class="sr-only">Buka</span></th></tr></thead>
+      <tbody>${rows}</tbody>
     </table></div>`;
+  }
+
+  function historyApi() {
+    return historyKind === "translation" ? "/api/translation-history" : "/api/history";
+  }
+
+  // What POST …/search and …/facets take (schemas.HistoryQuery).
+  function historyQueryBody() {
+    const order = ["", ...Object.keys(PUBLICATIONS)]
+      .sort((a, b) => publicationLabel(a).localeCompare(publicationLabel(b), "id"));
+    return {
+      q: historyQuery, date_from: historyFilter.from || null, date_to: historyFilter.to || null,
+      mismatch_only: historyFilter.mismatch && historyKind === "paired",
+      columns: historyColumns, sort: historySort.by, descending: historySort.desc,
+      publication_order: order,
+    };
+  }
+
+  // The History columns in order. `facet`: its ▾ lists values to tick; `sort`: the server's sort
+  // key, and `order` the wording of its two directions, ascending first.
+  function historyColumnDefs() {
+    const tr = historyKind === "translation";
+    const az = ["A → Z", "Z → A"];
+    return [
+      { key: "day", sort: "created_at", label: "Waktu", facet: true, order: ["Terlama dulu", "Terbaru dulu"] },
+      { key: "filename", sort: "filename", label: "Dokumen", facet: true, order: az },
+      { key: "publication", sort: "publication", label: "Publikasi", facet: true, order: az },
+      { key: "checker", sort: "checker", label: "Pemeriksa", facet: true, order: az },
+      { key: "mode", sort: "mode", label: tr ? "Jenis" : "Mode", facet: true, order: az },
+      { key: "result", sort: "result", label: tr ? "Temuan" : "Hasil",
+        order: tr ? ["Temuan paling sedikit", "Temuan paling banyak"]
+          : ["Tidak Sesuai paling sedikit", "Tidak Sesuai paling banyak"] },
+      { key: "duration", sort: "duration", label: "Durasi", order: ["Tercepat dulu", "Terlama dulu"] },
+    ];
+  }
+
+  // Whether anything narrows the list by this column: its ticks, or the filter above it that
+  // means the same (the period for Waktu, "Ada Tidak Sesuai" for Hasil).
+  function historyColumnActive(key) {
+    if (key === "day") return Boolean(historyColumns.day || historyFilter.from || historyFilter.to);
+    if (key === "result") return historyFilter.mismatch && historyKind === "paired";
+    return Boolean(historyColumns[key]);
+  }
+
+  function historyHeader() {
+    return historyColumnDefs().map((c) => {
+      const active = historyColumnActive(c.key);
+      const sorted = historySort.by === c.sort;
+      const arrow = sorted ? `<span class="material-symbols-outlined history-sort-arrow" aria-hidden="true">${
+        historySort.desc ? "arrow_downward" : "arrow_upward"}</span>` : "";
+      const state = [active ? "difilter" : "", sorted ? `diurutkan ${c.order[historySort.desc ? 1 : 0]}` : ""]
+        .filter(Boolean).join(", ");
+      const ariaSort = sorted ? ` aria-sort="${historySort.desc ? "descending" : "ascending"}"` : "";
+      return `<th class="history-th"${ariaSort}><button type="button" class="history-col-btn${active ? " is-filtered" : ""}"
+        data-col="${c.key}" aria-haspopup="dialog" aria-expanded="false"
+        aria-label="${escapeHtml(`${c.label}${state ? ` (${state})` : ""}: urutkan atau filter`)}">${escapeHtml(c.label)}${arrow}<span
+        class="material-symbols-outlined" aria-hidden="true">${active ? "filter_alt" : "arrow_drop_down"}</span></button></th>`;
+    }).join("");
+  }
+
+  // How a value of a column reads in its ▾ list ("" is "Umum" or a check without a name).
+  function facetLabel(key, value) {
+    if (key === "publication") return publicationLabel(value);
+    if (key === "checker") return value || "(tanpa nama)";
+    if (key === "mode") {
+      return (historyKind === "translation" ? TRANSLATION_DOCUMENTS[value] : MODE_LABELS[value]) || value;
+    }
+    if (key === "day") {
+      return new Date(`${value}T12:00:00+07:00`).toLocaleDateString("id-ID",
+        { timeZone: "Asia/Jakarta", day: "numeric", month: "long", year: "numeric" });
+    }
+    return value;
+  }
+
+  function monthLabel(month) {
+    return new Date(`${month}-15T12:00:00+07:00`).toLocaleDateString("id-ID",
+      { timeZone: "Asia/Jakarta", month: "long", year: "numeric" });
+  }
+
+  // ── The ▾ panel. One at a time, on the page body (the table's own box scrolls sideways and
+  // would clip it); scrolling or resizing closes it, as Excel's does.
+  const historyPop = document.createElement("div");
+  historyPop.className = "history-pop";
+  historyPop.hidden = true;
+  historyPop.setAttribute("role", "dialog");
+  document.body.appendChild(historyPop);
+  // { key, def, btn, values: [{value, count}] | null, checked: Set, search, open: Set of months,
+  //   visible, error }
+  let pop = null;
+  let popRequest = 0;
+
+  function closeHistoryPop(refocus) {
+    if (!pop) return;
+    const btn = pop.btn;
+    pop = null;
+    historyPop.hidden = true;
+    historyPop.innerHTML = "";
+    if (btn.isConnected) {
+      btn.setAttribute("aria-expanded", "false");
+      if (refocus) btn.focus();
+    }
+  }
+
+  async function openHistoryPop(btn) {
+    const key = btn.dataset.col;
+    if (pop && pop.btn === btn) { closeHistoryPop(true); return; }
+    closeHistoryPop(false);
+    const def = historyColumnDefs().find((c) => c.key === key);
+    pop = { key, def, btn, values: null, checked: new Set(), search: "", open: new Set(), visible: [], error: "" };
+    btn.setAttribute("aria-expanded", "true");
+    historyPop.setAttribute("aria-label", `Urutkan atau filter kolom ${def.label}`);
+    renderHistoryPop();
+    historyPop.hidden = false;
+    placeHistoryPop();
+    (historyPop.querySelector(".pop-search") || historyPop.querySelector("button")).focus();
+    if (!def.facet) return;
+    const request = ++popRequest;
+    let res;
+    try {
+      res = await postJson(`${historyApi()}/facets`, { ...historyQueryBody(), column: key });
+    } catch (err) {
+      if (request !== popRequest || !pop) return;
+      pop.error = err.message;
+      renderHistoryPopList();
+      return;
+    }
+    if (request !== popRequest || !pop) return;
+    const values = res.values.slice();
+    if (key !== "day") {
+      values.sort((a, b) => facetLabel(key, a.value).localeCompare(facetLabel(key, b.value), "id"));
+    }
+    const f = historyColumns[key];
+    pop.values = values;
+    pop.checked = new Set(values.map((v) => v.value)
+      .filter((v) => !f || (f.exclude ? !f.values.includes(v) : f.values.includes(v))));
+    // The newest month opens; older months stay folded until asked.
+    if (key === "day" && values.length) pop.open.add(values[0].value.slice(0, 7));
+    renderHistoryPopList();
+  }
+
+  function placeHistoryPop() {
+    const r = pop.btn.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - historyPop.offsetWidth - 8));
+    historyPop.style.left = `${left}px`;
+    historyPop.style.top = `${Math.min(r.bottom + 4, Math.max(8, window.innerHeight - historyPop.offsetHeight - 8))}px`;
+  }
+
+  function renderHistoryPop() {
+    const { key, def } = pop;
+    const sortedHere = historySort.by === def.sort;
+    const sortBtn = (desc) => `<button type="button" data-sort="${desc ? "desc" : "asc"}"
+      class="${sortedHere && historySort.desc === desc ? "is-active" : ""}"><span class="material-symbols-outlined"
+      aria-hidden="true">${desc ? "arrow_downward" : "arrow_upward"}</span>${escapeHtml(def.order[desc ? 1 : 0])}</button>`;
+    const list = def.facet ? `<div class="pop-body">
+        <input type="search" class="pop-search" placeholder="Cari…" aria-label="Cari nilai ${escapeHtml(def.label)}">
+        <div class="pop-list" role="group" aria-label="Nilai ${escapeHtml(def.label)}"></div>
+      </div>` : "";
+    const flag = key === "result" && historyKind === "paired" ? `<div class="pop-body">
+        <label class="pop-flag"><input type="checkbox" data-mismatch${historyFilter.mismatch ? " checked" : ""}>
+          Hanya yang ada Tidak Sesuai</label>
+      </div>` : "";
+    const clear = historyColumnActive(key)
+      ? `<button type="button" class="pop-btn pop-clear" data-act="clear">Hapus filter</button>` : "";
+    const buttons = def.facet
+      ? `<button type="button" class="pop-btn" data-act="cancel">Batal</button>
+         <button type="button" class="pop-btn primary" data-act="ok" disabled>OK</button>`
+      : `<button type="button" class="pop-btn" data-act="cancel">Tutup</button>`;
+    historyPop.innerHTML = `<div class="pop-sort" role="group" aria-label="Urutkan">${sortBtn(false)}${sortBtn(true)}</div>
+      ${list}${flag}<div class="pop-foot">${clear}${buttons}</div>`;
+    if (def.facet) renderHistoryPopList();
+  }
+
+  function popItem(v) {
+    const i = pop.values.indexOf(v);
+    return `<label class="pop-item"><input type="checkbox" data-i="${i}"${pop.checked.has(v.value) ? " checked" : ""}>
+      <span class="pop-label">${escapeHtml(facetLabel(pop.key, v.value))}</span><span class="pop-n">${v.count}</span></label>`;
+  }
+
+  function renderHistoryPopList() {
+    const list = historyPop.querySelector(".pop-list");
+    if (!list) return;
+    if (pop.error) { list.innerHTML = `<p class="pop-empty">${escapeHtml(pop.error)}</p>`; return; }
+    if (!pop.values) { list.innerHTML = `<p class="pop-empty">Memuat…</p>`; return; }
+    const needle = pop.search.trim().toLowerCase();
+    pop.visible = pop.values.filter((v) => !needle || facetLabel(pop.key, v.value).toLowerCase().includes(needle));
+    if (!pop.visible.length) {
+      list.innerHTML = `<p class="pop-empty">${pop.values.length ? "Tidak ada yang cocok." : "Tidak ada pengecekan."}</p>`;
+      syncPopBoxes();
+      return;
+    }
+    const all = `<label class="pop-item pop-all"><input type="checkbox" data-all>
+      <span class="pop-label">(Pilih semua${needle ? " hasil cari" : ""})</span></label>`;
+    let items;
+    if (pop.key === "day") {
+      const months = new Map();
+      pop.visible.forEach((v) => {
+        const m = v.value.slice(0, 7);
+        if (!months.has(m)) months.set(m, []);
+        months.get(m).push(v);
+      });
+      items = [...months].map(([m, days]) => {
+        const open = Boolean(needle) || pop.open.has(m);
+        const n = days.reduce((sum, d) => sum + d.count, 0);
+        return `<div class="pop-month"><button type="button" class="pop-toggle" data-month="${m}" aria-expanded="${open}"
+            aria-label="${open ? "Tutup" : "Buka"} ${escapeHtml(monthLabel(m))}"><span class="material-symbols-outlined"
+            aria-hidden="true">chevron_right</span></button>
+          <label class="pop-item"><input type="checkbox" data-month-box="${m}">
+            <span class="pop-label">${escapeHtml(monthLabel(m))}</span><span class="pop-n">${n}</span></label></div>
+          <div class="pop-days"${open ? "" : " hidden"}>${days.map(popItem).join("")}</div>`;
+      }).join("");
+    } else {
+      items = pop.visible.map(popItem).join("");
+    }
+    list.innerHTML = all + items;
+    syncPopBoxes();
+  }
+
+  // The values OK would keep: with a search, only the ticked ones the search shows (as Excel).
+  function popSelection() {
+    const pool = pop.search.trim() ? pop.visible : pop.values || [];
+    return pool.filter((v) => pop.checked.has(v.value)).map((v) => v.value);
+  }
+
+  function syncPopBoxes() {
+    const vis = pop.visible;
+    const tri = (box, group) => {
+      const k = group.filter((v) => pop.checked.has(v.value)).length;
+      box.checked = k > 0 && k === group.length;
+      box.indeterminate = k > 0 && k < group.length;
+    };
+    const allBox = historyPop.querySelector("[data-all]");
+    if (allBox) tri(allBox, vis);
+    historyPop.querySelectorAll("[data-month-box]").forEach((box) =>
+      tri(box, vis.filter((v) => v.value.startsWith(box.dataset.monthBox))));
+    historyPop.querySelectorAll("[data-i]").forEach((box) => {
+      box.checked = pop.checked.has(pop.values[Number(box.dataset.i)].value);
+    });
+    const ok = historyPop.querySelector('[data-act="ok"]');
+    if (ok) ok.disabled = !pop.values || popSelection().length === 0;
+  }
+
+  function applyHistoryPop() {
+    const ticked = popSelection();
+    const all = pop.values.map((v) => v.value);
+    if (ticked.length === all.length) {
+      delete historyColumns[pop.key];
+    } else {
+      // The shorter list goes to the server: one unticked name instead of hundreds ticked.
+      const unticked = all.filter((v) => !ticked.includes(v));
+      historyColumns[pop.key] = ticked.length <= unticked.length
+        ? { values: ticked, exclude: false } : { values: unticked, exclude: true };
+    }
+  }
+
+  function clearHistoryColumn(key) {
+    if (key === "day") {
+      delete historyColumns.day;
+      setHistoryPeriod("");
+    } else if (key === "result") {
+      historyFilter.mismatch = false;
+      document.getElementById("history-mismatch").checked = false;
+    } else {
+      delete historyColumns[key];
+    }
+  }
+
+  function rerunHistory() {
+    closeHistoryPop(false);
+    syncPublicationSelect();
+    loadHistory(true);
+  }
+
+  historyPop.addEventListener("change", (e) => {
+    const t = e.target;
+    if (t.matches("[data-mismatch]")) {
+      historyFilter.mismatch = t.checked;
+      document.getElementById("history-mismatch").checked = t.checked;
+      rerunHistory();
+      return;
+    }
+    let group = null;
+    if (t.matches("[data-i]")) group = [pop.values[Number(t.dataset.i)]];
+    else if (t.matches("[data-all]")) group = pop.visible;
+    else if (t.matches("[data-month-box]")) group = pop.visible.filter((v) => v.value.startsWith(t.dataset.monthBox));
+    if (!group) return;
+    group.forEach((v) => { if (t.checked) pop.checked.add(v.value); else pop.checked.delete(v.value); });
+    syncPopBoxes();
+  });
+  historyPop.addEventListener("input", (e) => {
+    if (!e.target.matches(".pop-search")) return;
+    pop.search = e.target.value;
+    renderHistoryPopList();
+  });
+  historyPop.addEventListener("click", (e) => {
+    const toggle = e.target.closest("[data-month]");
+    if (toggle) {
+      const m = toggle.dataset.month;
+      if (pop.open.has(m)) pop.open.delete(m); else pop.open.add(m);
+      renderHistoryPopList();
+      historyPop.querySelector(`[data-month="${m}"]`)?.focus();
+      return;
+    }
+    const sortBtn = e.target.closest("[data-sort]");
+    if (sortBtn) {
+      historySort = { by: pop.def.sort, desc: sortBtn.dataset.sort === "desc" };
+      rerunHistory();
+      return;
+    }
+    const act = e.target.closest("[data-act]")?.dataset.act;
+    if (act === "cancel") closeHistoryPop(true);
+    else if (act === "clear") { clearHistoryColumn(pop.key); rerunHistory(); }
+    else if (act === "ok") { applyHistoryPop(); rerunHistory(); }
+  });
+  historyPop.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.matches(".pop-search")) {
+      e.preventDefault();
+      const ok = historyPop.querySelector('[data-act="ok"]');
+      if (ok && !ok.disabled) ok.click();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && pop) closeHistoryPop(true);
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (pop && !historyPop.contains(e.target) && !e.target.closest(".history-col-btn")) closeHistoryPop(false);
+  });
+  document.addEventListener("scroll", (e) => {
+    if (pop && !historyPop.contains(e.target)) closeHistoryPop(false);
+  }, true);
+  window.addEventListener("resize", () => closeHistoryPop(false));
+
+  // The publication dropdown and the Publikasi ▾ are one filter: one ticked publication shows
+  // in the dropdown, anything else as a line saying what the column filter keeps.
+  function syncPublicationSelect() {
+    const sel = document.getElementById("history-publication");
+    sel.querySelector("option[data-multi]")?.remove();
+    const f = historyColumns.publication;
+    if (!f) { sel.value = ""; return; }
+    if (!f.exclude && f.values.length === 1 && PUBLICATIONS[f.values[0]]) { sel.value = f.values[0]; return; }
+    const text = !f.exclude && f.values.length === 1 ? publicationLabel(f.values[0])
+      : f.exclude ? `Semua kecuali ${f.values.length} publikasi` : `${f.values.length} publikasi dipilih`;
+    sel.insertAdjacentHTML("beforeend", `<option value="__multi" data-multi>${escapeHtml(text)}</option>`);
+    sel.value = "__multi";
   }
 
   const TRANSLATION_DOCUMENTS = { siaran_pers: "Siaran Pers", laporan: "Laporan" };
@@ -2893,6 +3306,11 @@ body.auth-locked .app {
     document.getElementById("history-legend").hidden = historyKind !== "paired";
     // Cek Terjemahan has no Tidak Sesuai count to filter on.
     document.getElementById("history-flag").hidden = historyKind !== "paired";
+    // Dokumen and Mode mean another thing in the other list, and so do Hasil's sorts.
+    delete historyColumns.filename;
+    delete historyColumns.mode;
+    historySort = { ...HISTORY_DEFAULT_SORT };
+    closeHistoryPop(false);
     loadHistory(true);
   });
 
@@ -2969,6 +3387,8 @@ body.auth-locked .app {
 
   const historyListEl = document.getElementById("history-list");
   historyListEl.addEventListener("click", (e) => {
+    const colBtn = e.target.closest(".history-col-btn");
+    if (colBtn) { openHistoryPop(colBtn); return; }
     const row = e.target.closest(".history-row");
     if (row) openListedEntry(Number(row.dataset.idx));
   });
@@ -2979,7 +3399,7 @@ body.auth-locked .app {
   document.getElementById("history-more").addEventListener("click", () => loadHistory(false));
   // Whether the list is narrowed at all: the search or any filter that applies to this list.
   function historyFiltered() {
-    return Boolean(historyQuery || historyFilter.publication || historyFilter.from || historyFilter.to
+    return Boolean(historyQuery || historyFilter.from || historyFilter.to || Object.keys(historyColumns).length
       || (historyFilter.mismatch && historyKind === "paired"));
   }
 
@@ -3002,9 +3422,18 @@ body.auth-locked .app {
   document.getElementById("history-publication").insertAdjacentHTML("beforeend", Object.entries(PUBLICATIONS)
     .map(([key, p]) => `<option value="${key}">${escapeHtml(p.label)}</option>`).join(""));
   document.getElementById("history-publication").addEventListener("change", (e) => {
-    historyFilter.publication = e.target.value;
-    loadHistory(true);
+    const key = e.target.value;
+    if (key === "__multi") return;
+    if (key) historyColumns.publication = { values: [key], exclude: false };
+    else delete historyColumns.publication;
+    rerunHistory();
   });
+  // Back to "Semua waktu" (value "") or another choice of the period dropdown, as if picked.
+  function setHistoryPeriod(value) {
+    historyPeriodEl.value = value;
+    if (value === "") historyFromEl.value = historyToEl.value = "";
+    historyPeriodEl.dispatchEvent(new Event("change"));
+  }
   historyPeriodEl.addEventListener("change", () => {
     const custom = historyPeriodEl.value === "custom";
     document.getElementById("history-dates").hidden = !custom;
@@ -3029,7 +3458,10 @@ body.auth-locked .app {
   });
   document.getElementById("history-count").addEventListener("click", (e) => {
     if (!e.target.closest(".history-clear")) return;
-    Object.assign(historyFilter, { publication: "", from: "", to: "", mismatch: false });
+    Object.assign(historyFilter, { from: "", to: "", mismatch: false });
+    historyColumns = {};
+    historySort = { ...HISTORY_DEFAULT_SORT };
+    syncPublicationSelect();
     historyQuery = "";
     document.getElementById("history-search").value = "";
     document.getElementById("history-publication").value = "";

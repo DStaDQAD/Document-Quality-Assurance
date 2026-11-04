@@ -297,3 +297,44 @@ def test_the_pipeline_passes_the_review_model_when_ai_review_is_on(
     client.post("/api/verify-paired", params={"run_typo_check": "false"}, files=[_PDF, _XLS])
     assert mock_verify.call_args.kwargs["review_llm"] is mock_review_llm.return_value
     assert mock_verify.call_args.kwargs["review_new_refuted"] == "verdict"
+
+
+def test_history_search_takes_column_filters_and_a_sort():
+    _seed("b.docx", publication="skdu")
+    _seed("a.docx", publication="sk")
+    _seed("c.docx")
+
+    body = client.post("/api/history/search", json={
+        "columns": {"publication": {"values": ["sk", ""]}}, "sort": "filename", "descending": False}).json()
+    assert [i["filename"] for i in body["items"]] == ["a.docx", "c.docx"] and body["total"] == 2
+    assert client.post("/api/history/search", json={"sort": "id"}).status_code == 422
+    assert client.post("/api/history/search", json={"columns": {"hasil": {"values": []}}}).status_code == 422
+    assert client.post("/api/history/search", json={"limit": 500}).status_code == 422
+
+
+def test_history_facets_lists_a_columns_values_with_counts():
+    _seed("a.docx", publication="sk")
+    _seed("b.docx", publication="sk")
+    _seed("c.docx")
+
+    body = client.post("/api/history/facets", json={"column": "publication"}).json()
+    assert body == {"values": [{"value": "", "count": 1}, {"value": "sk", "count": 2}]}
+    assert client.post("/api/history/facets", json={}).status_code == 422
+
+
+def test_translation_history_search_and_facets():
+    check_history.save_translation_check(
+        main.TranslationCheckSummary(document="laporan", id_filename="ID.docx", en_filename="EN.docx"), {"pairs": []})
+
+    body = client.post("/api/translation-history/search", json={}).json()
+    assert [i["en_filename"] for i in body["items"]] == ["EN.docx"]
+    facets = client.post("/api/translation-history/facets", json={"column": "mode"}).json()
+    assert facets == {"values": [{"value": "laporan", "count": 1}]}
+
+
+def test_history_search_and_facets_answer_503_when_the_database_is_down():
+    with patch("main.check_history.search_history", side_effect=RuntimeError("down")):
+        assert client.post("/api/history/search", json={}).status_code == 503
+        assert client.post("/api/translation-history/search", json={}).status_code == 503
+    with patch("main.check_history.history_facet", side_effect=RuntimeError("down")):
+        assert client.post("/api/history/facets", json={"column": "day"}).status_code == 503
