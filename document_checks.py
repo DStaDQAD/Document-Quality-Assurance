@@ -2,7 +2,9 @@
 
 Three mistakes no workbook can show, all planted by the mentor in SKDU Tw III-2026:
   - a sentence that compares two of its own numbers the wrong way round ("22,68%, lebih rendah
-    dibandingkan 22,34%") — the numbers are right, the word is not;
+    dibandingkan 22,34%") — the numbers are right, the word is not; the same for a change from
+    one number to another ("impor gas 1,5 miliar dolar AS, menurun dari 0,7", planted in NPI
+    Tw II-2026, where the workbook has no gas row at all);
   - a sentence citing the wrong appendix table ("akses kredit … (Lampiran Tabel 1)", the
     Kegiatan Usaha table, while its figures are printed in Tabel 3) — told from what each table
     of a Word document prints, read out of its picture, never from the Excel;
@@ -68,7 +70,8 @@ class _Unsure(Exception):
 
 
 # "terkontraksi sebesar 12,27%" is −12,27: the sentence states the size, the word the sign.
-_NEGATIVE_WORD_RE = re.compile(r"\b(?:terkontraksi|kontraksi|minus)\b[^\d]{0,20}$", re.IGNORECASE)
+# "bernilai negatif sebesar 2,59" (SBank Tw I-2026, an index below zero) is −2,59 too.
+_NEGATIVE_WORD_RE = re.compile(r"\b(?:terkontraksi|kontraksi|minus|negatif)\b[^\d]{0,20}$", re.IGNORECASE)
 # "turun 1,2%" may be a fall of 1,2 or a growth of −1,2: either reading is the sentence's.
 _FALL_WORD_RE = re.compile(r"\b(?:turun|menurun|penurunan)\b(?:\s+sebesar)?\s*$", re.IGNORECASE)
 
@@ -149,6 +152,64 @@ def _wrong_comparisons(sentence: str) -> List[Tuple[float, float, str]]:
             if a_pct == b_pct and a != b and (a > b) != higher:
                 wrong.append((a, b, m.group(1).lower()))
     return wrong
+
+
+# A change from one number to another: "1,5 …, menurun dari 0,7" (the new figure first) or "naik
+# dari 0,5 menjadi 0,7" (both after the word). Only these four words: "menguat"/"melemah" of an
+# exchange rate run the other way to its number, and "melebar"/"menyempit" are about sizes.
+_FROM_RE = re.compile(r"\b(naik|meningkat|turun|menurun)\s+dari\b", re.IGNORECASE)
+_RISE = {"naik", "meningkat"}
+_INTO_RE = re.compile(r"\bmenjadi\b", re.IGNORECASE)
+
+
+def _wrong_directions(sentence: str) -> List[Tuple[float, float, str]]:
+    """(new, old, word) for each change the sentence words the other way to its two numbers."""
+    wrong: List[Tuple[float, float, str]] = []
+    previous_end = 0
+    for m in _FROM_RE.finditer(sentence):
+        head = sentence[previous_end:m.start()]
+        previous_end = m.end()
+        if re.search(r"\btidak\s+$", head, re.IGNORECASE):
+            continue
+        tail = sentence[m.end():]
+        end = _CLAUSE_END_RE.search(tail)
+        tail = tail[:end.start()] if end else tail
+        try:
+            olds = _plain_numbers(tail[:_AFTER_WINDOW])
+            if not olds:
+                continue
+            into = _INTO_RE.search(tail)
+            if into:
+                news = _plain_numbers(tail[into.end():into.end() + _AFTER_WINDOW])
+                old, new = olds[0], (news[0] if news else None)
+            else:
+                # The new figure is the last one of the same clause before the word.
+                clause = re.split(_CLAUSE_END_RE, head)[-1]
+                before = _plain_numbers(clause)
+                old, new = olds[0], (before[-1] if before else None)
+        except _Unsure:
+            continue
+        if new is None:
+            continue
+        (a, a_pct), (b, b_pct) = new, old
+        # A contraction on either side: the words may be about its size.
+        if a < 0 or b < 0 or a_pct != b_pct or a == b:
+            continue
+        rise = m.group(1).lower() in _RISE
+        if (a > b) != rise:
+            wrong.append((a, b, m.group(1).lower()))
+    return wrong
+
+
+def _direction_result(sentence: str, page: Optional[int], a: float, b: float, word: str
+                      ) -> FactVerificationResult:
+    truth = "lebih tinggi" if a > b else "lebih rendah"
+    return FactVerificationResult(
+        operation="comparison", metric_label=f"Perubahan {_fmt(b)} ke {_fmt(a)}",
+        verdict="Refuted", context_quote=sentence, page_number=page, resolved_via=RESOLVED_VIA,
+        reasoning=(f"Kalimat menulis {word} dari {_fmt(b)} ke {_fmt(a)}, padahal {_fmt(a)} {truth} dari "
+                   f"{_fmt(b)} | Dicek dari dua angka di kalimat itu sendiri, tanpa tabel"),
+    )
 
 
 def _comparison_result(sentence: str, page: Optional[int], a: float, b: float, word: str
@@ -576,6 +637,12 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
                 continue
             out = [r for r in out if r not in same]
             out.append(_comparison_result(sentence, page, a, b, word))
+        for a, b, word in _wrong_directions(sentence):
+            same = [r for r in out if _is_same_comparison(r, sentence, a, b)]
+            if any(r.verdict == "Refuted" for r in same):
+                continue
+            out = [r for r in out if r not in same]
+            out.append(_direction_result(sentence, page, a, b, word))
 
     found = _pointers(narrative_text, table_texts)
     if found.numbering_problem:

@@ -41,6 +41,35 @@ def test_a_year_between_the_figure_and_the_words_is_not_the_figure():
     assert dc._wrong_comparisons(sentence) == [(1.84, 2.45, "tinggi")]
 
 
+# --- a change from one number to another ("menurun dari", "naik dari ... menjadi") -------------
+
+def test_a_change_worded_the_other_way_to_its_numbers_is_tidak_sesuai():
+    # Planted in NPI Tw II-2026: the workbook has no gas row, so only the sentence itself shows it.
+    sentence = ("Impor gas pada triwulan II 2026 tercatat sebesar 1,5 miliar dolar AS, menurun dari 0,7 miliar "
+                "dolar AS pada triwulan I 2026.")
+    found = _findings(dc.check_document(_narrative(sentence), []))
+    assert len(found) == 1 and found[0].verdict == "Refuted" and found[0].operation == "comparison"
+    assert "menurun dari 0,7 ke 1,5" in found[0].reasoning
+
+
+def test_from_and_into_are_read_in_that_order():
+    assert dc._wrong_directions("Ekspor NG turun dari 0,5 miliar dolar AS menjadi 0,7 miliar dolar AS.") == [
+        (0.7, 0.5, "turun")]
+    assert dc._wrong_directions("Ekspor NG naik dari 0,5 miliar dolar AS menjadi 0,7 miliar dolar AS.") == []
+    assert dc._wrong_directions(
+        "Imbal hasil tercatat meningkat dari 6,3 miliar dolar AS menjadi 6,5 miliar dolar AS.") == []
+
+
+def test_a_change_the_numbers_bear_out_or_cannot_judge_is_left_alone():
+    assert dc._wrong_directions("Inflasi 2,3% (yoy), turun dari bulan sebelumnya 2,5% (yoy).") == []
+    # SBank Tw I-2026: an index from below zero ("negatif sebesar 2,59") up to 0,15.
+    assert dc._wrong_directions("ILS bernilai positif sebesar 0,15, meningkat dari triwulan IV 2025 yang "
+                                "bernilai negatif sebesar 2,59 (Grafik 5).") == []
+    # A share against a level, and a change with no second figure: nothing to compare.
+    assert dc._wrong_directions("Kredit tumbuh 8,2%, naik dari Rp7.900 triliun.") == []
+    assert dc._wrong_directions("Penjualan 120,5 naik dari bulan sebelumnya.") == []
+
+
 def test_a_comparison_the_numbers_bear_out_is_not_a_finding():
     sentence = "SBT kegiatan usaha sebesar 11,46%, meski lebih rendah dari 12,97% pada triwulan II 2026 (Grafik 2)."
     assert dc._wrong_comparisons(sentence) == []
