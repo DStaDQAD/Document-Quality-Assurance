@@ -281,11 +281,45 @@ def test_a_deficit_stated_by_its_size(size, verdict):
     assert evaluate_claim(claim, _views(NPI)).verdict == verdict
 
 
-@pytest.mark.parametrize("size, verdict", [(True, "Entailed"), (False, "Refuted")])
-def test_imports_rising_in_size_on_negative_levels(size, verdict):
+@pytest.mark.parametrize("size", [True, False])
+def test_imports_rising_in_size_on_negative_levels(size):
+    # An import row is a debit row: its size is compared even when the extractor left the flag off.
     claim = _claim("is_increasing", [_cell("Impor", 2025, "Q3"), _cell("Impor", 2025, "Q4")], size_of_negative=size)
 
-    assert evaluate_claim(claim, _views(NPI)).verdict == verdict
+    assert evaluate_claim(claim, _views(NPI)).verdict == "Entailed"
+
+
+PAYMENTS = ("Juta USD", {("Pendapatan investasi langsung > Pembayaran", 2026, "Q1"): -6306.28,
+                         ("Pendapatan investasi langsung > Pembayaran", 2026, "Q2"): -6507.66,
+                         ("Neraca Keseluruhan", 2026, "Q2"): -881.91,
+                         ("Barang Dagangan Umum > Impor, fob.", 2026, "Q2"): -71459.47})
+
+
+@pytest.mark.parametrize("value, verdict", [(6.3, "Entailed"), (6.4, "Refuted")])
+def test_a_payment_is_stated_by_its_size_even_without_the_flag(value, verdict):
+    # NPI Tw II-2026 (2026-11-05): "pembayaran imbal hasil atas investasi langsung meningkat dari 6,3
+    # menjadi 6,5" came back Tidak Sesuai against -6.306 when the extractor left size_of_negative off.
+    claim = _claim("value", [_cell("Pendapatan investasi langsung > Pembayaran", 2026, "Q1")], value, "miliar USD",
+                   quote="imbal hasil atas investasi langsung tercatat meningkat dari 6,3 miliar dolar AS")
+
+    assert evaluate_claim(claim, _views(PAYMENTS)).verdict == verdict
+
+
+def test_payments_rising_in_size_and_imports_by_their_size():
+    rise = _claim("is_increasing", [_cell("Pendapatan investasi langsung > Pembayaran", 2026, "Q1"),
+                                    _cell("Pendapatan investasi langsung > Pembayaran", 2026, "Q2")])
+    imports = _claim("value", [_cell("Barang Dagangan Umum > Impor, fob.", 2026, "Q2")], 71.5, "miliar USD")
+
+    assert evaluate_claim(rise, _views(PAYMENTS)).verdict == "Entailed"
+    assert evaluate_claim(imports, _views(PAYMENTS)).verdict == "Entailed"
+
+
+def test_a_balance_that_is_not_a_payment_keeps_its_sign():
+    # A deficit is not a debit row: without the flag, 0,8 against -881,91 stays a mismatch, so the
+    # extractor's reading of "defisit"/"surplus" still decides.
+    claim = _claim("value", [_cell("Neraca Keseluruhan", 2026, "Q2")], 0.9, "miliar USD")
+
+    assert evaluate_claim(claim, _views(PAYMENTS)).verdict == "Refuted"
 
 
 def test_a_widening_deficit_is_a_rise_in_its_size():

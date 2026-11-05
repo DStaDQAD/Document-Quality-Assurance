@@ -28,6 +28,10 @@ SHEET_PATTERNS = tuple(pattern for pattern, _ in SPECS)
 # nonmigas" is the memo balance (MEMO_BALANCES), not the general-merchandise row (12,1).
 TERM_ALIASES = {
     "neraca perdagangan nonmigas": "Neraca perdagangan nonmigas (memorandum)",
+    # The goods balance, Barang Lainnya included (BPM6): Tw II-2026 report "surplus 1,3 ... 8,2"
+    # = Barang 1.320 / 8.210, not Barang Dagangan Umum 1.956 / 10.186 (the 22 Oct note said so,
+    # wrongly, and the extractor followed it into two false Tidak Sesuai on 2026-11-05).
+    "neraca perdagangan barang": "Transaksi Berjalan > Barang",
     "wisatawan mancanegara": "Ke dalam negeri",
     # Tw IV-2025 "penurunan jumlah kunjungan wisatawan mancanegara" kept 'kunjungan' and found nothing.
     "jumlah kunjungan wisatawan mancanegara": "Ke dalam negeri",

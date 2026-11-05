@@ -181,3 +181,17 @@ def test_notes_sections_gives_the_yaml_entries_per_section():
 
     assert list(sections) == ["conventions", "phrases", "periods", "units_signs"]
     assert sections["units_signs"] == ["Indeks tanpa satuan; pertumbuhan dalam persen."]
+
+
+def test_npi_notes_send_the_goods_balance_to_the_barang_row():
+    # NPI Tw II-2026: "neraca perdagangan barang surplus 1,3 ... 8,2" is Transaksi Berjalan > Barang
+    # (1.320 / 8.210). The 22 Oct note sent it to Barang Dagangan Umum (2,0 / 10,2), and the
+    # extractor followed it into two false Tidak Sesuai on 2026-11-05.
+    from publication_parsers import notes_for
+
+    block = notes_for("npi")
+    lines = [line for line in block.splitlines() if '"neraca perdagangan barang"' in line]
+
+    assert lines and all("Transaksi Berjalan > Barang" in line for line in lines)
+    assert not any("→ Barang Dagangan Umum" in line for line in lines)
+    assert any("BUKAN Barang Dagangan Umum > Nonmigas" in line for line in block.splitlines())

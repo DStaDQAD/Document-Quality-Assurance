@@ -2,6 +2,7 @@
 guesses the row: the cells are read by exact key, the arithmetic is the old engine's (units,
 rounding as printed, signed comparison, the stability band), and every result lists its cells.
 """
+from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, List, Optional, Tuple
 
@@ -139,6 +140,32 @@ def _factor(claim: Claim, table_unit: str) -> float:
         scale = _parse_scale_unit(claim.unit) if claim.unit else None
         return scale[0] if scale else 1.0
     raise _Undecided("jenis", f"Satuan klaim '{claim.unit}' tidak bisa dibandingkan dengan '{table_unit}'.")
+
+
+# A balance-of-payments table (BPM6) records payments and imports as negative numbers, and a report
+# always states their size: "pembayaran imbal hasil atas investasi langsung meningkat dari 6,3
+# menjadi 6,5" is 6,3 against -6.306 (NPI Tw II-2026). The extractor is told so (prompt rule 8) and
+# still misses it now and then on such a row, which made a right figure Tidak Sesuai. A value or
+# trend claim whose cells are all such rows, all negative, is judged on sizes. A percentage or a
+# growth rate keeps its sign, so a planted "tumbuh" for a contraction is still caught.
+_DEBIT_LEAVES = ("pembayaran", "impor")
+_DEBIT_OPERATIONS = {"value"} | _TRENDS
+
+
+def _is_debit_row(row: Optional[str]) -> bool:
+    return (row or "").split(">")[-1].strip().lower().startswith(_DEBIT_LEAVES)
+
+
+def _debit_sizes(claim: Claim, read: List["Read"]) -> Claim:
+    if claim.size_of_negative or claim.operation not in _DEBIT_OPERATIONS or not read:
+        return claim
+    if claim.claimed_value is not None and claim.claimed_value < 0:
+        return claim
+    if _is_percent_unit(claim.unit or ""):
+        return claim
+    if all(_is_debit_row(cell.row) and value < 0 for cell, _view, value in read):
+        return replace(claim, size_of_negative=True)
+    return claim
 
 
 def _claimed(claim: Claim) -> float:
@@ -318,6 +345,7 @@ def evaluate_claim(claim: Claim, views: List[TableView]) -> FactVerificationResu
             if missing:
                 raise _Undecided("klaim_tidak_lengkap", "Kalimat membahas seluruh anggota, tetapi sel ini tidak "
                                                          "disebut: " + ", ".join(missing) + ".")
+        claim = _debit_sizes(claim, read)
         computed, delta, verdict, tail = _judge(claim, read)
     except _Undecided as undecided:
         return FactVerificationResult(**base, verdict="Inconclusive", reason_code=undecided.code,
