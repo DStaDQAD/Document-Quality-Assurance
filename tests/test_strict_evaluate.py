@@ -570,3 +570,29 @@ def test_a_ranking_of_net_positions_ranks_each_pair_of_rows(named, verdict):
 
     assert result.verdict == verdict
     assert "Investasi Portofolio − Aset > Investasi Portofolio 252883,49" in result.reasoning
+
+
+OUTFLOWS = ("Juta USD", {("Transaksi Finansial > Investasi Portofolio > Aset", 2026, "Q2"): -1487.61,
+                         ("Investasi Portofolio Sektor Swasta (aset + kewajiban)", 2026, "Q1"): -3298.7,
+                         ("Investasi Portofolio Sektor Swasta (aset + kewajiban)", 2026, "Q2"): -3097.09})
+
+
+def test_an_outflow_is_stated_by_its_size():
+    # NPI Tw II-2026: "pembelian neto surat berharga di luar negeri sebesar 1,5" is -1.488, and the
+    # private sector's "net outflow ... dari 3,3 menjadi 3,1" is -3.299 / -3.097.
+    buying = _claim("value", [_cell("Transaksi Finansial > Investasi Portofolio > Aset", 2026, "Q2")], 1.5,
+                    "miliar USD", quote="penduduk Indonesia tercatat melakukan pembelian neto surat berharga di "
+                                        "luar negeri sebesar 1,5 miliar dolar AS")
+    outflow = _claim("value", [_cell("Investasi Portofolio Sektor Swasta (aset + kewajiban)", 2026, "Q1")], 3.3,
+                     "miliar USD", quote="sektor swasta mencatat net outflow yang lebih rendah, yaitu dari 3,3 miliar")
+
+    assert evaluate_claim(buying, _views(OUTFLOWS)).verdict == "Entailed"
+    assert evaluate_claim(outflow, _views(OUTFLOWS)).verdict == "Entailed"
+
+
+def test_an_inflow_on_a_negative_cell_keeps_its_sign():
+    # A planted "net inflow" where the table has an outflow must stay a mismatch.
+    claim = _claim("value", [_cell("Investasi Portofolio Sektor Swasta (aset + kewajiban)", 2026, "Q2")], 3.1,
+                   "miliar USD", quote="sektor swasta mencatat net inflow sebesar 3,1 miliar dolar AS")
+
+    assert evaluate_claim(claim, _views(OUTFLOWS)).verdict == "Refuted"

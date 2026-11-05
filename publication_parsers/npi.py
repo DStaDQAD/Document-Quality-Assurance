@@ -50,9 +50,27 @@ TERM_ALIASES = {
     "neraca perdagangan migas": "Barang Dagangan Umum > Migas",
     "neraca pendapatan investasi langsung": "Pendapatan investasi langsung",
     # Income paid on direct investment = the 'Pembayaran' the parser sums from equity + interest
-    # (6,3 -> 6,5). The receipts side is left out: the report's 0,6 -> 0,7 fits equity income
-    # alone (0,58 -> 0,74), not the sum (0,63 -> 0,77), so no fixed definition can be written.
+    # (6,3 -> 6,5). Income received is equity income alone: the report's 0,6 -> 0,7 is 0,58 -> 0,74,
+    # not the receipts total 0,63 -> 0,77, which made a right figure Tidak Sesuai on 2026-11-05.
     "pembayaran imbal hasil atas investasi langsung": "Pendapatan investasi langsung > Pembayaran",
+    "penerimaan imbal hasil atas investasi langsung":
+        "Pendapatan investasi langsung > Pendapatan modal ekuitas > Penerimaan",
+    # A sector's portfolio flow is its net position over both sides (PORTFOLIO_SECTORS): "aliran
+    # dana asing portofolio sektor swasta ... net outflow dari 3,3 menjadi 3,1" is assets plus
+    # liabilities (-3.299 / -3.097), not the liabilities (-1.678 / -1.609). Longest phrase first.
+    "aliran dana asing portofolio sektor swasta": "Investasi Portofolio Sektor Swasta (aset + kewajiban)",
+    "investasi portofolio sektor swasta": "Investasi Portofolio Sektor Swasta (aset + kewajiban)",
+    "portofolio sektor swasta": "Investasi Portofolio Sektor Swasta (aset + kewajiban)",
+    "investasi portofolio sektor publik": "Investasi Portofolio Sektor Publik (aset + kewajiban)",
+    "portofolio sektor publik": "Investasi Portofolio Sektor Publik (aset + kewajiban)",
+    # Gas imports have their own row (-1.529 / -682 in Tw II-2026); the extractor said there was none.
+    "impor gas": "Gas > Impor",
+    # "Berdasarkan arah, ... PMA di Indonesia ... arus masuk neto 4,9" (Q1 3,8) is the directional
+    # row (4.938 / 3.800), not direct-investment liabilities (4.970 / 3.494), which a run took.
+    "pma di indonesia": "Di Indonesia (PMA)",
+    # The second reserves measure has its own row (5,41); the extractor twice said it had none.
+    "bulan impor dan pembayaran utang luar negeri pemerintah":
+        "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah",
     # Coupons are paid on debt securities: "pembayaran kupon/bunga menurun sejalan dengan pembayaran
     # kupon surat berharga internasional pemerintah" = portfolio interest paid (2.711 -> 2.216).
     # Not a bare "bunga", which is also direct-investment and loan interest.
@@ -81,6 +99,15 @@ TERM_ALIASES = {
 MEMO_BALANCES = {
     "Neraca perdagangan nonmigas (memorandum)": (
         "Nominal > Total Ekspor (fob) > Nonmigas", "Nominal > Total Impor (fob) > Nonmigas"),
+    # A sector's portfolio investment, net over both sides. Tw II-2026 report: private sector net
+    # outflow 3,3 -> 3,1 and "surplus sektor publik 13,0 ... sektor swasta defisit 3,1" (Grafik 20)
+    # are assets plus liabilities: -1.621 - 1.678 = -3.299, -1.488 - 1.609 = -3.097, 0 + 13.050.
+    "Investasi Portofolio Sektor Swasta (aset + kewajiban)": (
+        "Investasi Portofolio > Aset > Sektor swasta",
+        "INVESTASI PORTOFOLIO > Investasi Portofolio > Kewajiban > Sektor swasta"),
+    "Investasi Portofolio Sektor Publik (aset + kewajiban)": (
+        "Investasi Portofolio > Aset > Sektor publik",
+        "INVESTASI PORTOFOLIO > Investasi Portofolio > Kewajiban > Sektor publik"),
 }
 
 

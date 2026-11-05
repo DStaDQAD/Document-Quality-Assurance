@@ -14,10 +14,12 @@ phrases:
   - '"investasi langsung", "investasi portofolio", "investasi lainnya" → baris di Transaksi Finansial; "sisi kewajiban/aset" memilih Kewajiban atau Aset di bawahnya; "pasar surat utang" → anak baris Surat utang.'
   - '"aliran masuk/keluar modal asing" adalah sisi kewajiban; "arus masuk/keluar neto" adalah baris neto komponen itu.'
   - '"(% PDB)" → baris rasio terhadap PDB (hanya ada untuk transaksi berjalan).'
-  - '"cadangan devisa ... bulan impor" → baris Dalam Bulan Impor (dan Pembayaran ULN Pemerintah).'
+  - '"... bulan impor dan pembayaran utang luar negeri pemerintah" (angka kedua, Tw II-2026: 5,4) → baris Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah. Angka pertama (5,6) adalah bulan impor saja.'
+  - 'Di paragraf investasi portofolio, "sektor publik" dan "sektor swasta" (juga "aliran dana asing portofolio sektor swasta", Grafik 20) adalah saldo neto per sektor: baris Investasi Portofolio Sektor Swasta/Publik (aset + kewajiban), BUKAN sisi kewajiban saja (Tw II-2026: swasta 3,3 dan 3,1, publik 13,0 cocok dengan aset + kewajiban). Kalimat yang menyebut "sisi kewajiban" atau "sisi aset" memakai baris sisi itu.'
+  - '"impor gas" → baris Gas > Impor (tercatat negatif).'
 periods:
   - 'Kolom triwulan Q1-Q4. "posisi pada akhir Juni" pada baris triwulanan = Q2.'
 units_signs:
   - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS (1 miliar = 1.000 juta).'
-  - '"pembelian neto"/"penjualan neto" menunjukkan tanda arus, bukan rincian baris.'
+  - '"pembelian neto"/"penjualan neto" menunjukkan tanda arus, bukan rincian baris. "Pembelian neto surat berharga di luar negeri 1,5" dan "net outflow 3,1" menyebut BESARNYA arus yang di tabel negatif: size_of_negative = true.'
   - 'Harga minyak (USD/barel) dan volume (juta barel, MMBTU) bukan baris nilai USD.'

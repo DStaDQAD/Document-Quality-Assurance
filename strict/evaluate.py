@@ -2,6 +2,7 @@
 guesses the row: the cells are read by exact key, the arithmetic is the old engine's (units,
 rounding as printed, signed comparison, the stability band), and every result lists its cells.
 """
+import re
 from dataclasses import replace
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Dict, List, Optional, Tuple
@@ -143,13 +144,16 @@ def _factor(claim: Claim, table_unit: str) -> float:
 
 
 # A balance-of-payments table (BPM6) records payments and imports as negative numbers, and a report
-# always states their size: "pembayaran imbal hasil atas investasi langsung meningkat dari 6,3
+# always states their size (an outflow too: "pembelian neto surat berharga di luar negeri 1,5" is
+# -1.488, "net outflow ... 3,1" is -3.097): "pembayaran imbal hasil atas investasi langsung meningkat dari 6,3
 # menjadi 6,5" is 6,3 against -6.306 (NPI Tw II-2026). The extractor is told so (prompt rule 8) and
 # still misses it now and then on such a row, which made a right figure Tidak Sesuai. A value or
 # trend claim whose cells are all such rows, all negative, is judged on sizes. A percentage or a
 # growth rate keeps its sign, so a planted "tumbuh" for a contraction is still caught.
 _DEBIT_LEAVES = ("pembayaran", "impor")
 _DEBIT_OPERATIONS = {"value"} | _TRENDS
+# Words that state the size of an outflow; an "inflow" or "surplus" on a negative cell stays signed.
+_OUTFLOW_RE = re.compile(r"\b(?:net\s+outflow|outflow|aliran\s+keluar|pembelian\s+neto)\b", re.IGNORECASE)
 
 
 def _is_debit_row(row: Optional[str]) -> bool:
@@ -163,7 +167,9 @@ def _debit_sizes(claim: Claim, read: List["Read"]) -> Claim:
         return claim
     if _is_percent_unit(claim.unit or ""):
         return claim
-    if all(_is_debit_row(cell.row) and value < 0 for cell, _view, value in read):
+    if not all(value < 0 for _cell, _view, value in read):
+        return claim
+    if all(_is_debit_row(cell.row) for cell, _view, _value in read) or _OUTFLOW_RE.search(claim.context_quote or ""):
         return replace(claim, size_of_negative=True)
     return claim
 

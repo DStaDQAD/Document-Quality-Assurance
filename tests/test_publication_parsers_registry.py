@@ -430,3 +430,37 @@ def test_spe_tabel_9_is_also_keyed_by_the_month_each_expectation_is_for():
     assert table._data[("Ekspektasi Penjualan", 2026, "Oct")] == 143.9
     assert table._data[("Ekspektasi Penjualan", 2027, "Feb")] == 143.8
     assert table._data[("Ekspektasi Penjualan > 3 bulan yang akan datang", 2026, "Aug")] == 148.2
+
+
+
+def test_npi_adds_each_sectors_net_portfolio_flow():
+    # NPI Tw II-2026: private sector "net outflow dari 3,3 menjadi 3,1" and "surplus sektor publik
+    # 13,0" (Grafik 20) are assets plus liabilities of each sector, not the liabilities alone.
+    from publication_parsers.npi import TERM_ALIASES, _add_memo_balances
+
+    rows = {"Investasi Portofolio > Aset > Sektor swasta": (-1621.01, -1487.61),
+            "INVESTASI PORTOFOLIO > Investasi Portofolio > Kewajiban > Sektor swasta": (-1677.69, -1609.48),
+            "Investasi Portofolio > Aset > Sektor publik": (0.0, 0.0),
+            "INVESTASI PORTOFOLIO > Investasi Portofolio > Kewajiban > Sektor publik": (3541.71, 13049.7)}
+    data = {}
+    for row, (q1, q2) in rows.items():
+        data[(row, 2026, "Q1")], data[(row, 2026, "Q2")] = q1, q2
+    table = TableData(title="NPI", unit="Juta USD", row_labels=list(rows), _data=data)
+    _add_memo_balances(table)
+
+    swasta = TERM_ALIASES["aliran dana asing portofolio sektor swasta"]
+    publik = TERM_ALIASES["portofolio sektor publik"]
+    assert table.lookup(swasta, 2026, "Q1") == pytest.approx(-3298.70)
+    assert table.lookup(swasta, 2026, "Q2") == pytest.approx(-3097.09)
+    assert table.lookup(publik, 2026, "Q2") == pytest.approx(13049.7)
+
+
+def test_npi_aliases_for_equity_receipts_and_gas_imports():
+    from publication_parsers.npi import TERM_ALIASES
+
+    assert TERM_ALIASES["penerimaan imbal hasil atas investasi langsung"] == (
+        "Pendapatan investasi langsung > Pendapatan modal ekuitas > Penerimaan")
+    assert TERM_ALIASES["impor gas"] == "Gas > Impor"
+    assert TERM_ALIASES["pma di indonesia"] == "Di Indonesia (PMA)"
+    assert TERM_ALIASES["bulan impor dan pembayaran utang luar negeri pemerintah"] == (
+        "Dalam Bulan Impor dan Pembayaran Utang Luar Negeri Pemerintah")
