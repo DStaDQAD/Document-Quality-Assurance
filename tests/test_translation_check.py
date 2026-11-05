@@ -7,7 +7,8 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from translation_check import (HeadingFinding, HeadingFindings, MeaningFinding, MeaningFindings, Pair, align,
+from translation_check import (HeadingFinding, HeadingFindings, MeaningFinding, MeaningFindings, Pair,
+                               StretchAnswer, StretchAnswers, StretchLink, align, align_by_meaning,
                                check_translation, located_headings, number_finding, numbers, paragraphs)
 
 AUG_ID = ("Suku bunga simpanan berjangka mengalami kenaikan pada tenor 1 bulan, 3 bulan, 6 bulan, dan 24 bulan, "
@@ -134,10 +135,17 @@ EN_DOC = ("M1 grew 6.5% and quasi-money 9.0% in August.\n"
           "Loans grew positively this month in general.")
 
 
-def _llm(answers, seen=None, headings=(), heading_seen=None):
-    """A model that answers the meaning pass with `answers` and the heading check with `headings`."""
+def _llm(answers, seen=None, headings=(), heading_seen=None, stretches=None, stretch_seen=None):
+    """A model that answers the meaning pass with `answers`, the heading check with `headings` and
+    the stretch pairing with `stretches` (None: it answers no stretch)."""
     def _structured(schema):
         def _respond(prompt_value):
+            if schema is StretchAnswers:
+                if stretch_seen is not None:
+                    stretch_seen.append(prompt_value.to_messages())
+                if isinstance(stretches, Exception):
+                    raise stretches
+                return StretchAnswers(stretches=list(stretches or ()))
             if schema is HeadingFindings:
                 if heading_seen is not None:
                     heading_seen.append(prompt_value.to_messages())
@@ -297,3 +305,71 @@ def test_no_heading_on_one_side_asks_nothing():
                                   _llm([], heading_seen=seen), document="laporan", id_filename="id.docx",
                                   en_filename="en.docx"))
     assert seen == []
+
+
+# --- the stretches between number anchors, paired by the model -------------------------------------
+
+STRETCH_ID = ["M2 tumbuh 8,2% pada bulan ini.", "Kredit tumbuh positif secara umum pada bulan ini.",
+              "DPK tumbuh stabil secara umum pada bulan ini.", "M1 tumbuh 9,0% pada bulan ini."]
+STRETCH_EN = ["M2 grew 8.2% this month.", "A note printed only in the English version here.",
+              "Loans grew positively in general this month.", "Deposits grew steadily in general this month.",
+              "M1 grew 9.0% this month."]
+
+
+def _by_meaning(llm):
+    return asyncio.run(align_by_meaning(STRETCH_ID, STRETCH_EN, llm))
+
+
+def _texts(pairs):
+    return [(p.id_text, p.en_text) for p in pairs]
+
+
+def test_a_line_only_one_side_prints_no_longer_shifts_the_pairs_after_it():
+    # PII Tw II-2026: one English line read as a paragraph put the next six pairs out of step.
+    seen = []
+    pairs = _by_meaning(_llm([], stretches=[StretchAnswer(stretch=1, pairs=[
+        StretchLink(id_no=1, en_no=2), StretchLink(id_no=2, en_no=3)])], stretch_seen=seen))
+    assert _texts(pairs) == [(STRETCH_ID[0], STRETCH_EN[0]), (None, STRETCH_EN[1]), (STRETCH_ID[1], STRETCH_EN[2]),
+                             (STRETCH_ID[2], STRETCH_EN[3]), (STRETCH_ID[3], STRETCH_EN[4])]
+    assert [p.index for p in pairs] == [0, 1, 2, 3, 4]
+    assert [(p.id_pos, p.en_pos) for p in pairs][1:3] == [(None, 1), (1, 2)]
+    human = seen[0][1].content
+    # Whole paragraphs, the anchors around the stretch as context, the stretch's own numbering.
+    assert "[STRETCH 1]" in human and "BEFORE (paired): ID: M2 tumbuh 8,2% pada bulan ini." in human
+    assert "ID 2: DPK tumbuh stabil secara umum pada bulan ini." in human
+    assert "EN 1: A note printed only in the English version here." in human
+    assert "AFTER (paired): EN: M1 grew 9.0% this month." in human
+    assert "pairs never cross" in seen[0][0].content
+
+
+def test_anchors_are_never_sent_and_one_against_one_asks_nothing():
+    seen = []
+    pairs = asyncio.run(align_by_meaning([STRETCH_ID[0], STRETCH_ID[1], STRETCH_ID[3]],
+                                         [STRETCH_EN[0], STRETCH_EN[2], STRETCH_EN[4]], _llm([], stretch_seen=seen)))
+    assert len(pairs) == 3 and seen == []  # Kredit/Loans stands between two anchors alone: sure enough
+
+
+def test_a_failed_pairing_call_keeps_the_pairing_by_position():
+    assert _texts(_by_meaning(_llm([], stretches=RuntimeError("provider down")))) == _texts(align(STRETCH_ID, STRETCH_EN))
+
+
+def test_a_stretch_the_model_does_not_answer_keeps_its_pairing_by_position():
+    assert _texts(_by_meaning(_llm([], stretches=[]))) == _texts(align(STRETCH_ID, STRETCH_EN))
+
+
+def test_a_crossing_or_out_of_range_pair_from_the_model_is_dropped():
+    pairs = _by_meaning(_llm([], stretches=[StretchAnswer(stretch=1, pairs=[
+        StretchLink(id_no=2, en_no=1), StretchLink(id_no=1, en_no=3), StretchLink(id_no=5, en_no=1)])]))
+    # (1, 3) is kept first in reading order; (2, 1) would cross it; ID 5 does not exist.
+    assert _texts(pairs)[1:5] == [(None, STRETCH_EN[1]), (None, STRETCH_EN[2]), (STRETCH_ID[1], STRETCH_EN[3]),
+                                  (STRETCH_ID[2], None)]
+    assert sum(1 for p in pairs if p.id_text) == 4 and sum(1 for p in pairs if p.en_text) == 5
+
+
+def test_the_report_pairs_with_the_stretch_answer():
+    id_doc, en_doc = "\n".join(STRETCH_ID), "\n".join(STRETCH_EN)
+    report = asyncio.run(check_translation(id_doc, en_doc, _llm([], stretches=[StretchAnswer(stretch=1, pairs=[
+        StretchLink(id_no=1, en_no=2), StretchLink(id_no=2, en_no=3)])]), document="siaran_pers",
+        id_filename="id.docx", en_filename="en.docx"))
+    assert report.pairs[1].id_text is None and report.pairs[2].en_text == STRETCH_EN[2]
+    assert report.n_meaning == 1  # only the English note stands alone

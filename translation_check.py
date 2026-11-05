@@ -186,18 +186,33 @@ def _signature(text: str, lang: Lang) -> Tuple[float, ...]:
     return tuple(sorted(numbers(text, lang).elements()))
 
 
-def align(id_paras: List[str], en_paras: List[str]) -> List[Pair]:
-    """Pairs in reading order. The two are matched on each paragraph's numbers, so a paragraph
-    missing on one side leaves the rest in step; inside a stretch that differs, paragraphs pair by
-    position and the surplus stands alone."""
-    matcher = difflib.SequenceMatcher(a=[_signature(p, "id") for p in id_paras],
-                                      b=[_signature(p, "en") for p in en_paras], autojunk=False)
-    pairs: List[Pair] = []
-    for _, i1, i2, j1, j2 in matcher.get_opcodes():
+Link = Tuple[Optional[int], Optional[int]]   # (ID position, EN position); None = no counterpart
+
+
+def _links(id_paras: List[str], en_paras: List[str]) -> List[Tuple[Optional[int], Optional[int], bool]]:
+    """(ID position, EN position, anchor) in reading order. The two are matched on each paragraph's
+    numbers; inside a stretch that differs, paragraphs pair by position and the surplus stands
+    alone. An anchor is a pair that prints the same figures on both sides: a sure counterpart. Two
+    paragraphs with no figure at all match on nothing, so they are not one."""
+    id_sig, en_sig = [_signature(p, "id") for p in id_paras], [_signature(p, "en") for p in en_paras]
+    matcher = difflib.SequenceMatcher(a=id_sig, b=en_sig, autojunk=False)
+    links = []
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         for k in range(max(i2 - i1, j2 - j1)):
             i, j = (i1 + k if i1 + k < i2 else None), (j1 + k if j1 + k < j2 else None)
-            pairs.append(Pair(len(pairs), None if i is None else id_paras[i], None if j is None else en_paras[j], i, j))
-    return pairs
+            links.append((i, j, tag == "equal" and bool(id_sig[i])))
+    return links
+
+
+def _pairs(links: List[Link], id_paras: List[str], en_paras: List[str]) -> List[Pair]:
+    return [Pair(n, None if i is None else id_paras[i], None if j is None else en_paras[j], i, j)
+            for n, (i, j) in enumerate(links)]
+
+
+def align(id_paras: List[str], en_paras: List[str]) -> List[Pair]:
+    """Pairs in reading order, on numbers alone (see _links): a paragraph missing on one side leaves
+    the rest in step."""
+    return _pairs([(i, j) for i, j, _ in _links(id_paras, en_paras)], id_paras, en_paras)
 
 
 def _only(tokens: List[Tuple[float, str]], other: Counter) -> List[str]:
@@ -319,6 +334,132 @@ async def _heading_check(id_heads: List[Located], en_heads: List[Located], llm) 
     return [f for f in answer.findings if 1 <= f.id_no <= len(id_heads) and 1 <= f.en_no <= len(en_heads)]
 
 
+# ── The pairing of stretches ─────────────────────────────────────────────────────────────────────
+# Numbers alone pair most paragraphs for sure (anchors), but between two anchors they pair by
+# position, and one line read the wrong way puts every later pair out of step: PII Tw II-2026's
+# English title "… in Q2/2026" took the first Indonesian paragraph's place and the model compared
+# six paragraphs with the wrong ones. The paragraphs between two anchors are paired by the model
+# instead, on what they say, in one call per document. Each stretch is short (2-3 paragraphs on UB
+# and SKDU), its paragraphs go whole, the anchors around it show where it sits, and an anchor
+# after it brings the pairing back in step whatever the model answers.
+
+class StretchLink(BaseModel):
+    id_no: int = Field(description="The number of the Indonesian paragraph")
+    en_no: int = Field(description="The number of the English paragraph that translates it")
+
+
+class StretchAnswer(BaseModel):
+    stretch: int = Field(description="The STRETCH number")
+    pairs: List[StretchLink] = Field(default_factory=list,
+                                     description="The counterparts; a paragraph with none is left out")
+
+
+class StretchAnswers(BaseModel):
+    stretches: List[StretchAnswer] = Field(default_factory=list)
+
+
+STRETCH_PROMPT = """You pair the paragraphs of an Indonesian statistical publication (Bank Indonesia) with those of its English version, which is meant to be a direct translation. Most paragraphs are already paired. You get the STRETCHES between two paired points: in each, the Indonesian paragraphs and the English paragraphs that lie there, in reading order, with the paired paragraph just before and just after the stretch shown for context.
+
+For each stretch, pair each Indonesian paragraph with the English paragraph that translates it. Keep the reading order: pairs never cross. A paragraph may have no counterpart (dropped in translation, or a title, chart label or note only one version prints as text); leave it out. A translation can carry a wrong number, period or direction and still be the counterpart: pair on what the paragraph is about. When one paragraph is split in two on the other side, pair it with the part that carries most of it.
+
+Answer every stretch, with its STRETCH number, even when nothing in it pairs."""
+
+_STRETCH_PROMPT = ChatPromptTemplate.from_messages([("system", STRETCH_PROMPT), ("human", "{stretches}")])
+
+
+@dataclass
+class _Stretch:
+    start: int                 # where its links begin in the document's links
+    links: List[Link]
+    ids: List[int]
+    ens: List[int]
+    before: Optional[Link]     # the anchors around it
+    after: Optional[Link]
+
+
+def _stretches(links: List[Tuple[Optional[int], Optional[int], bool]]) -> List[_Stretch]:
+    """The runs of links between two anchors that hold paragraphs of both sides; one paragraph
+    against one between two anchors is sure enough."""
+    out: List[_Stretch] = []
+    k = 0
+    while k < len(links):
+        if links[k][2]:
+            k += 1
+            continue
+        start = k
+        while k < len(links) and not links[k][2]:
+            k += 1
+        run = [(i, j) for i, j, _ in links[start:k]]
+        ids, ens = [i for i, _ in run if i is not None], [j for _, j in run if j is not None]
+        if ids and ens and len(run) > 1:
+            out.append(_Stretch(start, run, ids, ens, links[start - 1][:2] if start else None,
+                                links[k][:2] if k < len(links) else None))
+    return out
+
+
+def _context(link: Optional[Link], id_paras: List[str], en_paras: List[str], label: str) -> str:
+    if link is None:
+        return f"({label}: start of the document)" if label == "BEFORE" else f"({label}: end of the document)"
+    return f"{label} (paired): ID: {id_paras[link[0]]}\n{label} (paired): EN: {en_paras[link[1]]}"
+
+
+def _stretch_text(stretches: List[_Stretch], id_paras: List[str], en_paras: List[str]) -> str:
+    blocks = []
+    for n, s in enumerate(stretches, 1):
+        lines = [f"[STRETCH {n}]", _context(s.before, id_paras, en_paras, "BEFORE")]
+        lines += [f"ID {k}: {id_paras[i]}" for k, i in enumerate(s.ids, 1)]
+        lines += [f"EN {k}: {en_paras[j]}" for k, j in enumerate(s.ens, 1)]
+        lines.append(_context(s.after, id_paras, en_paras, "AFTER"))
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _relinked(s: _Stretch, answer: StretchAnswer) -> List[Link]:
+    """The stretch's links as the model paired them, in reading order. A pair numbered outside the
+    stretch, or one that would cross or reuse an earlier pair, is dropped; the paragraphs left
+    without a counterpart stand alone."""
+    kept: List[Tuple[int, int]] = []
+    for link in sorted(answer.pairs, key=lambda l: (l.id_no, l.en_no)):
+        if not (1 <= link.id_no <= len(s.ids) and 1 <= link.en_no <= len(s.ens)):
+            continue
+        if kept and (link.id_no <= kept[-1][0] or link.en_no <= kept[-1][1]):
+            continue
+        kept.append((link.id_no - 1, link.en_no - 1))
+    out: List[Link] = []
+    a = b = 0
+    for x, y in kept + [(len(s.ids), len(s.ens))]:
+        out += [(s.ids[k], None) for k in range(a, x)] + [(None, s.ens[k]) for k in range(b, y)]
+        if x < len(s.ids):
+            out.append((s.ids[x], s.ens[y]))
+        a, b = x + 1, y + 1
+    return out
+
+
+async def align_by_meaning(id_paras: List[str], en_paras: List[str], llm) -> List[Pair]:
+    """Pairs in reading order: the anchors by numbers (_links), the stretches between them by the
+    model. A failed call, or a stretch the model does not answer, keeps the pairing by position."""
+    links = _links(id_paras, en_paras)
+    plain: List[Link] = [(i, j) for i, j, _ in links]
+    stretches = _stretches(links)
+    if not stretches:
+        return _pairs(plain, id_paras, en_paras)
+    try:
+        answer = await (_STRETCH_PROMPT | llm.with_structured_output(StretchAnswers)).ainvoke(
+            {"stretches": _stretch_text(stretches, id_paras, en_paras)})
+    except Exception as exc:  # noqa: BLE001 - the pairing by position stands
+        logger.warning("Translation stretch pairing failed, paired by position: %s", exc)
+        return _pairs(plain, id_paras, en_paras)
+    answered = {a.stretch: a for a in answer.stretches}
+    out: List[Link] = []
+    k = 0
+    for n, s in enumerate(stretches, 1):
+        out += plain[k:s.start]
+        out += _relinked(s, answered[n]) if n in answered else s.links
+        k = s.start + len(s.links)
+    out += plain[k:]
+    return _pairs(out, id_paras, en_paras)
+
+
 def _batches(pairs: List[Pair], max_chars: int) -> List[List[Pair]]:
     """Two-sided pairs, in order, grouped so each batch's text stays under max_chars."""
     batches: List[List[Pair]] = []
@@ -386,7 +527,7 @@ async def check_translation(id_text: str, en_text: str, llm, *, document: str, i
         if not paras:
             raise ValueError(f"Tidak ada narasi yang terbaca dari dokumen {side}. Unggah versi Word (.docx) "
                              "atau PDF yang teksnya bisa disalin.")
-    pairs = align([p.text for p in id_located], [p.text for p in en_located])
+    pairs = await align_by_meaning([p.text for p in id_located], [p.text for p in en_located], llm)
     out = []
     for p in pairs:
         id_page, id_section = _where(id_located, p.id_pos, id_is_word)
