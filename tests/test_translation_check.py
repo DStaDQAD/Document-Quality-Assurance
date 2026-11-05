@@ -23,6 +23,12 @@ def test_numbers_read_each_language_format():
     assert numbers("sebesar 9.388", "id") == Counter([9388.0])
 
 
+def test_a_dollar_prefix_glued_to_the_figure_is_read():
+    # PII Tw II-2026 English: "stood at USD197.4 billion, down from USD223.0 billion".
+    assert numbers("stood at USD197.4 billion, down from US$223.0 billion", "en") == Counter([197.4, 223.0])
+    assert numbers("sebesar 197,4 miliar dolar AS", "id") == Counter([197.4])
+
+
 def test_quarters_and_ordinals_are_not_numbers_in_english():
     assert numbers("pada Triwulan II tumbuh 5,1%", "id") == Counter([5.1])
     assert numbers("grew 5.1% in Q2, the 2nd release", "en") == Counter([5.1])
@@ -78,6 +84,17 @@ def test_title_case_headings_are_kept_out_of_the_pairing():
     assert [h.text for h in located_headings(text)] == [
         "Kapasitas Produksi Terpakai", "Lapangan Usaha Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor",
     ]
+
+
+def test_a_title_naming_a_quarter_is_still_a_heading():
+    # PII Tw II-2026: "… Decreased in Q2/2026" kept its "2" and stayed a paragraph, shifting every pair.
+    text = ("Indonesia's Net Liability International Investment Position Decreased in Q2/2026\n"
+            "At the end of the second quarter of 2026, net liability stood at USD197.4 billion.")
+    assert paragraphs(text) == ["At the end of the second quarter of 2026, net liability stood at USD197.4 billion."]
+    assert [h.text for h in located_headings(text)] == [
+        "Indonesia's Net Liability International Investment Position Decreased in Q2/2026"]
+    # A line with a real figure stays a paragraph.
+    assert paragraphs("LU Pengadaan Listrik dan Gas (80,89%)") == ["LU Pengadaan Listrik dan Gas (80,89%)"]
 
 
 def test_extra_headings_on_one_side_do_not_shift_the_sentences():

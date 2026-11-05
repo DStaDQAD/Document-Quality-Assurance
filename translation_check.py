@@ -32,7 +32,9 @@ _YEAR_IN_TEXT = re.compile(r"\b(?:19|20)\d\d\b")
 _YEAR = re.compile(r"(?:19|20)\d\d")
 # Indonesian prints 10.448,1 and 9.388 (thousands); English prints 10,448.1. A number glued to a
 # letter (M2, PS01) is a name, not a figure, in both; the currency prefix Rp is the exception.
-_START = r"(?:(?<![\w.,])|(?<=Rp))"
+# USD too: PII Tw II-2026 English prints "USD197.4 billion", which read as a name and left 197,4 as
+# "only in the Indonesian version".
+_START = r"(?:(?<![\w.,])|(?<=Rp)|(?<=USD)|(?<=US\$))"
 _NUMBER = {
     "id": re.compile(_START + r"(?:\d{1,3}(?:\.\d{3})+(?:,\d+)?|\d+(?:,\d+)?)(?![\w])"),
     "en": re.compile(_START + r"(?:\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)(?![\w])"),
@@ -102,7 +104,7 @@ def located_paragraphs(narrative_text: str) -> List[Located]:
             continue
         if not line:
             continue
-        has_figure = re.search(r"\d", _YEAR_IN_TEXT.sub("", line)) is not None
+        has_figure = _has_figure(line)
         # A section heading in capitals is translated freely ("PERKEMBANGAN DANA PIHAK KETIGA
         # (DPK)" / "DEPOSITS"): comparing it would only flag wording. It still says where the
         # paragraphs under it are.
@@ -112,6 +114,14 @@ def located_paragraphs(narrative_text: str) -> List[Located]:
         if len(_WORD.findall(line)) >= 3 or has_figure:
             out.append(Located(line, page, section))
     return out
+
+
+def _has_figure(line: str) -> bool:
+    """Whether a line prints a figure, read as the number check reads one in either language: a
+    year, a quarter ("Q2/2026") or an ordinal is not. PII Tw II-2026 (2026-11-05): the English title
+    "… Position Decreased in Q2/2026" kept its "2", stayed a paragraph, took the first Indonesian
+    paragraph's place and pushed every later pair one step out of line."""
+    return bool(numbers(line, "id")) or bool(numbers(line, "en"))
 
 
 def located_headings(narrative_text: str) -> List[Located]:
@@ -125,7 +135,7 @@ def located_headings(narrative_text: str) -> List[Located]:
         if marker:
             page = int(marker.group(1))
             continue
-        if not line or re.search(r"\d", _YEAR_IN_TEXT.sub("", line)):
+        if not line or _has_figure(line):
             continue
         # A source line names the data, not a part of the report: "Sumber: SKDU (BI)" against
         # "Source: BIBS (BI)" was read as a difference on the first SKDU run.
