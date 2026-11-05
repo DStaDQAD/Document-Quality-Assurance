@@ -803,11 +803,12 @@ async def _run_paired_pipeline(
             detail += " · tanpa model vision, hanya halaman dengan lapisan teks yang dibaca"
         _emit("reftables", "done", detail=detail)
 
-    # Prefer Gemini for the typo/grammar escalation call when available - it judges
-    # domain jargon (e.g. "kartal", "inflasi") more reliably than the Groq text model,
-    # which was observed hallucinating a false-positive correction for "kartal" during
-    # real-document testing.
-    typo_llm = vision_llm if vision_llm is not None else get_llm(temperature=0.0, callbacks=callbacks)
+    # The typo/grammar escalation call goes to the main model, like every other text call. It
+    # used to prefer the vision model (Gemini) over the Groq text model of the time; on Render
+    # that left it on a second key and credit, and when that call failed every ambiguous
+    # candidate was dropped in silence: NPI Tw II-2026 R2_salah (2026-11-05) came back with 0
+    # typos and missed a planted "internasonal" that DeepSeek finds.
+    typo_llm = get_llm(temperature=0.0, callbacks=callbacks)
 
     async def _run_typo_check():
         # check_typos is sync (dictionary pass + one batched LLM call), so it goes to a

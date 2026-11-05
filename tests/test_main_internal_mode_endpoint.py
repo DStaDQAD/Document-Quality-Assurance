@@ -228,6 +228,28 @@ def test_typo_check_runs_by_default(mock_vision, mock_narrative, mock_verify, mo
     assert response.json()["typo_check"] is not None
 
 
+@patch("main.get_llm")
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_the_typo_check_uses_the_main_model_even_with_a_vision_model(
+    mock_vision, mock_narrative, mock_verify, mock_typos, mock_get_llm
+):
+    # NPI Tw II-2026 (2026-11-05): on the vision model's key the escalation failed on Render and
+    # the planted "internasonal" was dropped; the main model finds it.
+    mock_vision.return_value = Mock(name="vision")
+    main_model = Mock(name="main")
+    mock_get_llm.return_value = main_model
+    mock_narrative.return_value = "[== Halaman 1 ==]\nteks"
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+
+    client.post("/api/verify-paired", files=_PDF_AND_EXCEL)
+
+    assert mock_typos.call_args.args[1] is main_model
+
+
 # ---------------------------------------------------------------------------
 # Mixed number conventions — reported to the reader, never fixed silently
 # ---------------------------------------------------------------------------
