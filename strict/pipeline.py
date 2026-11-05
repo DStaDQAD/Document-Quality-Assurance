@@ -33,11 +33,14 @@ def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
     """Strict reads the uploaded Excel time-series tables and, in "both" mode — the team's usual
     check, press release and report together — the document's own tables and the other
     document's for what the workbooks lack (`_from_documents`). It needs at least one uploaded
-    workbook. Chart readings and a category
-    (non-time-series) sheet keep the old path, as do "internal" and "none"."""
+    time-series sheet. Chart readings keep the old path, as do "internal" and "none".
+
+    A category (non-time-series) sheet picked with them does not: strict leaves it out
+    (build_views) and the check stays strict. It used to send the whole check to the old path —
+    UB September 2026 (2026-11-05): "Pilih semua sheet" took Rekap Dana, Kredit Properti and
+    Suku Bunga along, and the old engine misread the stacked "Tabel lengkap" sheet into four
+    false Tidak Sesuai. A claim only such a sheet holds now comes back Tidak Cukup Data."""
     if mode not in ("excel", "both") or has_charts:
-        return False
-    if any(s.origin == "excel" and not s.pointer_only and s.table.axis_type == "categorical" for s in sources):
         return False
     # The document's own tables join the uploaded workbooks; they never stand in for them.
     return any(view.source.origin == "excel" for view in build_views(sources))

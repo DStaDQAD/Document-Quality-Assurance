@@ -166,7 +166,7 @@ def test_the_flag(monkeypatch, value, on):
     assert enabled() is on
 
 
-def test_charts_or_a_category_sheet_keep_the_old_path():
+def test_charts_keep_the_old_path_and_a_category_sheet_alone_does():
     from paired_verifier import _ExcelSource
     from strict.pipeline import applies
 
@@ -178,7 +178,31 @@ def test_charts_or_a_category_sheet_keep_the_old_path():
 
     assert applies([series], "excel", has_charts=False)
     assert not applies([series], "excel", has_charts=True)
-    assert not applies([series, category], "excel", has_charts=False)
+    # UB September 2026: "Pilih semua sheet" took category sheets along with the time series;
+    # strict leaves them out instead of handing the whole check to the old engine.
+    assert applies([series, category], "excel", has_charts=False)
+    assert applies([series, category], "both", has_charts=False)
+    # With no time series at all, strict has nothing to read: the old path.
+    assert not applies([category], "excel", has_charts=False)
+
+
+@patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
+@patch("paired_verifier.parse_bi_table")
+def test_a_category_sheet_picked_along_keeps_the_check_strict(mock_parse, mock_extract, monkeypatch):
+    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+    items = BITableData(title="Suku Bunga", unit="%", row_labels=["Bank Persero"])
+    items.axis_type, items.col_labels = "categorical", ["1 bulan"]
+    items._data[("Bank Persero", "1 bulan")] = 0.0
+    mock_parse.side_effect = [_table(), items]
+    seen = []
+
+    response = _verify(llm=_llm(seen), excel_sources=[(b"x", "5.39", "t.xls"), (b"y", "Suku Bunga", "ub.xlsx")])
+
+    assert not mock_extract.called
+    [result] = response.results
+    assert (result.verdict, result.resolved_via) == ("Entailed", "strict")
+    # The extractor is shown the time series only.
+    assert "Suku Bunga" not in seen[0][1].content
 
 
 def test_strict_needs_an_uploaded_workbook_not_only_document_tables():
