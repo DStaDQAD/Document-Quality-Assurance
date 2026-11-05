@@ -65,6 +65,29 @@ class Located:
     section: Optional[str]
 
 
+# A heading in title case: "Kapasitas Produksi Terpakai", "Lapangan Usaha Perdagangan Besar dan
+# Eceran, dan Reparasi Mobil dan Motor", "Agricultural, Forestry, and Fishery Sector", a chart's
+# own title, "Source: BIBS (BI); GDP (BPS)". Short, no sentence end, nearly every longer word
+# capitalised. The two versions title their sections and charts differently (SKDU Tw III-2026: the
+# Indonesian prints chart titles the English keeps inside the picture), and with no figure to go
+# by these lines paired by position, slid out of step, and the model compared a heading with an
+# unrelated sentence (2026-11-05: most of 43 "makna" findings). They are headings, like the ones
+# in capitals.
+_HEADING_MAX_WORDS = 16
+_CAPITALISED = re.compile(r"^[(\[\"'“‘]*[A-Z]")
+
+
+def _is_heading(line: str) -> bool:
+    # A note under a table ("**Sektor Lainnya mencakup Pemda, Koperasi, …") is text, whatever its
+    # capitals: the English note is written in lower case and pairs with it.
+    if line.startswith("*") or re.search(r"[.!?]$", line) or len(line.split()) > _HEADING_MAX_WORDS:
+        return False
+    words = [w for w in line.split() if len(_WORD.findall(w)) and len(w.strip("(),;:")) > 3]
+    if not words:
+        return False
+    return sum(1 for w in words if _CAPITALISED.match(w)) / len(words) >= 0.75
+
+
 def located_paragraphs(narrative_text: str) -> List[Located]:
     """The narrative's paragraphs, without page markers, blank lines or trivial fragments, each
     with the page marker and the capitalised heading last seen above it."""
@@ -83,11 +106,33 @@ def located_paragraphs(narrative_text: str) -> List[Located]:
         # A section heading in capitals is translated freely ("PERKEMBANGAN DANA PIHAK KETIGA
         # (DPK)" / "DEPOSITS"): comparing it would only flag wording. It still says where the
         # paragraphs under it are.
-        if line.isupper() and not has_figure:
+        if not has_figure and (line.isupper() or _is_heading(line)):
             section = line
             continue
         if len(_WORD.findall(line)) >= 3 or has_figure:
             out.append(Located(line, page, section))
+    return out
+
+
+def located_headings(narrative_text: str) -> List[Located]:
+    """The narrative's headings in reading order (in capitals or in title case, see _is_heading):
+    what located_paragraphs leaves out of the pairing, for the heading check (_heading_check)."""
+    out: List[Located] = []
+    page: Optional[int] = None
+    for line in narrative_text.splitlines():
+        line = line.strip()
+        marker = _PAGE_MARKER.match(line)
+        if marker:
+            page = int(marker.group(1))
+            continue
+        if not line or re.search(r"\d", _YEAR_IN_TEXT.sub("", line)):
+            continue
+        # A source line names the data, not a part of the report: "Sumber: SKDU (BI)" against
+        # "Source: BIBS (BI)" was read as a difference on the first SKDU run.
+        if re.match(r"(?i)(sumber|source)\s*:", line):
+            continue
+        if line.isupper() or _is_heading(line):
+            out.append(Located(line, page, line))
     return out
 
 
@@ -227,6 +272,43 @@ sentence in Indonesian saying what differs. An empty list is the normal answer."
 _PROMPT = ChatPromptTemplate.from_messages([("system", SYSTEM_PROMPT), ("human", "{pairs}")])
 
 
+# ── The heading check ────────────────────────────────────────────────────────────────────────────
+# Headings stay out of the paragraph pairing: the two versions title their sections and charts
+# differently, and with no number to go by they paired by position and slid out of step (SKDU Tw
+# III-2026). They are paired by the model instead, on what they mean, in one call per document.
+
+class HeadingFinding(BaseModel):
+    id_no: int = Field(description="The number of the Indonesian heading")
+    en_no: int = Field(description="The number of its English counterpart")
+    explanation: str = Field(description="One sentence in Indonesian saying what differs, not which side is right")
+
+
+class HeadingFindings(BaseModel):
+    findings: List[HeadingFinding] = Field(default_factory=list)
+
+
+HEADING_PROMPT = """You compare the headings of an Indonesian statistical publication (Bank Indonesia) with those of its English version: section titles, sector titles, chart and table titles. You get two numbered lists, each in reading order. The two versions do not title every part the same way: one may split a section into more headings, and chart titles may exist on one side only (the other prints them inside the picture).
+
+First pair each Indonesian heading with the English heading that names the same part, where there is one. Keep the reading order. Many headings have no counterpart; leave those alone. When you are not sure two headings name the same part, they are not a pair.
+
+Then report a pair ONLY when the two headings differ in substance:
+- a different sector, industry, component, indicator, instrument or region;
+- an item of a named list dropped, added or replaced ("Pengadaan Listrik dan Gas" against "Electricity Supply" drops gas);
+- a different period or direction.
+
+Do not report: a heading with no counterpart; wording or style; generic words added or dropped (Perkembangan, Kinerja, Lapangan Usaha, LU, Sektor, Sector, Development, Growth); the usual Bank Indonesia equivalents (lapangan usaha = sector or industry, pertanian, kehutanan, dan perikanan = agriculture, forestry and fishery, penggunaan tenaga kerja = labour utilisation, harga jual = selling prices, SKDU = BIBS, prakiraan = forecast, expectation, outlook or projection, realisasi = realised or actual); a heading that names a section more broadly or more narrowly than its counterpart ("Inflasi" against "Inflation Expectation"). An empty list is the normal answer."""
+
+_HEADING_PROMPT = ChatPromptTemplate.from_messages([("system", HEADING_PROMPT), ("human", "{lists}")])
+
+
+async def _heading_check(id_heads: List[Located], en_heads: List[Located], llm) -> List[HeadingFinding]:
+    """The heading pairs that differ in substance, as the model pairs and reads them."""
+    lists = ("INDONESIAN HEADINGS\n" + "\n".join(f"{i}. {h.text}" for i, h in enumerate(id_heads, 1))
+             + "\n\nENGLISH HEADINGS\n" + "\n".join(f"{j}. {h.text}" for j, h in enumerate(en_heads, 1)))
+    answer = await (_HEADING_PROMPT | llm.with_structured_output(HeadingFindings)).ainvoke({"lists": lists})
+    return [f for f in answer.findings if 1 <= f.id_no <= len(id_heads) and 1 <= f.en_no <= len(en_heads)]
+
+
 def _batches(pairs: List[Pair], max_chars: int) -> List[List[Pair]]:
     """Two-sided pairs, in order, grouped so each batch's text stays under max_chars."""
     batches: List[List[Pair]] = []
@@ -250,6 +332,28 @@ async def _meaning(batch: List[Pair], llm) -> List[MeaningFinding]:
     return answer.findings
 
 
+async def _no_headings() -> List[HeadingFinding]:
+    return []
+
+
+def _add_heading_findings(out: List[TranslationPair], answer, id_heads: List[Located], en_heads: List[Located],
+                          id_is_word: bool, en_is_word: bool) -> None:
+    """Each heading pair the model found different, after the paragraph pairs. A failed call
+    leaves one unchecked entry, so the headings never read as checked and clean."""
+    if isinstance(answer, BaseException):
+        logger.warning("Translation heading check failed: %s", answer)
+        out.append(TranslationPair(index=len(out), id_text="Judul-judul bagian dan grafik", checked=False))
+        return
+    for found in answer:
+        id_head, en_head = id_heads[found.id_no - 1], en_heads[found.en_no - 1]
+        out.append(TranslationPair(
+            index=len(out), id_text=id_head.text, en_text=en_head.text,
+            id_page=None if id_is_word else id_head.page, en_page=None if en_is_word else en_head.page,
+            id_section="Judul", en_section="Judul",
+            findings=[TranslationFinding(kind="makna", explanation=found.explanation,
+                                         id_quote=id_head.text, en_quote=en_head.text)]))
+
+
 def _where(located: List[Located], pos: Optional[int], is_word: bool) -> Tuple[Optional[int], Optional[str]]:
     """(page, section) for a paragraph: a PDF's page, a Word document's section heading. A Word
     narrative's [== Halaman N ==] blocks are not pages (UB Agu 2026: off by up to nine), and a
@@ -261,7 +365,7 @@ def _where(located: List[Located], pos: Optional[int], is_word: bool) -> Tuple[O
 
 async def check_translation(id_text: str, en_text: str, llm, *, document: str, id_filename: str,
                             en_filename: str, id_is_word: bool = False, en_is_word: bool = False,
-                            max_chars: int = 6000) -> TranslationCheckResponse:
+                            max_chars: int = 6000, heading_llm=None) -> TranslationCheckResponse:
     """The English narrative against the Indonesian one: pairs, the numbers each side prints
     alone (code), and the differences in meaning the LLM finds per batch of pairs. A batch the LLM
     could not answer leaves its pairs unchecked, never clean. Each pair says where its paragraphs
@@ -284,7 +388,14 @@ async def check_translation(id_text: str, en_text: str, llm, *, document: str, i
         if finding is not None:
             item.findings.append(finding)
     batches = _batches(pairs, max_chars)
-    answers = await asyncio.gather(*(_meaning(b, llm) for b in batches), return_exceptions=True)
+    id_heads, en_heads = located_headings(id_text), located_headings(en_text)
+    # The headings go to `heading_llm` when given: on SKDU Tw III-2026 the plain model reported 4-5
+    # equivalent titles as different ("Prakiraan Inflasi" / "Inflation Expectation") on every run,
+    # the review model (thinking a little) 0-1, the one a real difference.
+    heading_call = (_heading_check(id_heads, en_heads, heading_llm or llm) if id_heads and en_heads
+                    else _no_headings())
+    *answers, heading_answer = await asyncio.gather(*(_meaning(b, llm) for b in batches), heading_call,
+                                                    return_exceptions=True)
     for batch, answer in zip(batches, answers):
         if isinstance(answer, BaseException):
             logger.warning("Translation meaning check failed for pairs %s: %s", [p.index for p in batch], answer)
@@ -298,6 +409,7 @@ async def check_translation(id_text: str, en_text: str, llm, *, document: str, i
                 continue
             out[found.pair].findings.append(TranslationFinding(
                 kind="makna", explanation=found.explanation, id_quote=found.id_quote, en_quote=found.en_quote))
+    _add_heading_findings(out, heading_answer, id_heads, en_heads, id_is_word, en_is_word)
     findings = [f for item in out for f in item.findings]
     return TranslationCheckResponse(
         document=document, id_filename=id_filename, en_filename=en_filename, pairs=out,

@@ -1217,7 +1217,8 @@ async def check_translation_endpoint(
         en_text = await _document_text(en_bytes, en_name)
         report = await check_translation(id_text, en_text, get_llm(temperature=0.0), document=document,
                                          id_filename=id_name, en_filename=en_name,
-                                         id_is_word=is_word_document(id_bytes), en_is_word=is_word_document(en_bytes))
+                                         id_is_word=is_word_document(id_bytes), en_is_word=is_word_document(en_bytes),
+                                         heading_llm=get_review_llm())
     except Exception as exc:
         logger.exception("Translation check failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc

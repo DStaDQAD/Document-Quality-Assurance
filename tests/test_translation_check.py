@@ -7,8 +7,8 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.runnables import RunnableLambda
 
-from translation_check import (MeaningFinding, MeaningFindings, Pair, align, check_translation, number_finding,
-                               numbers, paragraphs)
+from translation_check import (HeadingFinding, HeadingFindings, MeaningFinding, MeaningFindings, Pair, align,
+                               check_translation, located_headings, number_finding, numbers, paragraphs)
 
 AUG_ID = ("Suku bunga simpanan berjangka mengalami kenaikan pada tenor 1 bulan, 3 bulan, 6 bulan, dan 24 bulan, "
           "masing-masing menjadi sebesar 5,1%, 5,8%, 5,6%, dan 4,2% dibandingkan bulan sebelumnya sebesar "
@@ -61,7 +61,33 @@ def test_a_one_sided_paragraph_is_a_finding_of_its_own():
 
 
 def test_trivial_paragraphs_and_page_markers_are_dropped():
-    assert paragraphs("[== Halaman 1 ==]\nJudul Uang Beredar\ns\n\nM2 tumbuh 8,2%.") == ["Judul Uang Beredar", "M2 tumbuh 8,2%."]
+    assert paragraphs("[== Halaman 1 ==]\nJudul uang beredar bulan ini\ns\n\nM2 tumbuh 8,2%.") == [
+        "Judul uang beredar bulan ini", "M2 tumbuh 8,2%."]
+
+
+def test_title_case_headings_are_kept_out_of_the_pairing():
+    # SKDU Tw III-2026: the versions title sections and charts differently; with no number to go by
+    # these lines paired by position and slid out of step, so headings are checked apart.
+    text = ("Kapasitas Produksi Terpakai\nKapasitas produksi terpakai tetap terjaga sebesar 73,75%.\n"
+            "Lapangan Usaha Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor\n"
+            "Sumber: SKDU (BI), PDB (BPS)\n**Sektor Lainnya mencakup Pemda, Koperasi, Yayasan\n"
+            "Kegiatan usaha pada triwulan III terindikasi tetap terjaga")
+    assert paragraphs(text) == ["Kapasitas produksi terpakai tetap terjaga sebesar 73,75%.",
+                                "**Sektor Lainnya mencakup Pemda, Koperasi, Yayasan",
+                                "Kegiatan usaha pada triwulan III terindikasi tetap terjaga"]
+    assert [h.text for h in located_headings(text)] == [
+        "Kapasitas Produksi Terpakai", "Lapangan Usaha Perdagangan Besar dan Eceran, dan Reparasi Mobil dan Motor",
+    ]
+
+
+def test_extra_headings_on_one_side_do_not_shift_the_sentences():
+    ids = paragraphs("Kinerja Lapangan Usaha\nLapangan Usaha Pertanian\nPerkembangan Kegiatan Usaha LU Pertanian\n"
+                     "Kegiatan usaha LU Pertanian tetap tumbuh dan diprakirakan berlanjut.\n"
+                     "Perkembangan Tenaga Kerja\nLU Pertambangan tumbuh 0,46%.")
+    ens = paragraphs("Agricultural Sector\nAgriculture activity kept growing and is expected to continue.\n"
+                     "Mining grew 0.46%.")
+    assert [(p.id_text[:12], p.en_text[:12]) for p in align(ids, ens)] == [
+        ("Kegiatan usa", "Agriculture "), ("LU Pertamban", "Mining grew ")]
 
 
 def test_a_date_line_is_trivial_but_a_short_line_with_a_figure_is_not():
@@ -91,13 +117,20 @@ EN_DOC = ("M1 grew 6.5% and quasi-money 9.0% in August.\n"
           "Loans grew positively this month in general.")
 
 
-def _llm(answers, seen=None):
-    def _respond(prompt_value):
-        if seen is not None:
-            seen.append(prompt_value.to_messages())
-        return MeaningFindings(findings=list(answers))
+def _llm(answers, seen=None, headings=(), heading_seen=None):
+    """A model that answers the meaning pass with `answers` and the heading check with `headings`."""
+    def _structured(schema):
+        def _respond(prompt_value):
+            if schema is HeadingFindings:
+                if heading_seen is not None:
+                    heading_seen.append(prompt_value.to_messages())
+                return HeadingFindings(findings=list(headings))
+            if seen is not None:
+                seen.append(prompt_value.to_messages())
+            return MeaningFindings(findings=list(answers))
+        return RunnableLambda(_respond)
     llm = Mock()
-    llm.with_structured_output = Mock(return_value=RunnableLambda(_respond))
+    llm.with_structured_output = Mock(side_effect=_structured)
     return llm
 
 
@@ -181,3 +214,69 @@ def test_a_word_paragraph_carries_its_section_not_its_page():
     assert [(p.id_section, p.en_section) for p in report.pairs] == [
         ("PERKEMBANGAN SUKU BUNGA", "LENDING AND DEPOSIT RATES"), ("PERKEMBANGAN KREDIT", "LOANS")]
     assert report.pairs[0].id_page is None
+
+
+# --- the heading check -------------------------------------------------------------------------
+
+ID_HEADED = ("PERKEMBANGAN KEGIATAN USAHA\nLapangan Usaha Pengadaan Listrik dan Gas\n"
+             "Kapasitas produksi LU listrik tercatat 80,89%.\nPerkembangan Kapasitas Utilisasi")
+EN_HEADED = "BUSINESS ACTIVITY\nElectricity Supply Sector\nCapacity utilisation in electricity was 80.89%."
+
+
+def _headed(llm):
+    return asyncio.run(check_translation(ID_HEADED, EN_HEADED, llm, document="laporan", id_filename="id.docx",
+                                         en_filename="en.docx", id_is_word=True, en_is_word=True))
+
+
+def test_a_heading_the_model_finds_different_is_a_pair_of_its_own():
+    # SKDU Tw III-2026: "LU Pengadaan Listrik dan Gas" is "Electricity Supply" in the English report.
+    seen = []
+    report = _headed(_llm([], headings=[HeadingFinding(id_no=2, en_no=2, explanation="Versi EN tidak menyebut gas.")],
+                          heading_seen=seen))
+    assert [(p.id_text, p.en_text) for p in report.pairs] == [
+        ("Kapasitas produksi LU listrik tercatat 80,89%.", "Capacity utilisation in electricity was 80.89%."),
+        ("Lapangan Usaha Pengadaan Listrik dan Gas", "Electricity Supply Sector")]
+    heading = report.pairs[1]
+    assert heading.index == 1 and heading.id_section == "Judul" and heading.findings[0].kind == "makna"
+    assert report.n_meaning == 1
+    lists = seen[0][1].content
+    assert "1. PERKEMBANGAN KEGIATAN USAHA" in lists and "3. Perkembangan Kapasitas Utilisasi" in lists
+    assert "2. Electricity Supply Sector" in lists
+    assert "a heading with no counterpart" in seen[0][0].content.lower()
+
+
+def test_headings_go_to_the_heading_model_when_given():
+    main_seen, review_seen = [], []
+    asyncio.run(check_translation(ID_HEADED, EN_HEADED, _llm([], heading_seen=main_seen), document="laporan",
+                                  id_filename="id.docx", en_filename="en.docx",
+                                  heading_llm=_llm([], heading_seen=review_seen)))
+    assert main_seen == [] and len(review_seen) == 1
+
+
+def test_a_heading_finding_numbered_outside_the_lists_is_dropped():
+    report = _headed(_llm([], headings=[HeadingFinding(id_no=9, en_no=1, explanation="x")]))
+    assert len(report.pairs) == 1 and report.n_meaning == 0
+
+
+def test_a_failed_heading_check_is_one_unchecked_entry():
+    def _structured(schema):
+        def _respond(prompt_value):
+            if schema is HeadingFindings:
+                raise RuntimeError("provider down")
+            return MeaningFindings(findings=[])
+        return RunnableLambda(_respond)
+    llm = Mock()
+    llm.with_structured_output = Mock(side_effect=_structured)
+
+    report = _headed(llm)
+
+    assert report.n_unchecked == 1 and report.pairs[-1].checked is False
+    assert report.pairs[-1].id_text.startswith("Judul")
+
+
+def test_no_heading_on_one_side_asks_nothing():
+    seen = []
+    asyncio.run(check_translation(ID_HEADED, "Capacity utilisation in electricity was 80.89%.",
+                                  _llm([], heading_seen=seen), document="laporan", id_filename="id.docx",
+                                  en_filename="en.docx"))
+    assert seen == []
