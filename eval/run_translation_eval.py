@@ -20,8 +20,9 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from llm_provider import get_llm  # noqa: E402
+from llm_provider import get_llm, get_review_llm  # noqa: E402
 from translation_check import check_translation  # noqa: E402
+from translation_llm import check_translation_llm  # noqa: E402
 from word_extraction import read_word_document  # noqa: E402
 
 UB = ROOT / "sample_data" / "sharepoint" / "ub"
@@ -59,12 +60,20 @@ def text_of(docx: bytes) -> str:
     return read_word_document(docx).narrative_text
 
 
-async def run(plants: list) -> None:
+async def run(plants: list, engine: str = "old", real: bool = True, meaning_review: bool = False) -> None:
     llm = get_llm(temperature=0.0)
+    if engine == "llm":
+        review = get_review_llm()
+
+        async def check(id_text, en_text, plain_llm, **kw):
+            return await check_translation_llm(id_text, en_text, review if meaning_review else plain_llm, **kw,
+                                               heading_llm=review, pair_llm=review, publication="uang-beredar")
+    else:
+        check = check_translation
     print("== Dokumen asli")
-    for edition in EDITIONS:
+    for edition in (EDITIONS if real else ()):
         for document, id_path, en_path in documents(edition):
-            report = await check_translation(text_of(id_path.read_bytes()), text_of(en_path.read_bytes()), llm,
+            report = await check(text_of(id_path.read_bytes()), text_of(en_path.read_bytes()), llm,
                                              document=document, id_filename=id_path.name, en_filename=en_path.name,
                                              id_is_word=True, en_is_word=True)
             print(f"{edition} {document}: angka {report.n_number} · makna {report.n_meaning} · "
@@ -80,7 +89,7 @@ async def run(plants: list) -> None:
             continue
         document, id_path, en_path = documents(edition)[1]
         planted = plant(en_path.read_bytes(), [(p["old"], p["new"]) for p in mine])
-        report = await check_translation(text_of(id_path.read_bytes()), text_of(planted), llm, document=document,
+        report = await check(text_of(id_path.read_bytes()), text_of(planted), llm, document=document,
                                          id_filename=id_path.name, en_filename=en_path.name + " (planted)",
                                          id_is_word=True, en_is_word=True)
         for p in mine:
@@ -99,6 +108,11 @@ async def run(plants: list) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--plants-only", action="store_true", help="only check that every plant applies")
+    parser.add_argument("--engine", choices=["old", "llm"], default="old",
+                        help="old: translation_check; llm: the plain model flow (translation_llm)")
+    parser.add_argument("--no-real", action="store_true", help="only the planted reports")
+    parser.add_argument("--meaning-review", action="store_true",
+                        help="llm engine: compare meaning on the review model too")
     args = parser.parse_args()
     plants = yaml.safe_load((ROOT / "eval" / "translation" / "ub_plants.yaml").read_text(encoding="utf-8"))["plants"]
     if args.plants_only:
@@ -109,7 +123,7 @@ def main() -> None:
                 missing = [new for _, new in mine if new not in text_of(planted)]
                 print(edition, f"{len(mine)} plants applied", "OK" if not missing else f"NOT IN TEXT: {missing}")
         return
-    asyncio.run(run(plants))
+    asyncio.run(run(plants, args.engine, not args.no_real, args.meaning_review))
 
 
 if __name__ == "__main__":

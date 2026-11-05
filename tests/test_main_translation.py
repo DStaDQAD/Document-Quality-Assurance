@@ -25,8 +25,8 @@ def _report(**overrides):
     return TranslationCheckResponse(**base)
 
 
-@patch("main.get_llm")
-@patch("main.check_translation", new_callable=AsyncMock)
+@patch("main.get_review_llm")
+@patch("main.check_translation_llm", new_callable=AsyncMock)
 def test_check_translation_returns_the_report_and_saves_it(mock_check, mock_llm):
     mock_check.return_value = _report()
 
@@ -41,13 +41,18 @@ def test_check_translation_returns_the_report_and_saves_it(mock_check, mock_llm)
     assert mock_check.call_args.kwargs["document"] == "laporan"
     # Word documents are located by section, not page.
     assert mock_check.call_args.kwargs["id_is_word"] is True and mock_check.call_args.kwargs["en_is_word"] is True
+    # The publication picks its terms; the review model pairs, compares and reads the titles.
+    assert mock_check.call_args.kwargs["publication"] == "uang-beredar"
+    review = mock_llm.return_value
+    assert mock_check.call_args.args[2] is review
+    assert mock_check.call_args.kwargs["pair_llm"] is review and mock_check.call_args.kwargs["heading_llm"] is review
     items, _, _ = check_history.list_translation_checks()
     assert [(i.id, i.checker_name, i.publication, i.n_number) for i in items] == [
         (body["history_id"], "Ivan", "uang-beredar", 1)]
 
 
-@patch("main.get_llm")
-@patch("main.check_translation", new_callable=AsyncMock)
+@patch("main.get_review_llm")
+@patch("main.check_translation_llm", new_callable=AsyncMock)
 def test_a_history_failure_still_returns_the_report(mock_check, mock_llm):
     mock_check.return_value = _report()
     with patch("main.check_history.save_translation_check", side_effect=RuntimeError("db down")):
@@ -65,8 +70,8 @@ def test_a_legacy_doc_is_refused_with_the_word_message():
     assert response.status_code == 400 and ".docx" in response.json()["detail"]
 
 
-@patch("main.get_llm")
-@patch("main.check_translation", new_callable=AsyncMock)
+@patch("main.get_review_llm")
+@patch("main.check_translation_llm", new_callable=AsyncMock)
 def test_translation_history_list_and_open(mock_check, mock_llm):
     mock_check.return_value = _report()
     history_id = client.post("/api/check-translation", files=_files()).json()["history_id"]

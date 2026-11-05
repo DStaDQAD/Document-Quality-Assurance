@@ -15,3 +15,8 @@ periods:
   - 'Kolom triwulan Q1-Q4; "dibandingkan triwulan sebelumnya" adalah triwulan sebelum triwulan laporan.'
 units_signs:
   - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS (1 miliar = 1.000 juta).'
+translation:
+  - 'Posisi Investasi Internasional (PII) = International Investment Position (IIP)'
+  - 'AFLN (Aset Finansial Luar Negeri) = FFA (Foreign Financial Assets); KFLN (Kewajiban Finansial Luar Negeri) = FFL (Foreign Financial Liabilities)'
+  - 'kewajiban neto = net liability; aset neto = net asset; ULN = external debt'
+  - 'investasi langsung / portofolio / lainnya = direct / portfolio / other investment'

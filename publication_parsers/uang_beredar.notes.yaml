@@ -13,3 +13,10 @@ periods:
 units_signs:
   - 'Tabel dalam Miliar Rp; laporan dalam triliun Rp (1 triliun = 1.000 miliar).'
   - '"kontraksi X% (yoy)" berarti pertumbuhan −X.'
+translation:
+  - 'uang beredar luas (M2) = broad money; uang beredar sempit (M1) = narrow money; uang kuasi = quasi-money; uang kartal = currency'
+  - 'giro = demand deposits; tabungan = savings deposits; simpanan berjangka / deposito = time deposits; valas = foreign currency'
+  - 'DPK (Dana Pihak Ketiga) = third-party funds (TPF) atau deposits'
+  - 'kredit modal kerja / investasi / konsumsi = working capital / investment / consumer loans'
+  - 'KPR = housing loans (mortgages); KPA = apartment loans'
+  - 'tagihan bersih kepada pemerintah pusat = net claims on the central government; aktiva luar negeri bersih = net foreign assets'

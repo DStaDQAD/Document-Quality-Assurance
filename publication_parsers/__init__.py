@@ -36,7 +36,7 @@ PARSERS: Dict[str, ModuleType] = {
 
 __all__ = [
     "PARSERS", "PublicationParseError", "covers", "load_grid", "notes_enabled", "notes_for", "notes_sections",
-    "parse_for_publication", "skipped_sections",
+    "parse_for_publication", "skipped_sections", "translation_terms",
 ]
 
 # Publication notes (docs/specs/publication-notes.md): <module>.notes.yaml next to each parser, in
@@ -47,6 +47,9 @@ NOTES_SECTIONS = (
     ("periods", "Periode"),
     ("units_signs", "Satuan dan tanda"),
 )
+# The English equivalents of the publication's own terms ("AFLN = FFA"), for Cek Terjemahan only
+# (translation_llm): the extractor never reads them.
+TRANSLATION_SECTION = "translation"
 # They go into every chunk's prompt: ~600 words is ~800 tokens a call.
 NOTES_MAX_WORDS = 600
 # A quoted phrase in a YAML phrase line: '"IPR", "penjualan eceran" → INDEKS TOTAL.'
@@ -96,11 +99,11 @@ def _notes_file(publication: str) -> Optional[dict]:
         return None
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     known = {key for key, _ in NOTES_SECTIONS}
-    unknown = sorted(set(data) - {"publication", "title"} - known)
+    unknown = sorted(set(data) - {"publication", "title", TRANSLATION_SECTION} - known)
     if unknown:
         raise ValueError(
             f"Catatan publikasi {path.name}: bagian tidak dikenal {unknown}; "
-            f"yang boleh: publication, title, {', '.join(sorted(known))}."
+            f"yang boleh: publication, title, {', '.join(sorted(known | {TRANSLATION_SECTION}))}."
         )
     return data
 
@@ -109,6 +112,12 @@ def notes_sections(publication: str) -> Dict[str, List[str]]:
     """The notes file's entries per section, in NOTES_SECTIONS order; [] for a missing section."""
     data = _notes_file(publication) or {}
     return {key: [str(entry) for entry in data.get(key) or []] for key, _ in NOTES_SECTIONS}
+
+
+def translation_terms(publication: str) -> List[str]:
+    """The publication's Indonesian terms with their usual English equivalents; [] when none."""
+    data = _notes_file(publication) or {}
+    return [str(entry) for entry in data.get(TRANSLATION_SECTION) or []]
 
 
 def notes_for(publication: str, team_phrases: Optional[Dict[str, str]] = None,

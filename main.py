@@ -116,7 +116,7 @@ from schemas import (
     VerifyClaimResponse,
     VerifyDocumentResponse,
 )
-from translation_check import check_translation
+from translation_llm import check_translation_llm
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
 from word_extraction import WordDocument, is_legacy_word_document, is_word_document, read_word_document
@@ -1166,7 +1166,7 @@ async def get_history_endpoint(check_id: str) -> JSONResponse:
     return JSONResponse({"summary": summary.model_dump(mode="json"), "result": result})
 
 
-# ── Cek Terjemahan: an English publication against its Indonesian version (translation_check.py).
+# ── Cek Terjemahan: an English publication against its Indonesian version (translation_llm.py).
 # One document pair per request; stored in Riwayat's own translation_checks table.
 
 _TRANSLATION_DOCUMENTS = ("siaran_pers", "laporan")
@@ -1215,10 +1215,15 @@ async def check_translation_endpoint(
     try:
         id_text = await _document_text(id_bytes, id_name)
         en_text = await _document_text(en_bytes, en_name)
-        report = await check_translation(id_text, en_text, get_llm(temperature=0.0), document=document,
-                                         id_filename=id_name, en_filename=en_name,
-                                         id_is_word=is_word_document(id_bytes), en_is_word=is_word_document(en_bytes),
-                                         heading_llm=get_review_llm())
+        # The review model pairs, compares and reads the titles: on UB plants it caught 10/10
+        # (the plain model 9/10), and on NPI and SKDU it kept to the pairing instructions the plain
+        # model broke (2026-11-05). The publication's terms come from its notes file.
+        review = get_review_llm()
+        report = await check_translation_llm(id_text, en_text, review, document=document,
+                                             id_filename=id_name, en_filename=en_name,
+                                             id_is_word=is_word_document(id_bytes),
+                                             en_is_word=is_word_document(en_bytes),
+                                             heading_llm=review, pair_llm=review, publication=publication)
     except Exception as exc:
         logger.exception("Translation check failed")
         raise HTTPException(status_code=400, detail=str(exc)) from exc

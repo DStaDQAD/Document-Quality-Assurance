@@ -18,3 +18,7 @@ periods:
   - 'Tabel 4 dan 8 berisi pertumbuhan triwulanan (yoy).'
 units_signs:
   - 'Indeks tanpa satuan; pertumbuhan dalam persen.'
+translation:
+  - 'Survei Penjualan Eceran (SPE) = Retail Sales Survey'
+  - 'Indeks Penjualan Riil (IPR) = Real Sales Index (RSI); Indeks Ekspektasi Penjualan (IEP) = Sales Expectation Index'
+  - 'Indeks Ekspektasi Harga Umum (IEH) = General Price Expectation Index'

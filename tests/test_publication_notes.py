@@ -78,7 +78,11 @@ def test_every_publication_has_valid_notes(publication):
 
     assert data["publication"] == publication
     assert isinstance(data["title"], str) and data["title"]
-    assert set(data) - {"publication", "title"} <= SECTIONS
+    assert set(data) - {"publication", "title", publication_parsers.TRANSLATION_SECTION} <= SECTIONS
+    # The English equivalents are for Cek Terjemahan only: plain lines, never in the extractor's notes.
+    terms = data.get(publication_parsers.TRANSLATION_SECTION) or []
+    assert all(isinstance(term, str) and term.strip() for term in terms)
+    assert not any(term in notes_for(publication) for term in terms)
     entries = [entry for section in SECTIONS for entry in data.get(section) or []]
     assert entries and all(isinstance(entry, str) and entry.strip() for entry in entries)
     words = sum(len(entry.split()) for entry in entries)

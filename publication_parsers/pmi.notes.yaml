@@ -14,3 +14,6 @@ periods:
   - 'Kolom triwulan Q1-Q4; kolom terakhir (bertanda *) adalah prakiraan triwulan berikutnya: "diprakirakan" pada triwulan berikutnya merujuk kolom itu.'
 units_signs:
   - 'Indeks dicetak dalam persen ("52,03%"); unit persen, bukan persen_yoy.'
+translation:
+  - 'Prompt Manufacturing Index - Bank Indonesia (PMI-BI) sama di kedua versi; ekspansi = expansion; kontraksi = contraction'
+  - 'volume produksi = production volume; volume pesanan barang input = volume of input orders; jumlah tenaga kerja = employment'

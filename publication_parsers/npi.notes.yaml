@@ -23,3 +23,11 @@ units_signs:
   - 'Tabel dalam Juta USD; laporan dalam miliar dolar AS (1 miliar = 1.000 juta).'
   - '"pembelian neto"/"penjualan neto" menunjukkan tanda arus, bukan rincian baris. "Pembelian neto surat berharga di luar negeri 1,5" dan "net outflow 3,1" menyebut BESARNYA arus yang di tabel negatif: size_of_negative = true.'
   - 'Harga minyak (USD/barel) dan volume (juta barel, MMBTU) bukan baris nilai USD.'
+translation:
+  - 'Neraca Pembayaran Indonesia (NPI) = Indonesia''s balance of payments (BOP)'
+  - 'transaksi berjalan (TB) = current account; transaksi modal dan finansial (TMF) = capital and financial account (CFA)'
+  - 'neraca perdagangan barang / jasa = goods / services trade balance; migas = oil and gas; nonmigas = non-oil and gas'
+  - 'pendapatan primer / sekunder = primary / secondary income'
+  - 'investasi langsung / portofolio / lainnya = direct / portfolio / other investment; PMA = FDI'
+  - 'cadangan devisa = reserve assets; LLD (Lalu Lintas Devisa) = ITRS (International Transaction Reporting System)'
+  - 'SUN = Government Debt Securities (SUN); SBN = Government Securities; Pekerja Migran Indonesia (PMI) = Indonesian migrant workers'

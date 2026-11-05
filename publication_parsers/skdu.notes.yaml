@@ -17,3 +17,10 @@ periods:
   - '"diprakirakan" pada triwulan berikutnya merujuk kolom prakiraan (bertanda *) di tabel.'
 units_signs:
   - 'SBT dan SB dalam persen poin, bisa negatif; "turun"/"kontraksi" pada SBT berarti nilainya negatif atau lebih rendah, tulis tandanya sesuai kalimat.'
+translation:
+  - 'Survei Kegiatan Dunia Usaha (SKDU) = Business Survey atau BIBS (Bank Indonesia Business Survey)'
+  - 'Saldo Bersih Tertimbang (SBT) = Weighted Net Balance (WNB); Saldo Bersih (SB) = Net Balance (NB); tabel dalam % SB/SBT'
+  - 'lapangan usaha (LU) = sector atau industry; kegiatan usaha = business activity'
+  - 'kapasitas produksi terpakai = capacity utilisation; penggunaan tenaga kerja = labour utilisation; harga jual = selling prices'
+  - 'prakiraan = expectation, forecast atau outlook; realisasi = realised atau actual; kondisi investasi = investment (realisation)'
+  - 'Prompt Manufacturing Index - Bank Indonesia (PMI-BI) sama di kedua versi'
