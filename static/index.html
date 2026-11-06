@@ -1152,6 +1152,9 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .paired-container.has-results .paired-result-area::-webkit-scrollbar-thumb { background: var(--border-dark); border-radius: 2px; }
 
 @media (max-width: 900px) {
+  /* Stacked, the columns no longer scroll on their own: the page does. */
+  .content:has(#panel-paired.active.has-results) { overflow-y: auto; }
+  .content:has(#panel-paired.active.has-results) #panel-paired { height: auto; }
   .paired-container.has-results {
     grid-template-columns: 1fr;
     height: auto;
