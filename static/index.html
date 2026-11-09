@@ -4189,7 +4189,6 @@ body.auth-locked .app {
 
   function catatanHtml(pub) {
     const b = pub.builtin;
-    const rowOptions = pub.known_rows.map((r) => `<option value="${escapeHtml(r)}"></option>`).join("");
     const phrases = b.phrases.map((g) => g.text !== undefined
       ? `<tr class="is-builtin"><td colspan="3">${escapeHtml(g.text)}</td><td class="meta">${CATATAN_LOCK}</td></tr>`
       : `<tr class="is-builtin"><td>${g.phrases.map((p) => `"${escapeHtml(p)}"`).join(", ")}</td><td class="arrow">→</td>
@@ -4205,11 +4204,10 @@ body.auth-locked .app {
           <tr class="add-row"><td colspan="4"><form class="add-grid" id="alias-form" autocomplete="off">
             <input type="text" id="alias-phrase" maxlength="200" placeholder="Frasa di laporan, mis. AFLN Indonesia" aria-label="Frasa di laporan" required>
             <span class="arrow">→</span>
-            <input type="text" id="alias-row" maxlength="300" list="alias-rows" placeholder="Baris tabel" aria-label="Baris tabel" required>
+            <input type="text" id="alias-row" maxlength="300" placeholder="Baris tabel" aria-label="Baris tabel" required>
             <button type="submit" class="run-btn"><span class="material-symbols-outlined">add</span>Tambah frasa</button>
-          </form><datalist id="alias-rows">${rowOptions}</datalist>
-          <p class="settings-feedback" id="alias-feedback" aria-live="polite">${pub.known_rows.length ? ""
-            : "Saran nama baris muncul setelah publikasi ini pernah diperiksa."}</p></td></tr>
+          </form>
+          <p class="settings-feedback" id="alias-feedback" aria-live="polite"></p></td></tr>
         </tbody>`)
       + catatanSection("Konvensi", true, `
         <thead><tr><th>#</th><th>Catatan</th><th></th></tr></thead>
@@ -4325,7 +4323,7 @@ body.auth-locked .app {
       row.innerHTML = `<td colspan="4"><div class="add-grid">
           <input type="text" data-edit-phrase maxlength="200" aria-label="Frasa di laporan">
           <span class="arrow">→</span>
-          <input type="text" data-edit-row maxlength="300" list="alias-rows" aria-label="Baris tabel">
+          <input type="text" data-edit-row maxlength="300" aria-label="Baris tabel">
           ${editButtons}</div></td>`;
       row.querySelector("[data-edit-phrase]").value = alias.phrase;
       row.querySelector("[data-edit-row]").value = alias.row;
