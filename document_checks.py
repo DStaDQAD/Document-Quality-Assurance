@@ -11,7 +11,8 @@ Three mistakes no workbook can show, all planted by the mentor in SKDU Tw III-20
   - the appendix's own numbering ("Tabel 10" printed twice, no Tabel 9).
 
 Each finding is one Tidak Sesuai card (operation "comparison" or "reference"), added after the
-claims are judged, so it never changes how a claim is read.
+claims are judged, so it never changes how a claim is read. A table pointer the cited table's
+figures prove gets a Sesuai card, so the reader sees which pointers were checked.
 """
 import re
 from dataclasses import dataclass, field
@@ -447,6 +448,21 @@ def _printed_elsewhere(cited: List[str], figures: List[str], printed: Dict[str, 
     return scored[0][1]
 
 
+def _titled(keys: List[str], titles: Dict[str, str]) -> str:
+    """'Tabel 1 (Uang Beredar dan Komponennya)': the cited tables as the reader knows them."""
+    return " dan ".join(f"{key} ('{titles[key]}')" if titles.get(key) else key for key in keys)
+
+
+def _holds_result(pointer: "Pointer", titles: Dict[str, str]) -> FactVerificationResult:
+    """A Sesuai card for a pointer the cited tables' figures prove, so the reader sees it was checked."""
+    return FactVerificationResult(
+        operation="reference", metric_label=f"Rujukan {' dan '.join(pointer.cited)}", verdict="Entailed",
+        context_quote=pointer.sentence, page_number=pointer.page, resolved_via=RESOLVED_VIA,
+        reasoning=(f"Kalimat merujuk {_titled(pointer.cited, titles)}; angkanya ({', '.join(pointer.shown)}) "
+                   "tercetak di tabel itu | Dicek dari isi tabel di dokumen, tanpa LLM"),
+    )
+
+
 def _reference_result(sentence: str, page: Optional[int], cited: List[str], problem: str,
                       checked_from: str) -> FactVerificationResult:
     return FactVerificationResult(
@@ -471,14 +487,21 @@ class Pointer:
 
     `status`: "absent" — a cited Tabel N has no caption; "elsewhere" — the cited tables print none
     (or only some) of the sentence's figures and one other table prints them; "holds" — the cited
-    tables print its figures; "open" — the numbers settle nothing (none in the sentence, a cited
-    picture unread, the figures in several tables or in none: wrong, derived, or rounded away)."""
+    tables print its figures and no other table of the same kind prints as many; "open" — the
+    numbers settle nothing (none in the sentence, a cited picture unread, the figures in several
+    tables or in none: wrong, derived, or rounded away)."""
     sentence: str
     page: Optional[int]
     cited: List[str]
     status: str = "open"
     problem: str = ""
     before: str = ""    # the sentences just before it: "Hal tersebut tecermin dari SBT …" needs them
+    after: str = ""     # the sentence after it: "Berdasarkan komponennya, …" names the subject too
+    # Tables of the same kind that print as many of its figures as the cited ones: UB's Tabel 2
+    # (Faktor yang Memengaruhi) starts with the M2 row Tabel 1 prints. The numbers cannot tell them
+    # apart, so the pointer stays open for a reader who goes by the subject.
+    tied: List[str] = field(default_factory=list)
+    shown: List[str] = field(default_factory=list)   # its figures the cited tables print, as printed
     # Its pointers to charts ('Grafik 3'). A chart's content is never read: "absent" when no
     # caption carries the number, else "open" — judged from the chart's title alone.
     charts: List[str] = field(default_factory=list)
@@ -542,6 +565,7 @@ def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Po
     sentences = _sentences(report_text)
     pointers = [Pointer(sentence, page, _cited(sentence, lampiran_captions, appendix_apart),
                         before=" ".join(s for s, at in sentences[max(0, i - _CONTEXT_SENTENCES):i] if at == page),
+                        after=" ".join(s for s, at in sentences[i + 1:i + 2] if at == page),
                         charts=_cited_charts(sentence))
                 for i, (sentence, page) in enumerate(sentences)]
     pointers = [p for p in pointers if p.cited or p.charts]
@@ -582,12 +606,21 @@ def _pointers(narrative_text: str, table_texts: Optional[Dict[str, str]]) -> _Po
             continue
         # The figures prove the pointer unless another table prints more of them: NPI's cited
         # Tabel 4 prints the "10,3" of a sentence whose "17,9" and "10,3" are both in Tabel 5. A tie
-        # holds (SKDU prints a LU's SBT in several tables).
-        in_cited = sum(any(_rounds_to(f, printed[key]) for key in p.cited) for f in figures)
-        in_other = max((sum(_rounds_to(f, found) for f in figures) for key, found in printed.items()
-                        if key not in p.cited), default=0)
+        # with a table of the same kind proves nothing (UB Sep 2026: "Posisi M2 … (Tabel 2)", whose
+        # M2 row Tabel 1 prints too): the pointer is left to the reader of its subject. A tie with
+        # an appendix table ("Lampiran 1" printing the body's levels again) still holds.
+        shown = [as_printed for key, as_printed in figures.items()
+                 if any(_rounds_to(key, printed[c]) for c in p.cited)]
+        in_cited = len(shown)
+        others = {key: sum(_rounds_to(f, found) for f in figures) for key, found in printed.items()
+                  if key not in p.cited}
+        in_other = max(others.values(), default=0)
         if in_cited and in_cited >= in_other:
-            p.status = "holds"
+            kind = p.cited[0].split()[0]
+            p.tied = [key for key, n in others.items() if n == in_cited and key.split()[0] == kind]
+            if not p.tied:
+                p.status = "holds"
+                p.shown = shown
         # "(Tabel 1 dan Grafik 1)": the figures the table lacks may be the chart's (UB Juli 2026's
         # Tabel 1 prints the levels, Grafik 1 the growth), so the code cannot call them misplaced.
         other = None if _CHART_POINTER_RE.search(p.sentence) else _printed_elsewhere(p.cited, list(figures), printed)
@@ -622,8 +655,8 @@ def chart_titles(narrative_text: str) -> Dict[str, str]:
 
 def check_document(narrative_text: str, results: List[FactVerificationResult],
                    table_texts: Optional[Dict[str, str]] = None) -> List[FactVerificationResult]:
-    """`results` with the document's own mistakes added as Tidak Sesuai cards (see the module
-    docstring). A trend claim that read a wrongly worded comparison the way the numbers go is
+    """`results` with the document's own mistakes added as Tidak Sesuai cards and the table
+    pointers its figures prove as Sesuai cards (see the module docstring). A trend claim that read a wrongly worded comparison the way the numbers go is
     replaced by the comparison's card, so the sentence is not shown as both.
 
     `table_texts`: what each table of a Word document prints ('Tabel 3' → its picture's text,
@@ -650,7 +683,9 @@ def check_document(narrative_text: str, results: List[FactVerificationResult],
     if found.chart_numbering_problem:
         out.append(_numbering_result(found.charts, found.chart_numbering_problem, "Grafik"))
     for p in found.pointers:
-        if p.cited and p.status == "absent":
+        if p.cited and p.status == "holds":
+            out.append(_holds_result(p, found.titles))
+        elif p.cited and p.status == "absent":
             out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "judul tabel di dokumen"))
         elif p.cited and p.status == "elsewhere":
             out.append(_reference_result(p.sentence, p.page, p.cited, p.problem, "isi tabel di dokumen"))

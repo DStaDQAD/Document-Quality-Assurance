@@ -51,15 +51,22 @@ def test_a_pointer_without_figures_or_with_unprinted_ones_is_open():
     assert [(p.sentence, keys) for p, keys in opened] == [(no_figure, ["Tabel 2"]), (wrong_figure, ["Tabel 2"])]
 
 
-def test_figures_another_table_prints_more_of_leave_the_pointer_open_and_a_tie_holds():
+def test_figures_another_table_prints_more_of_or_as_many_leave_the_pointer_open():
     # NPI: the cited Tabel 4 prints "10,3" by chance, Tabel 2 and Tabel 5 both print "17,9" and
     # "10,3" (with one other table printing them, the code itself finds the pointer wrong).
     sentence = "Kapasitas produksi terpakai sebesar 73,75%, dari 73,16% (Lampiran Tabel 1)."
     more = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75", "Tabel 3": PRINTED["Tabel 3"] + " 73,75 73,16"}
     assert [keys for _, keys in dc.open_pointers(_narrative(sentence), more)[1]] == [["Tabel 1"]]
-    # SKDU prints a LU's SBT in several tables: as many figures in the cited one settles it.
+    # A tie (UB's Tabel 2 starts with Tabel 1's M2 row) proves nothing either: the model reads the
+    # subject, told which table prints the figures too.
     tie = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75 73,16"}
-    assert dc.open_pointers(_narrative(sentence), tie)[1] == []
+    [(pointer, keys)] = dc.open_pointers(_narrative(sentence), tie)[1]
+    assert keys == ["Tabel 1"] and pointer.tied == ["Tabel 2"]
+    calls = []
+    asyncio.run(pr.review_pointers(_narrative(sentence), [], tie,
+                                   _llm([pr._Judgement(index=0, fits=True, table="Tabel 1", about="x")], calls)))
+    assert "0. [Tabel 1] Kapasitas produksi terpakai sebesar 73,75%, dari 73,16% (Lampiran Tabel 1).\n" \
+           "   angka juga di: Tabel 2" in calls[0]
 
 
 def test_an_open_pointer_carries_the_sentences_before_it():
@@ -109,15 +116,42 @@ def test_a_pointer_the_model_says_names_another_table_is_tidak_sesuai():
     assert "0. [Tabel 2] Peritel menerapkan" in calls[0]
 
 
-def test_an_unsure_answer_or_an_unlisted_or_cited_table_adds_nothing():
+def test_an_unsure_answer_or_an_unlisted_or_cited_table_adds_no_finding():
     sentences = ["Peritel menerapkan potongan harga akhir tahun (Lampiran Tabel 2).",
                  "Kapasitas produksi terpakai sebesar 73,57% (Lampiran Tabel 2).",
                  "Tenaga kerja diprakirakan meningkat (Lampiran Tabel 4)."]
-    answer = [pr._Judgement(index=0, fits=True, table="Tabel 1", about="x"),
+    answer = [pr._Judgement(index=0, fits=True, table="Tabel 1", about="diskon peritel"),
               pr._Judgement(index=1, fits=False, table="Tabel 9", about="x"),
               pr._Judgement(index=2, fits=False, table="Tabel 4", about="x"),
               pr._Judgement(index=7, fits=False, table="Tabel 1", about="x")]
-    assert asyncio.run(pr.review_pointers(_narrative(*sentences), [], PRINTED, _llm(answer, []))) == []
+    out = asyncio.run(pr.review_pointers(_narrative(*sentences), [], PRINTED, _llm(answer, [])))
+    # The pointer the model found right shows as a Sesuai card; the others add nothing.
+    [fits] = out
+    assert fits.verdict == "Entailed" and fits.operation == "reference" and fits.context_quote == sentences[0]
+    assert fits.reasoning.startswith("Kalimat ini tentang diskon peritel, yang ditampilkan di "
+                                     "Tabel 2 ('Kapasitas Produksi Terpakai')")
+
+
+def test_on_a_tie_the_models_pick_of_the_other_table_is_tidak_sesuai():
+    # UB Sep 2026 (planted): the model answers fits=True ("Tabel 2 shows M2 as well") but picks
+    # Tabel 1, the table printing the same figures that is about M2.
+    sentence = "Kapasitas produksi terpakai sebesar 73,75%, dari 73,16% (Lampiran Tabel 1)."
+    tie = {**PRINTED, "Tabel 1": PRINTED["Tabel 1"] + " 73,75 73,16"}
+    picked = [pr._Judgement(index=0, fits=True, table="Tabel 2", about="kapasitas produksi")]
+    [card] = asyncio.run(pr.review_pointers(_narrative(sentence), [], tie, _llm(picked, [])))
+    assert card.verdict == "Refuted" and card.metric_label == "Rujukan Tabel 1"
+    assert "angka kalimat tercetak di Tabel 1 dan di Tabel 2, jadi angka tidak menentukan" in card.reasoning
+    # Picking the cited table keeps it, as a Sesuai card naming the tie.
+    kept = [pr._Judgement(index=0, fits=True, table="Tabel 1", about="kapasitas produksi")]
+    [card] = asyncio.run(pr.review_pointers(_narrative(sentence), [], tie, _llm(kept, [])))
+    assert card.verdict == "Entailed" and "angkanya juga ada di Tabel 2" in card.reasoning
+
+
+def test_a_chart_pointer_the_model_found_right_adds_no_card():
+    sentence = "Ekspektasi konsumen meningkat (Grafik 1)."
+    text = _narrative(sentence) + "Grafik 1. Ekspektasi Konsumen\nGrafik 2. Kredit\nGrafik 3. Harga\n"
+    answer = [pr._Judgement(index=0, fits=True, table="Grafik 1", about="x")]
+    assert asyncio.run(pr.review_pointers(text, [], PRINTED, _llm(answer, []))) == []
 
 
 def test_no_open_pointer_means_no_call():

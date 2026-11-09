@@ -9,9 +9,10 @@ never read at all, so every chart pointer is open. Those go to a model with the 
 chart titles, and the row labels of each table whose picture was read, and the model names the
 table or chart the sentence is about.
 
-A pointer whose figures the cited table prints is never sent, so the model cannot overrule it.
-A model answer only adds a Tidak Sesuai card when it says the cited table or chart is about
-something else and names one listed table or chart that is; when unsure it lets the pointer stand.
+A pointer whose figures the cited table prints, and no other table of the same kind prints as
+well, is never sent, so the model cannot overrule it. A model answer only adds a Tidak Sesuai card
+when it says the cited table or chart is about something else and names one listed table or chart
+that is; when unsure it lets the pointer stand. A table pointer it finds right gets a Sesuai card.
 """
 import logging
 import re
@@ -37,7 +38,16 @@ For each sentence decide whether a cited table or chart shows what the sentence 
 indicator and how it is broken down (by country, by commodity group, by sector, by currency, by \
 customer group, ...). Judge by subject only. The sentence's numbers may be wrong and must not \
 decide. A sentence often takes its subject from the text before it ("Hal tersebut tecermin dari \
-SBT ..."), given as "sebelumnya": read the sentence in that context.
+SBT ..."), given as "sebelumnya", or the text after it names it ("Berdasarkan komponennya, ..."), \
+given as "sesudahnya": read the sentence in that context.
+
+- A sentence marked "angka juga di: <table>" prints figures that the cited table and that other \
+table both show, so the numbers cannot tell them apart. Decide which of the two the sentence is \
+about: the table whose subject is the sentence's own indicator and its breakdown, not a table that \
+carries the indicator only as the total or opening row of something else (a table of the factors \
+affecting money supply starts with the M2 row, a table of money supply and its components is about \
+M2). For such a sentence, table = the one of the cited and the "angka juga di" tables that is \
+about the sentence's subject; when they are equally about it, or you are unsure, the cited one.
 
 - fits = true when a cited table or chart shows it, also when another one shows it as well, and \
 whenever you are unsure.
@@ -116,6 +126,20 @@ def _is_chart(key: str) -> bool:
     return key.startswith("Grafik ")
 
 
+def _fits_card(pointer: Pointer, keys: List[str], judged: _Judgement,
+               titles: Dict[str, str]) -> FactVerificationResult:
+    """A Sesuai card for a table pointer the model found right, so the reader sees it was checked."""
+    cited = " dan ".join(f"{key} ('{titles[key]}')" if titles.get(key) else key for key in keys)
+    about = judged.about.strip()
+    return FactVerificationResult(
+        operation="reference", metric_label=f"Rujukan {' dan '.join(keys)}", verdict="Entailed",
+        context_quote=pointer.sentence, page_number=pointer.page, resolved_via=RESOLVED_VIA,
+        reasoning=(f"Kalimat ini tentang {about or 'isi tabel yang dirujuk'}, yang ditampilkan di {cited}"
+                   + (f"; angkanya juga ada di {', '.join(pointer.tied)}" if pointer.tied else "")
+                   + " | Dinilai Tinjauan AI dari isi kalimat dan judul tabel"),
+    )
+
+
 def _card(pointer: Pointer, keys: List[str], judged: _Judgement, titles: Dict[str, str],
           unreadable: Dict[str, str]) -> FactVerificationResult:
     cited = " dan ".join(keys)
@@ -125,7 +149,11 @@ def _card(pointer: Pointer, keys: List[str], judged: _Judgement, titles: Dict[st
     else:
         unread = [f"isi {key} tidak terbaca ({unreadable[key].split(' — ', 1)[-1].split(',')[0]})"
                   for key in keys if key in unreadable]
-        basis = "judul tabel; " + ("; ".join(unread) if unread else "angka kalimat tidak tercetak di tabel yang dirujuk")
+        if pointer.tied and judged.table in pointer.tied:
+            printed_where = f"angka kalimat tercetak di {cited} dan di {judged.table}, jadi angka tidak menentukan"
+        else:
+            printed_where = "angka kalimat tidak tercetak di tabel yang dirujuk"
+        basis = "judul tabel; " + ("; ".join(unread) if unread else printed_where)
     return FactVerificationResult(
         operation="reference", metric_label=f"Rujukan {cited}", verdict="Refuted",
         context_quote=pointer.sentence, page_number=pointer.page, resolved_via=RESOLVED_VIA,
@@ -147,7 +175,9 @@ async def review_pointers(narrative_text: str, results: List[FactVerificationRes
     if len(titles) < 2 or not items:
         return results
     sentences = "\n".join(f"{i}. [{' dan '.join(keys)}] {p.sentence}"
+                          + (f"\n   angka juga di: {', '.join(p.tied)}" if p.tied and not _is_chart(keys[0]) else "")
                           + (f"\n   sebelumnya: {p.before}" if p.before else "")
+                          + (f"\n   sesudahnya: {p.after}" if p.after else "")
                           for i, (p, keys) in enumerate(items))
     answer = await (_PROMPT | llm.with_structured_output(_Judgements)).ainvoke(
         {"tables": _tables_block(titles, table_texts), "sentences": sentences})
@@ -159,6 +189,16 @@ async def review_pointers(narrative_text: str, results: List[FactVerificationRes
         seen.add(judged.index)
         pointer, keys = items[judged.index]
         table = judged.table.strip()
+        # A tie: the model's pick between the cited table and the one printing the same figures
+        # decides, whatever it says of the fit (it reads "another one shows it as well" as a fit).
+        tied_pick = (not _is_chart(keys[0]) and table in pointer.tied and table not in keys)
+        if tied_pick:
+            judged.table = table
+            out.append(_card(pointer, keys, judged, titles, unreadable or {}))
+            continue
+        if judged.fits and not _is_chart(keys[0]):
+            out.append(_fits_card(pointer, keys, judged, titles))
+            continue
         if (judged.fits or table not in titles or table in keys
                 or _is_chart(table) != _is_chart(keys[0])):
             continue
@@ -168,5 +208,5 @@ async def review_pointers(narrative_text: str, results: List[FactVerificationRes
         judged.table = table
         out.append(_card(pointer, keys, judged, titles, unreadable or {}))
     logger.info("Tinjauan AI rujukan tabel/grafik: %d rujukan terbuka, %d ditandai",
-                len(items), len(out) - len(results))
+                len(items), sum(r.verdict == "Refuted" for r in out[len(results):]))
     return out

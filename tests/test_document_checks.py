@@ -22,7 +22,12 @@ def _value(quote, sheet, value=1.0):
 
 
 def _findings(results):
-    return [r for r in results if r.resolved_via == dc.RESOLVED_VIA]
+    """The Tidak Sesuai cards the checks add (a pointer that holds adds a Sesuai card)."""
+    return [r for r in results if r.resolved_via == dc.RESOLVED_VIA and r.verdict == "Refuted"]
+
+
+def _held(results):
+    return [r for r in results if r.resolved_via == dc.RESOLVED_VIA and r.verdict == "Entailed"]
 
 
 # --- a comparison between two numbers of the same sentence -----------------------------------
@@ -144,7 +149,35 @@ def test_captions_are_read_on_one_line_or_with_the_title_on_the_next():
 
 def test_a_sentence_citing_the_table_that_prints_its_figures_is_not_a_finding():
     sentence = "Responden yang menjawab lebih mudah sebesar 6,35% dan lebih sulit 4,12% (Lampiran Tabel 3)."
-    assert _findings(dc.check_document(_narrative(sentence, appendix=APPENDIX), [], PRINTED)) == []
+    out = dc.check_document(_narrative(sentence, appendix=APPENDIX), [], PRINTED)
+    assert _findings(out) == []
+    # It shows as a Sesuai card, so the reader sees the pointer was checked.
+    [held] = _held(out)
+    assert held.operation == "reference" and held.metric_label == "Rujukan Tabel 3"
+    assert held.context_quote == sentence
+    assert held.reasoning.startswith("Kalimat merujuk Tabel 3 ('Kondisi Keuangan dan Akses Kredit'); "
+                                     "angkanya (6,35, 4,12) tercetak di tabel itu")
+
+
+def test_a_tie_with_another_table_of_the_same_kind_is_no_proof():
+    # UB Sep 2026 (planted): "Posisi M2 … (Tabel 2)", but Tabel 2 (Faktor yang Memengaruhi Uang
+    # Beredar) starts with the same M2 row as Tabel 1. The numbers cannot tell them apart.
+    appendix = [(1, "Uang Beredar dan Komponennya"), (2, "Faktor yang Memengaruhi Uang Beredar"),
+                (3, "Dana Pihak Ketiga")]
+    printed = {"Tabel 1": "Uang Beredar Luas (M2) 10.447,6 10.587,9 8,2 8,3 Uang Kuasi 4.498,8",
+               "Tabel 2": "Uang Beredar (M2) 10.447,6 10.587,9 8,2 8,3 Aktiva Luar Negeri Bersih 2.106,2",
+               "Tabel 3": "DPK 9.895,8 8,2"}
+    sentence = "Posisi M2 tercatat sebesar Rp10.587,9 triliun, atau tumbuh sebesar 8,3% (Tabel 2 dan Grafik 1)."
+    out = dc.check_document(_narrative(sentence, appendix=appendix), [], printed)
+    assert _findings(out) == [] and _held(out) == []
+    [pointer] = [p for p in dc._pointers(_narrative(sentence, appendix=appendix), printed).pointers if p.cited]
+    assert pointer.status == "open" and pointer.tied == ["Tabel 1"]
+    # A tie with an appendix table that prints the body's figures again still holds.
+    with_lampiran = {**printed, "Tabel 2": "Aktiva Luar Negeri Bersih 2.106,2",
+                     "Lampiran 1": "M2 10.587,9 8,3"}
+    one = "Posisi M2 tercatat sebesar Rp10.587,9 triliun, atau tumbuh sebesar 8,3% (Tabel 1)."
+    assert [r.metric_label for r in _held(dc.check_document(_narrative(one, appendix=appendix), [],
+                                                            with_lampiran))] == ["Rujukan Tabel 1"]
 
 
 def test_a_sentence_citing_another_table_than_the_one_printing_its_figures_is_tidak_sesuai():

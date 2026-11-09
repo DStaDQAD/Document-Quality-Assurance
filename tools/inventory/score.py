@@ -190,7 +190,9 @@ def score_run(base: Path, run: str, only=None, cases_root: Path = ROOT / "eval" 
         sentences = copy.deepcopy(data["sentences"])
         for s in sentences:
             s["system_claims"] = []
-        results = json.loads(run_file.read_text(encoding="utf-8")).get("results", [])
+        # A table pointer's card (operation "reference") is no number claim: the labels have none.
+        results = [r for r in json.loads(run_file.read_text(encoding="utf-8")).get("results", [])
+                   if r.get("operation") != "reference"]
         r["unplaced"] += len(attach_claims(sentences, results))
         by_sid = {s["sid"]: s for s in sentences}
         r["documents"] += 1
