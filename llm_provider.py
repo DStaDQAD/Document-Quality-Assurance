@@ -49,14 +49,25 @@ OPENSCALE_BASE_URL = os.getenv("OPENSCALE_BASE_URL", "https://api.openscale.so/v
 OPENSCALE_REASONING_EFFORT = os.getenv("OPENSCALE_REASONING_EFFORT", "none")
 OPENSCALE_REVIEW_REASONING_EFFORT = os.getenv("OPENSCALE_REVIEW_REASONING_EFFORT", "low")
 
+# A Copilot Studio agent over Direct Line (copilot_chat.py): the agent's Web channel security secret.
+# The agent's own model setting decides the model (Claude Opus 5.5 in the 2026-11-12 benchmark). A call
+# waits COPILOT_TIMEOUT_S for the agent and is tried COPILOT_MAX_ATTEMPTS times (an agent once stayed
+# silent for minutes in the benchmark; a check must not hang on it).
+COPILOT_DIRECTLINE_SECRET = (os.getenv("COPILOT_DIRECTLINE_SECRET") or "").strip()
+COPILOT_DIRECTLINE_URL = os.getenv("COPILOT_DIRECTLINE_URL", "https://directline.botframework.com")
+COPILOT_TIMEOUT_S = float(os.getenv("COPILOT_TIMEOUT_S", "120"))
+COPILOT_MAX_ATTEMPTS = int(os.getenv("COPILOT_MAX_ATTEMPTS", "2"))
+
 # Controls which provider handles vision/image tasks (PDF pages).
 # "google" → Gemini (default), "groq" → llama-4-scout via Groq API.
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "google").lower()
 
-_PROVIDER_KEYS = {"google": GOOGLE_API_KEY, "groq": GROQ_API_KEY, "openscale": OPENSCALE_API_KEY, "ollama": None}
+_PROVIDER_KEYS = {"google": GOOGLE_API_KEY, "groq": GROQ_API_KEY, "openscale": OPENSCALE_API_KEY,
+                  "copilot": COPILOT_DIRECTLINE_SECRET, "ollama": None}
+_KEY_NAMES = {"copilot": "COPILOT_DIRECTLINE_SECRET"}
 
 if LLM_PROVIDER not in _PROVIDER_KEYS:
-    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', 'openscale', or 'ollama'.")
+    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', 'openscale', 'copilot', or 'ollama'.")
 
 if VISION_PROVIDER not in ("google", "groq"):
     raise RuntimeError(f"Unsupported VISION_PROVIDER '{VISION_PROVIDER}'. Use 'google' or 'groq'.")
@@ -66,7 +77,7 @@ if LLM_PROVIDER != "ollama":
     _active_key = _PROVIDER_KEYS[LLM_PROVIDER]
     if not _active_key or _active_key.startswith("your_"):
         raise RuntimeError(
-            f"{LLM_PROVIDER.upper()}_API_KEY is missing or still a placeholder. "
+            f"{_KEY_NAMES.get(LLM_PROVIDER, LLM_PROVIDER.upper() + '_API_KEY')} is missing or still a placeholder. "
             "Set it in your .env file before starting the server."
         )
 
@@ -115,6 +126,12 @@ def _openscale_timeout():
     return httpx.Timeout(connect=15.0, read=OPENSCALE_STALL_S, write=60.0, pool=60.0)
 
 
+def _copilot(callbacks: Callbacks) -> BaseChatModel:
+    from copilot_chat import CopilotStudioChat
+    return CopilotStudioChat(secret=COPILOT_DIRECTLINE_SECRET, base_url=COPILOT_DIRECTLINE_URL,
+                             timeout_s=COPILOT_TIMEOUT_S, max_attempts=COPILOT_MAX_ATTEMPTS, **_callback_kwargs(callbacks))
+
+
 def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
     # Imported here: only this provider needs langchain-openai.
     import httpx
@@ -140,6 +157,8 @@ def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) 
 def get_llm(temperature: float = 0.0, callbacks: Callbacks = None) -> BaseChatModel:
     if LLM_PROVIDER == "openscale":
         return _openscale(temperature, OPENSCALE_REASONING_EFFORT, callbacks)
+    if LLM_PROVIDER == "copilot":
+        return _copilot(callbacks)
     if LLM_PROVIDER == "groq":
         return ChatGroq(
             model=GROQ_MODEL,
@@ -171,6 +190,8 @@ def get_review_llm(thinking_budget: Optional[int] = None, callbacks: Callbacks =
     """
     if LLM_PROVIDER == "openscale":
         return _openscale(0.0, OPENSCALE_REVIEW_REASONING_EFFORT, callbacks)
+    if LLM_PROVIDER == "copilot":
+        return _copilot(callbacks)
     if LLM_PROVIDER != "google":
         return get_llm(temperature=0.0, callbacks=callbacks)
     budget = AI_REVIEW_THINKING_BUDGET if thinking_budget is None else thinking_budget

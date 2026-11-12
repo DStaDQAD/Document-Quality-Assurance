@@ -12,6 +12,7 @@ bot, not a raw model API, so
 import asyncio
 import concurrent.futures
 import json
+import logging
 import re
 import time
 from typing import Any, List, Optional
@@ -21,6 +22,9 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableLambda
+
+# Every agent call polls Direct Line every 1,5 s; httpx logs each request at INFO, a line per poll.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 DIRECTLINE_URL = "https://directline.botframework.com"
 _USER = {"id": "fact-checker", "name": "fact-checker"}

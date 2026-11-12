@@ -73,3 +73,38 @@ def test_no_reply_is_an_error_not_an_empty_answer():
     m.max_attempts = 1
     with pytest.raises(copilot_chat.CopilotNoReply):
         asyncio.run(m.ainvoke("halo"))
+
+
+def test_the_app_waits_less_than_the_benchmark(monkeypatch):
+    # One silent agent call must not hold a check for a quarter of an hour: 120 s, two attempts.
+    monkeypatch.setattr(llm_provider, "LLM_PROVIDER", "copilot")
+    monkeypatch.setattr(llm_provider, "COPILOT_DIRECTLINE_SECRET", "s")
+    llm = llm_provider.get_llm()
+    assert (llm.timeout_s, llm.max_attempts) == (120.0, 2)
+
+
+def test_copilot_without_a_secret_names_the_variable_to_set(monkeypatch):
+    import importlib
+    monkeypatch.setenv("LLM_PROVIDER", "copilot")
+    monkeypatch.setenv("COPILOT_DIRECTLINE_SECRET", "")
+    try:
+        with pytest.raises(RuntimeError, match="COPILOT_DIRECTLINE_SECRET"):
+            importlib.reload(llm_provider)
+    finally:
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        importlib.reload(llm_provider)
+
+
+def test_the_polling_requests_do_not_fill_the_log():
+    # Each agent call polls Direct Line every 1,5 s; at INFO that is a log line per poll on Render.
+    import importlib
+    import logging
+    root, httpx_log = logging.getLogger(), logging.getLogger("httpx")
+    saved = root.level, httpx_log.level
+    try:
+        root.setLevel(logging.INFO)          # the app logs at INFO
+        httpx_log.setLevel(logging.NOTSET)
+        importlib.reload(copilot_chat)
+        assert httpx_log.getEffectiveLevel() >= logging.WARNING
+    finally:
+        root.setLevel(saved[0]); httpx_log.setLevel(saved[1])
