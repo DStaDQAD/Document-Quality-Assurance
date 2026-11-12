@@ -58,3 +58,16 @@ def test_division_by_zero_is_a_formula_error():
 def test_a_very_long_formula_is_refused():
     with pytest.raises(FormulaError):
         evaluate("+".join(["c1"] * 500), [1.0])
+
+
+def test_round_takes_its_digits_as_a_whole_number():
+    # Copilot (2026-11-12) wrote round(c1, 1): the digits came through as 1.0 and Python's round
+    # raised a TypeError that failed the WHOLE check (HTTP 400), not just this claim.
+    assert evaluate("round(c1, 1)", [8.334]) == pytest.approx(8.3)
+    with pytest.raises(FormulaError):
+        evaluate("round(c1, 1.5)", [8.334])
+
+
+def test_a_function_called_wrongly_is_a_formula_error_not_a_crash():
+    with pytest.raises(FormulaError):
+        evaluate("min(c1)", [1.0])        # min of a single number is a TypeError in Python

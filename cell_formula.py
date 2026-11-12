@@ -70,7 +70,18 @@ def _walk(node: ast.AST, cells: List[float]):
         return True
     if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCTIONS
             and not node.keywords and node.args):
-        return float(_FUNCTIONS[node.func.id](*(_number(a, cells) for a in node.args)))
+        args = [_number(a, cells) for a in node.args]
+        if node.func.id == "round" and len(args) == 2:
+            # Every number is a float here; round() wants its digits as an int (round(c1, 1)).
+            if args[1] != int(args[1]):
+                raise FormulaError("jumlah desimal round() harus bilangan bulat")
+            args[1] = int(args[1])
+        try:
+            return float(_FUNCTIONS[node.func.id](*args))
+        except (TypeError, ValueError, OverflowError) as exc:
+            # A function called wrongly (min of one number, round with three arguments) is this
+            # claim's problem, never a crash of the whole check.
+            raise FormulaError(f"{node.func.id}() tidak bisa dihitung: {exc}") from exc
     raise FormulaError(f"bagian rumus tidak diizinkan: {ast.dump(node)[:80]}")
 
 
