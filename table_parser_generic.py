@@ -286,7 +286,9 @@ def _xlsx_grid(data: bytes, sheet_name: str) -> List[List]:
     in memory whole, and only the asked sheet is read."""
     import openpyxl
 
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    # keep_links=False: a workbook's cached copies of linked workbooks are never read (SULNI's
+    # TABEL_INDONESIA carries 15 MB of them; parsing them per sheet took the server down).
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
     try:
         if sheet_name not in wb.sheetnames:
             raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")

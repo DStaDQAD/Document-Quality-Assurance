@@ -238,7 +238,7 @@ def _read_xls(data: bytes, sheet_name: str):
 def _read_xlsx(data: bytes, sheet_name: str):
     import openpyxl
 
-    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+    wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True, keep_links=False)
     if sheet_name not in wb.sheetnames:
         raise ValueError(f"Sheet '{sheet_name}' not found. Available: {wb.sheetnames}")
 
@@ -297,7 +297,7 @@ def list_sheet_names(data: bytes) -> List[str]:
         return list(xlrd.open_workbook(file_contents=data, on_demand=True).sheet_names())
     elif data[:4] == b'PK\x03\x04':
         import openpyxl
-        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True)
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, keep_links=False)
         try:
             return list(wb.sheetnames)
         finally:
