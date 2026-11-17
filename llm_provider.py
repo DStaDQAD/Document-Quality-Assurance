@@ -1,4 +1,4 @@
-"""LLM provider selection (Google Gemini / Groq / Ollama) driven by environment config."""
+"""LLM provider selection (Google Gemini / OpenAI / OpenScale / Groq / Ollama) driven by environment config."""
 
 import os
 import warnings
@@ -49,6 +49,13 @@ OPENSCALE_BASE_URL = os.getenv("OPENSCALE_BASE_URL", "https://api.openscale.so/v
 OPENSCALE_REASONING_EFFORT = os.getenv("OPENSCALE_REASONING_EFFORT", "none")
 OPENSCALE_REVIEW_REASONING_EFFORT = os.getenv("OPENSCALE_REVIEW_REASONING_EFFORT", "low")
 
+# OpenAI (GPT-6 Luna / GPT-6.1 Terra, benchmarked 2026-11-11/12): the same OpenAI-compatible client as
+# OpenScale, on OpenAI's own endpoint. Thinking off for extraction, a little for the Tinjauan AI.
+OPENAI_API_KEY = (os.getenv("OPENAI_API_KEY") or "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-6-luna")
+OPENAI_REASONING_EFFORT = os.getenv("OPENAI_REASONING_EFFORT", "none")
+OPENAI_REVIEW_REASONING_EFFORT = os.getenv("OPENAI_REVIEW_REASONING_EFFORT", "low")
+
 # A Copilot Studio agent over Direct Line (copilot_chat.py): the agent's Web channel security secret.
 # The agent's own model setting decides the model (Claude Opus 5.5 in the 2026-11-12 benchmark). A call
 # waits COPILOT_TIMEOUT_S for the agent and is tried COPILOT_MAX_ATTEMPTS times (an agent once stayed
@@ -63,11 +70,11 @@ COPILOT_MAX_ATTEMPTS = int(os.getenv("COPILOT_MAX_ATTEMPTS", "2"))
 VISION_PROVIDER = os.getenv("VISION_PROVIDER", "google").lower()
 
 _PROVIDER_KEYS = {"google": GOOGLE_API_KEY, "groq": GROQ_API_KEY, "openscale": OPENSCALE_API_KEY,
-                  "copilot": COPILOT_DIRECTLINE_SECRET, "ollama": None}
+                  "openai": OPENAI_API_KEY, "copilot": COPILOT_DIRECTLINE_SECRET, "ollama": None}
 _KEY_NAMES = {"copilot": "COPILOT_DIRECTLINE_SECRET"}
 
 if LLM_PROVIDER not in _PROVIDER_KEYS:
-    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', 'openscale', 'copilot', or 'ollama'.")
+    raise RuntimeError(f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'google', 'groq', 'openscale', 'openai', 'copilot', or 'ollama'.")
 
 if VISION_PROVIDER not in ("google", "groq"):
     raise RuntimeError(f"Unsupported VISION_PROVIDER '{VISION_PROVIDER}'. Use 'google' or 'groq'.")
@@ -133,13 +140,25 @@ def _copilot(callbacks: Callbacks) -> BaseChatModel:
 
 
 def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
-    # Imported here: only this provider needs langchain-openai.
+    return _openai_compatible(OPENSCALE_MODEL, OPENSCALE_BASE_URL, OPENSCALE_API_KEY, temperature,
+                              reasoning_effort, callbacks)
+
+
+def _openai(reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
+    # GPT-6 rejects temperature unless reasoning effort is "none".
+    temperature = 0.0 if reasoning_effort == "none" else None
+    return _openai_compatible(OPENAI_MODEL, None, OPENAI_API_KEY, temperature, reasoning_effort, callbacks)
+
+
+def _openai_compatible(model: str, base_url: Optional[str], api_key: str, temperature: Optional[float],
+                       reasoning_effort: str, callbacks: Callbacks) -> BaseChatModel:
+    # Imported here: only these providers need langchain-openai.
     import httpx
     from langchain_openai import ChatOpenAI
     return ChatOpenAI(
-        model=OPENSCALE_MODEL,
-        base_url=OPENSCALE_BASE_URL,
-        api_key=OPENSCALE_API_KEY,
+        model=model,
+        base_url=base_url,
+        api_key=api_key,
         temperature=temperature,
         reasoning_effort=reasoning_effort,
         streaming=True,
@@ -157,6 +176,8 @@ def _openscale(temperature: float, reasoning_effort: str, callbacks: Callbacks) 
 def get_llm(temperature: float = 0.0, callbacks: Callbacks = None) -> BaseChatModel:
     if LLM_PROVIDER == "openscale":
         return _openscale(temperature, OPENSCALE_REASONING_EFFORT, callbacks)
+    if LLM_PROVIDER == "openai":
+        return _openai(OPENAI_REASONING_EFFORT, callbacks)
     if LLM_PROVIDER == "copilot":
         return _copilot(callbacks)
     if LLM_PROVIDER == "groq":
@@ -190,6 +211,8 @@ def get_review_llm(thinking_budget: Optional[int] = None, callbacks: Callbacks =
     """
     if LLM_PROVIDER == "openscale":
         return _openscale(0.0, OPENSCALE_REVIEW_REASONING_EFFORT, callbacks)
+    if LLM_PROVIDER == "openai":
+        return _openai(OPENAI_REVIEW_REASONING_EFFORT, callbacks)
     if LLM_PROVIDER == "copilot":
         return _copilot(callbacks)
     if LLM_PROVIDER != "google":
