@@ -8,6 +8,7 @@ that is reported as a "cross_pdf" conflict (often a revised figure), not as a di
 """
 
 import asyncio
+import functools
 import json
 from unittest.mock import Mock, patch
 
@@ -17,6 +18,8 @@ from fastapi.testclient import TestClient
 import main
 from excel_parser_bi import BITableData
 from paired_verifier import _ExcelSource, _evaluate_fact, verify_paired
+# The label-matching path, which these tests cover until it is deleted; the app runs strict.
+verify_paired = functools.partial(verify_paired, legacy_label_path=True)
 from pdf_table_extraction import PdfTable, _PdfTableOut, _assemble_grid
 from schemas import PairedVerificationResponse, TypoCheckResponse
 from structured_extractor import ExtractedFact, PeriodPoint

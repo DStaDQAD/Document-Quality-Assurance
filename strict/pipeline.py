@@ -1,11 +1,10 @@
 """A whole strict check: the tables as views, the claims, their verdicts, the Tinjauan AI, the response.
 
-verify_paired hands a check over here when STRICT_EXTRACTION is on and the check has an uploaded
-workbook (`applies`); everything before that point — reading the document, parsing the sheets,
-the team's settings — is shared with the default path.
+Every check goes through here (verify_paired hands it over after reading the document, parsing the
+sheets and applying the team's settings): Word or PDF, time-series or category tables, whatever
+parser read them. There is no other path for a check the app runs.
 """
 import logging
-import os
 from typing import Callable, Dict, List, Optional
 
 from langchain_core.language_models import BaseChatModel
@@ -18,32 +17,10 @@ from schemas import PairedVerificationResponse
 from strict.claims import Claim, claim_to_dict
 from strict.evaluate import evaluate_claim
 from strict.extract import extract_claims
-from strict.tables import TableView, build_views
+from strict.tables import TableView, build_views, unreadable_sheets
 from structured_extractor import drop_sections, extraction_llms
 
 logger = logging.getLogger("fact-checker")
-
-
-def enabled() -> bool:
-    """STRICT_EXTRACTION=1/on/true/yes."""
-    return os.getenv("STRICT_EXTRACTION", "").strip().lower() in ("1", "on", "true", "yes")
-
-
-def applies(sources: List[_ExcelSource], mode: str, has_charts: bool) -> bool:
-    """Strict reads the uploaded Excel time-series tables and, in "both" mode — the team's usual
-    check, press release and report together — the document's own tables and the other
-    document's for what the workbooks lack (`_from_documents`). It needs at least one uploaded
-    time-series sheet. Chart readings keep the old path, as do "internal" and "none".
-
-    A category (non-time-series) sheet picked with them does not: strict leaves it out
-    (build_views) and the check stays strict. It used to send the whole check to the old path —
-    UB September 2026 (2026-11-05): "Pilih semua sheet" took Rekap Dana, Kredit Properti and
-    Suku Bunga along, and the old engine misread the stacked "Tabel lengkap" sheet into four
-    false Tidak Sesuai. A claim only such a sheet holds now comes back Tidak Cukup Data."""
-    if mode not in ("excel", "both") or has_charts:
-        return False
-    # The document's own tables join the uploaded workbooks; they never stand in for them.
-    return any(view.source.origin == "excel" for view in build_views(sources))
 
 
 async def _from_documents(claims: List[Claim], text: str, documents: List[TableView], llm: BaseChatModel,
@@ -123,6 +100,10 @@ async def run_check(
     results = [evaluate_claim(claim, views) for claim in claims]
     n_reviewed = 0
     ai_notes: List[str] = []
+    unread = unreadable_sheets(sources)
+    if unread:
+        ai_notes.append("Sheet ini tidak terbaca oleh parser mana pun (termasuk parser AI), sehingga klaim yang "
+                        "membutuhkannya berputusan Tidak Cukup Data: " + "; ".join(unread) + ".")
     if review_llm is not None and results:
         # Imported here as verify_paired does: ai_review builds on paired_verifier.
         from ai_review import review_claims

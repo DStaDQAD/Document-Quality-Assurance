@@ -18,7 +18,8 @@ Operation = Literal[
 class CellRef(BaseModel):
     table: str = Field(description="Kode tabel persis, mis. 'S1'")
     row: str = Field(description="Nama baris persis seperti di daftar TABLES")
-    period: str = Field(description="Periode persis seperti tabel menulisnya, mis. 'Q4 2025' atau 'Jun 2026'")
+    period: str = Field(description="Periode persis seperti tabel menulisnya, mis. 'Q4 2025' atau 'Jun 2026'; "
+                                    "untuk tabel kategori: nama kolom persis")
 
 
 class StrictClaim(BaseModel):
@@ -63,6 +64,7 @@ class Cell:
     period_text: str
     row: Optional[str] = None
     key: Optional[Tuple[int, str]] = None
+    column: Optional[str] = None  # a category table's column (the cell then has no period key)
 
 
 @dataclass
@@ -91,7 +93,7 @@ def claim_to_dict(claim: Claim) -> dict:
 
 def claim_from_dict(data: dict) -> Claim:
     cells = [Cell(code=c["code"], row_text=c["row_text"], period_text=c["period_text"], row=c.get("row"),
-                  key=tuple(c["key"]) if c.get("key") else None)
+                  key=tuple(c["key"]) if c.get("key") else None, column=c.get("column"))
              for c in data.get("cells") or []]
     rest = {k: v for k, v in data.items() if k != "cells"}
     return Claim(cells=cells, **rest)

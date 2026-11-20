@@ -12,7 +12,7 @@ from langchain_core.language_models import BaseChatModel
 
 from strict.claims import Cell, Claim, StrictClaim, StrictClaims
 from strict.prompt import PROMPT
-from strict.tables import TableView, find_row, parse_period, table_block
+from strict.tables import TableView, find_column, find_row, parse_period, table_block
 from structured_extractor import (
     EXTRACTION_CHUNK_CHARS,
     _PAGE_MARKER_PATTERN,
@@ -61,8 +61,14 @@ def _cells(raw: StrictClaim, views: Dict[str, TableView]) -> List[Cell]:
     cells = []
     for ref in raw.cells:
         view = views.get((ref.table or "").strip().upper())
-        cells.append(Cell(code=ref.table, row_text=ref.row, period_text=ref.period,
-                          row=find_row(view, ref.row) if view else None, key=parse_period(ref.period)))
+        row = find_row(view, ref.row) if view else None
+        if view is not None and view.is_categorical:
+            # A category table has no periods: the extractor names a column in the period's place.
+            cells.append(Cell(code=ref.table, row_text=ref.row, period_text=ref.period, row=row,
+                              column=find_column(view, ref.period)))
+        else:
+            cells.append(Cell(code=ref.table, row_text=ref.row, period_text=ref.period, row=row,
+                              key=parse_period(ref.period)))
     return cells
 
 

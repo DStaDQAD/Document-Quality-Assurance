@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import logging
 from unittest.mock import Mock, patch
 
@@ -24,6 +25,8 @@ from paired_verifier import (
     _unit_factor,
     verify_paired,
 )
+# The label-matching path, which these tests cover until it is deleted; the app runs strict.
+verify_paired = functools.partial(verify_paired, legacy_label_path=True)
 from publication_parsers import PublicationParseError
 from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint

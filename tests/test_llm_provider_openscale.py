@@ -72,7 +72,7 @@ def test_verify_paired_extracts_with_the_text_model_when_told(mock_parse, mock_e
     mock_parse.return_value = table
     text, vision = Mock(name="text"), Mock(name="vision")
 
-    asyncio.run(verify_paired(narrative_text="[== Halaman 1 ==]\nPMI-BI tercatat 52,03%.\n",
+    asyncio.run(verify_paired(legacy_label_path=True, narrative_text="[== Halaman 1 ==]\nPMI-BI tercatat 52,03%.\n",
                               excel_sources=[(b"x", "T1", "t.xlsx")], llm=text, vision_llm=vision))
 
     assert mock_extract.call_args.args[2] is text

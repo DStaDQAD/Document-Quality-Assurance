@@ -8,7 +8,8 @@ You never compute anything and never state a computed number: a program reads th
 from the tables and does the arithmetic.
 
 THE TABLES section lists each uploaded table: its code (S1, S2, ...), title, how it is laid out
-('per triwulan, Q1 2015 s.d. Q4 2025' or 'per bulan, ...'), its unit, and every row name. It shows
+('per triwulan, Q1 2015 s.d. Q4 2025', 'per bulan, ...' or 'tabel kategori tanpa periode, kolom: ...'),
+its unit, and every row name. It shows
 no values, on purpose. Tables marked 'tabel di dokumen ini' (the report's own tables) or 'tabel di
 dokumen lain' (the other document checked alongside) are shown only for the sentences the uploaded
 workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
@@ -16,6 +17,11 @@ workbooks do not answer; a HANYA KALIMAT INI list then names those sentences.
 1. CELLS ARE COPIED EXACTLY. table = the code ('S1'); row = a row name copied character for
    character from that table's list; period = written as the table is laid out: 'Q4 2025' on a
    quarterly table, 'Jun 2026' on a monthly one. Never invent a row or a period.
+   A 'tabel kategori tanpa periode' has columns instead of periods: put the column name, copied
+   exactly from its 'kolom' list, in period. Such a table answers values, differences, ratios and
+   shares, sums, averages and rankings across its rows and columns; it holds no change over time
+   (yoy, naik/turun dari periode lalu), so a claim about one is answered from a time-series table
+   or is not_in_tables.
 
 2. CHOOSE CELLS WITH THE PARAGRAPH IN VIEW. A name means what it means in its paragraph: 'KFLN' in a
    paragraph about direct investment is the row 'Kewajiban > Investasi Langsung', while 'posisi KFLN

@@ -74,7 +74,6 @@ def cmd_run(args) -> int:
     os.environ["AI_REVIEW"] = "" if args.no_ai_review else "1"
     os.environ["PUBLICATION_NOTES"] = "1" if args.publication_notes else ""
     os.environ["AI_REVIEW_SECOND_LOOK"] = "1" if args.second_look else ""
-    os.environ["STRICT_EXTRACTION"] = "1" if args.strict else ""
     if args.thinking is not None:   # llm_provider reads it at import, so before main is imported
         os.environ["GEMINI_THINKING_BUDGET"] = str(args.thinking)
     out = Path(args.out)
@@ -382,7 +381,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("--thinking", type=int, default=None,
                    help="thinking token cap for extraction and the other get_llm calls (GEMINI_THINKING_BUDGET)")
     p.add_argument("--strict", action="store_true",
-                   help="strict extraction: the extractor names the cells (STRICT_EXTRACTION=1)")
+                   help="kept for old command lines: every run is strict now")
     p = sub.add_parser("diff")
     p.add_argument("base")
     p.add_argument("new")

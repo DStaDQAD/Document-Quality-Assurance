@@ -1375,13 +1375,6 @@ body.auth-locked .app {
                       <span class="rule-hint" id="rule-intra-hint">Narasi vs tabel di PDF yang sama</span>
                     </span>
                   </label>
-                  <label class="rule-check">
-                    <input type="checkbox" id="rule-charts" checked>
-                    <span class="rule-text">
-                      <span class="rule-title">Angka grafik vs tabel</span>
-                      <span class="rule-hint" id="rule-charts-hint">Label angka pada grafik dibaca AI, lalu dicek terhadap tabel</span>
-                    </span>
-                  </label>
                   <label class="rule-check is-disabled">
                     <input type="checkbox" id="rule-cross-pdf" disabled>
                     <span class="rule-text">
@@ -1958,9 +1951,9 @@ body.auth-locked .app {
   // only the Excel, a figure the Excel lacks (UB's penyaluran kredit) may be put on a look-alike
   // row and come back a false Tidak Sesuai. The other document's tables (antar-file) are not a
   // source since 2026-11-02. A press release as a rule has no charts.
-  const WITH_REPORT_RULES = ["excel", "intra", "charts", "typo"];
+  const WITH_REPORT_RULES = ["excel", "intra", "typo"];
   const PRESS_ONLY_RULES = ["excel", "intra", "typo"];
-  const REPORT_ONLY_RULES = ["excel", "intra", "charts", "typo"];
+  const REPORT_ONLY_RULES = ["excel", "intra", "typo"];
   const PUBLICATIONS = {
     "uang-beredar":    { label: "Uang Beredar", report: true, rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, rules: PRESS_ONLY_RULES },
@@ -2095,23 +2088,22 @@ body.auth-locked .app {
   }
 
   const RULE_BOXES = {
-    intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", charts: "rule-charts", typo: "rule-typo",
+    intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", typo: "rule-typo",
   };
   const RULE_HINTS = {
     intra: ["Untuk angka yang tidak ada di Excel: dicek ke tabel di dokumen yang sama · opsional"],
     cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
     excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
-    charts: ["Label angka pada grafik dibaca AI, lalu dicek terhadap tabel · opsional"],
   };
-  // The rules a checker may switch: cek grafik (on; it costs AI calls) and the document's own
-  // tables (off; see WITH_REPORT_RULES). The choice is kept when another publication is picked.
-  const wanted = { charts: true, intra: false };
+  // The rule a checker may switch: the document's own tables (off; see WITH_REPORT_RULES). The
+  // choice is kept when another publication is picked. Charts are not checked (only "(Grafik N)").
+  const wanted = { intra: false };
   for (const key of Object.keys(wanted)) {
     document.getElementById(RULE_BOXES[key]).addEventListener("change", (e) => { wanted[key] = e.target.checked; });
   }
 
   // The boxes display the chosen publication's `rules`: each one runs as soon as its documents
-  // are there and cannot be unticked, except cek grafik; a rule the publication does not use is
+  // are there and cannot be unticked; a rule the publication does not use is
   // hidden, and with no publication chosen none is shown. The submit handler reads the boxes.
   // Declared as a function (hoisted) because the file entries call it on every change.
   function syncRules() {
@@ -2140,9 +2132,7 @@ body.auth-locked .app {
       pub ? `Aturan untuk ${pub.label}` : "Aturan pemeriksaan";
     document.getElementById("rules-fixed-note").textContent = !pub
       ? "Pilih jenis publikasi untuk melihat aturannya."
-      : rulesOf(currentPublication()).includes("charts")
-        ? "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan, cek grafik boleh dimatikan."
-        : "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan.";
+      : "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan.";
   }
 
   syncRules();
@@ -2541,7 +2531,8 @@ body.auth-locked .app {
     const typoIssueCount = typoCheck ? typoCheck.total_issues : 0;
     const hasTypoIssues = typoIssueCount > 0;
 
-    // Charts are judged one card per chart, on a tab of their own (check_charts). The tab only
+    // Charts were judged one card per chart, on a tab of their own: new checks no longer read charts,
+    // but a check saved in the Riwayat before that still shows the tab. The tab only
     // exists when the rule was on — an empty one would read as "every chart checked, all fine".
     const chartChecks = data.chart_checks || [];
     const chartUnread = data.chart_pages_unread || [];
@@ -3820,7 +3811,7 @@ body.auth-locked .app {
     try {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
-          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}` +
+          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}` +
           `&checker_name=${encodeURIComponent(checkerName)}&publication=${encodeURIComponent(publication)}`,
         { method: "POST", body: formData, signal },
         (ev) => {
@@ -3868,7 +3859,7 @@ body.auth-locked .app {
     const mode = currentMode();
     const withTypo = document.getElementById("rule-typo").checked;
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
-    const withCharts = document.getElementById("rule-charts").checked && mode !== "none";
+    const withCharts = false;  // charts are no longer read; only "(Grafik N)" pointers are checked
     const checkerName = listedChecker(checkerNameEl.value);
     if (!publication) {
       resultEl.innerHTML = `<div class="error-banner">Pilih jenis publikasi terlebih dahulu.</div>`;

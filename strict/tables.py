@@ -39,13 +39,18 @@ ANNUAL = "FY"  # the token of a year's annual column (TableData.annual)
 
 @dataclass
 class TableView:
-    """One uploaded time-series table under the code the extractor cites it by."""
+    """One table under the code the extractor cites it by: a time series (row × period) or a
+    category table (row × column, no periods)."""
     code: str
     source: _ExcelSource
 
     @property
     def table(self):
         return self.source.table
+
+    @property
+    def is_categorical(self) -> bool:
+        return self.table.axis_type == "categorical"
 
     @property
     def origin_note(self) -> str:
@@ -58,7 +63,12 @@ class TableView:
 
     @property
     def shape(self) -> str:
-        """'per triwulan, Q1 2015 s.d. Q4 2025, satuan Juta USD'."""
+        """'per triwulan, Q1 2015 s.d. Q4 2025, satuan Juta USD'; for a category table its columns."""
+        if self.is_categorical:
+            columns = ", ".join(f"'{c}'" for c in self.table.col_labels[:_MAX_COLUMNS])
+            more = f", … ({len(self.table.col_labels)} kolom)" if len(self.table.col_labels) > _MAX_COLUMNS else ""
+            shape = f"tabel kategori tanpa periode, kolom: {columns}{more}"
+            return f"{shape}, satuan {self.table.unit}" if self.table.unit else shape
         periods = sorted({key[1:] for key in self.table._data if len(key) == 3 and isinstance(key[1], int)},
                          key=lambda p: (p[0], _period_ordinal(p[1])))
         if not periods:
@@ -81,14 +91,15 @@ class TableView:
 
 
 _ORIGIN_ORDER = {"excel": 0, "pdf": 1, "pdf_other": 2}
+_MAX_COLUMNS = 40  # a category table's columns listed in the prompt
 
 
 def build_views(sources: List[_ExcelSource]) -> List[TableView]:
-    """The time-series tables that hold data, coded S1, S2, …: the uploaded workbooks first, then
-    the document's own tables, then the other document's ('both' mode). Charts are not tables."""
+    """Every table that holds data, whatever parser read it (time series and category tables alike),
+    coded S1, S2, …: the uploaded workbooks first, then the document's own tables, then the other
+    document's ('both' mode). A sheet no parser could structure (pointer_only) has no cells to name."""
     usable = [s for s in sources
-              if s.origin in _ORIGIN_ORDER and not s.pointer_only and s.table.axis_type == "temporal"
-              and s.table._data]
+              if s.origin in _ORIGIN_ORDER and not s.pointer_only and s.table._data]
     usable.sort(key=lambda s: _ORIGIN_ORDER[s.origin])
     return [TableView(code=f"S{i}", source=s) for i, s in enumerate(usable, 1)]
 
@@ -132,6 +143,18 @@ def find_row(view: TableView, text: str) -> Optional[str]:
     not one of the table's rows finds nothing."""
     wanted = _fold(text)
     return next((row for row in view.table.row_labels if _fold(row) == wanted), None)
+
+
+def find_column(view: TableView, text: str) -> Optional[str]:
+    """A category table's column whose name is `text` up to case and spacing."""
+    wanted = _fold(text)
+    return next((col for col in view.table.col_labels if _fold(col) == wanted), None)
+
+
+def unreadable_sheets(sources: List[_ExcelSource]) -> List[str]:
+    """Uploaded sheets that give strict no cells: no parser, the AI parser included, could read them."""
+    return [f"{s.filename} › {s.sheet}" for s in sources
+            if s.origin == "excel" and (s.pointer_only or not s.table._data)]
 
 
 def table_block(views: List[TableView], chunk: str) -> str:

@@ -51,6 +51,14 @@ def _read(claim: Claim, views: Dict[str, TableView]) -> List[Read]:
         view = views.get((cell.code or "").strip().upper())
         if view is None or cell.row is None:
             raise _Undecided("tidak_ditemukan", f"Sel yang disebut AI tidak ada di tabel: '{written}'.")
+        if view.is_categorical:
+            if cell.column is None:
+                raise _Undecided("tidak_ditemukan", f"Kolom yang disebut AI tidak ada di tabel: '{written}'.")
+            value = view.table._data.get((cell.row, cell.column))
+            if value is None:
+                raise _Undecided("tidak_ditemukan", f"Tabel tidak memuat sel '{cell.code} · {cell.row} · {cell.column}'.")
+            out.append((cell, view, value))
+            continue
         if cell.key is None:
             raise _Undecided("periode", f"Periode yang disebut AI tidak dikenali: '{written}'.")
         if cell.key[1] == ANNUAL:
@@ -62,6 +70,15 @@ def _read(claim: Claim, views: Dict[str, TableView]) -> List[Read]:
                                         f"{period_header(*cell.key)}'.")
         out.append((cell, view, value))
     return out
+
+
+def cell_place(cell: Cell) -> str:
+    """Where a cell sits after its row: its period, or a category table's column."""
+    return cell.column if cell.key is None else period_header(*cell.key)
+
+
+# Operations that read a change over time: a category table has no periods to read it on.
+_OVER_TIME = {"yoy_growth"} | _TRENDS
 
 
 def _missing_members(read: List[Read]) -> List[str]:
@@ -97,7 +114,7 @@ def _unit(view: TableView, row: str) -> str:
 def _ordered(read: List[Read]) -> List[Read]:
     """Cells of one row, oldest first: the sign of a change must not hang on the order the model
     happened to list them in. Cells of several rows keep the model's order (numerator, denominator)."""
-    if len({cell.row for cell, _, _ in read}) != 1:
+    if len({cell.row for cell, _, _ in read}) != 1 or any(cell.key is None for cell, _, _ in read):
         return read
     return sorted(read, key=lambda r: (r[0].key[0], _period_ordinal(r[0].key[1])))
 
@@ -227,7 +244,7 @@ def _ranking(claim: Claim, read: List[Read], values: List[float]) -> Tuple[None,
     if claim.rank_pairs:
         # A net position per member: two rows at one period, the first minus the second
         # (Kewajiban − Aset), in the order the model listed them.
-        if len(read) % 2 or any(read[i][0].key != read[i + 1][0].key for i in range(0, len(read), 2)):
+        if len(read) % 2 or any((read[i][0].key, read[i][0].column) != (read[i + 1][0].key, read[i + 1][0].column) for i in range(0, len(read), 2)):
             raise _Undecided("klaim_tidak_lengkap", "Peringkat selisih butuh dua sel pada periode yang sama "
                                                     "untuk setiap anggota.")
         for i in range(0, len(read), 2):
@@ -241,7 +258,9 @@ def _ranking(claim: Claim, read: List[Read], values: List[float]) -> Tuple[None,
             raise _Undecided("klaim_tidak_lengkap", "Peringkat butuh satu sel (level) atau dua sel (perubahan) "
                                                     "untuk setiap anggota, sama untuk semuanya.")
         for key, cells in members.items():
-            cells = sorted(cells, key=lambda cv: (cv[0].key[0], _period_ordinal(cv[0].key[1])))
+            if len(cells) == 2 and any(c.key is None for c, _ in cells):
+                raise _Undecided("jenis", "Peringkat perubahan butuh periode; tabel kategori tidak memilikinya.")
+            cells = sorted(cells, key=lambda cv: (cv[0].key[0], _period_ordinal(cv[0].key[1]))) if len(cells) == 2 else cells
             measure[key] = cells[0][1] if len(cells) == 1 else cells[1][1] - cells[0][1]
     ordered = list(measure)
     named, rest = ordered[:claim.ranked or 0], ordered[claim.ranked or 0:]
@@ -264,6 +283,8 @@ def _ranking(claim: Claim, read: List[Read], values: List[float]) -> Tuple[None,
 def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[float], str, str]:
     """(computed value, delta, verdict, explanation) for the claim's operation."""
     op, unit = claim.operation, _unit(read[0][1], read[0][0].row)
+    if op in _OVER_TIME and any(cell.key is None for cell, _, _ in read) and not (op == "yoy_growth" and len(read) == 1):
+        raise _Undecided("jenis", "Tabel kategori tidak memiliki periode, jadi perubahan antarwaktu tidak bisa dihitung.")
     if op == "value" or (op == "yoy_growth" and len(read) == 1):
         if len(read) != 1:
             raise _Undecided("klaim_tidak_lengkap", "Klaim nilai harus menyebut tepat satu sel.")
@@ -356,9 +377,11 @@ def evaluate_claim(claim: Claim, views: List[TableView]) -> FactVerificationResu
     except _Undecided as undecided:
         return FactVerificationResult(**base, verdict="Inconclusive", reason_code=undecided.code,
                                       reasoning=undecided.why)
-    cells = "; ".join(f"{c.code} · {c.row} · {period_header(*c.key)} = {round(v, 4)}" for c, _, v in read)
+    cells = "; ".join(f"{c.code} · {c.row} · {cell_place(c)} = {round(v, 4)}" for c, _, v in read)
     return FactVerificationResult(
         **base, matched_excel_source=read[0][1].source.label,
-        periods=[PeriodResult(metric_label=c.row, year=c.key[0], month=c.key[1], excel_value=v) for c, _, v in read],
+        periods=[PeriodResult(metric_label=c.row, col_label=c.column, excel_value=v) if c.key is None
+                 else PeriodResult(metric_label=c.row, year=c.key[0], month=c.key[1], excel_value=v)
+                 for c, _, v in read],
         computed_value=computed, delta=delta, verdict=verdict, reasoning=f"Sel: {cells} | {tail}",
     )

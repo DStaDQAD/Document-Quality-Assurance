@@ -1,8 +1,9 @@
 """Strict extraction (docs/superpowers/specs/2026-10-26-strict-extraction-design.md).
 
-The extractor sees each uploaded table's shape — codes, rows, periods, units, never the values —
-and names the exact cells every claim needs, or says the data is not in the tables. The engine
-reads those cells and computes: no word matching, no row guards. Behind STRICT_EXTRACTION.
+The extractor sees each table's shape — codes, rows, periods or a category table's columns, units,
+never the values — and names the exact cells every claim needs, or says the data is not in the
+tables. The engine reads those cells and computes: no word matching, no row guards. Every check the
+app runs goes through here.
 
 tables   → the tables as the extractor sees them (codes, shape, exact row and period lookup)
 claims   → the claim schema the extractor fills, and its serialisation for replays

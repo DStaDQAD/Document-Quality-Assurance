@@ -5,10 +5,13 @@ claim is outside the uploaded tables, at a missing period, of a kind the row can
 """
 
 import asyncio
+import functools
 from unittest.mock import Mock, patch
 
 from excel_parser_bi import BITableData
 from paired_verifier import _ExcelSource, _evaluate_fact_safely, verify_paired
+# The label-matching path, which these tests cover until it is deleted; the app runs strict.
+verify_paired = functools.partial(verify_paired, legacy_label_path=True)
 from schemas import FactVerificationResult
 from structured_extractor import ExtractedFact, PeriodPoint
 

@@ -111,27 +111,6 @@ def test_word_reference_is_read_as_word(
     assert name == "laporan.docx" and len(tables) == 2
 
 
-@patch("main.check_typos")
-@patch("main.verify_paired")
-@patch("main.extract_charts_from_pdf")
-@patch("main.get_vision_llm")
-def test_chart_check_is_skipped_for_word_and_says_so(
-    mock_vision, mock_charts, mock_verify, mock_typos
-):
-    mock_vision.return_value = Mock()
-    mock_verify.return_value = _fact_response()
-    mock_typos.return_value = _typo_response()
-
-    response = client.post("/api/verify-paired-stream?mode=internal&check_charts=true",
-                           files=_WORD_UPLOAD)
-
-    assert response.status_code == 200
-    mock_charts.assert_not_called()
-    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
-    chart_done = [e for e in events if e.get("stage") == "charts" and e.get("status") == "done"]
-    assert chart_done and "Word" in chart_done[0]["detail"]
-
-
 _ALL_PNG_WORD = docx_bytes(
     para("Posisi M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun.")
     + para("Tabel 1.  Uang Beredar dan Komponennya (triliun Rp)") + picture("rId1"),

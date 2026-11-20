@@ -1,5 +1,6 @@
-"""A whole check through the strict path, handed over by verify_paired only when STRICT_EXTRACTION
-is on and the check is an Excel-only one; otherwise verify_paired runs exactly as before."""
+"""A whole check through the strict path. verify_paired hands every check over, with no flag: Word or
+PDF, time-series or category tables. The label-matching path runs only when a test asks for it
+(legacy_label_path), until it is deleted."""
 import asyncio
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -42,11 +43,22 @@ def _verify(**kw):
 
 @patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
 @patch("paired_verifier.parse_bi_table")
-def test_off_verify_paired_is_unchanged(mock_parse, mock_extract, monkeypatch):
+def test_every_check_goes_strict_without_a_flag(mock_parse, mock_extract, monkeypatch):
     monkeypatch.delenv("STRICT_EXTRACTION", raising=False)
     mock_parse.return_value = _table()
 
     response = _verify(llm=_llm([]))
+
+    assert not mock_extract.called
+    assert [r.resolved_via for r in response.results] == ["strict"]
+
+
+@patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
+@patch("paired_verifier.parse_bi_table")
+def test_the_label_path_runs_only_when_asked(mock_parse, mock_extract):
+    mock_parse.return_value = _table()
+
+    response = _verify(llm=_llm([]), legacy_label_path=True)
 
     assert mock_extract.called and response.strict_claims == []
 
@@ -84,13 +96,12 @@ def test_on_and_both_mode_goes_strict_on_the_excel_tables(mock_parse, mock_extra
 
 @patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
 @patch("paired_verifier.parse_bi_table")
-def test_on_but_internal_mode_stays_old(mock_parse, mock_extract, monkeypatch):
-    monkeypatch.setenv("STRICT_EXTRACTION", "1")
+def test_internal_mode_goes_strict_too(mock_parse, mock_extract):
     mock_parse.return_value = _table()
 
     response = _verify(llm=_llm([]), mode="internal")
 
-    assert mock_extract.called and response.strict_claims == []
+    assert not mock_extract.called
 
 
 SETTINGS_BLOCK = ("PUBLIKASI: PII\nFrasa yang biasa dipakai → baris tabel:\n"
@@ -158,34 +169,6 @@ def test_a_pointer_review_failure_is_named(mock_parse, _pointers, monkeypatch):
     assert response.ai_notes and response.ai_notes[0].startswith("Rujukan tabel/grafik")
 
 
-@pytest.mark.parametrize("value, on", [("1", True), (" ON ", True), ("yes", True), ("", False), ("0", False)])
-def test_the_flag(monkeypatch, value, on):
-    from strict.pipeline import enabled
-    monkeypatch.setenv("STRICT_EXTRACTION", value)
-
-    assert enabled() is on
-
-
-def test_charts_keep_the_old_path_and_a_category_sheet_alone_does():
-    from paired_verifier import _ExcelSource
-    from strict.pipeline import applies
-
-    series = _ExcelSource(table=_table(), filename="t.xls", sheet="5.39")
-    items = BITableData(title="Barang", unit="Rp", row_labels=["Laptop"])
-    items.axis_type, items.col_labels = "categorical", ["Harga"]
-    items._data[("Laptop", "Harga")] = 7.5
-    category = _ExcelSource(table=items, filename="b.xlsx", sheet="Barang")
-
-    assert applies([series], "excel", has_charts=False)
-    assert not applies([series], "excel", has_charts=True)
-    # UB September 2026: "Pilih semua sheet" took category sheets along with the time series;
-    # strict leaves them out instead of handing the whole check to the old engine.
-    assert applies([series, category], "excel", has_charts=False)
-    assert applies([series, category], "both", has_charts=False)
-    # With no time series at all, strict has nothing to read: the old path.
-    assert not applies([category], "excel", has_charts=False)
-
-
 @patch("paired_verifier.extract_structured_facts_async", new_callable=AsyncMock, return_value=[])
 @patch("paired_verifier.parse_bi_table")
 def test_a_category_sheet_picked_along_keeps_the_check_strict(mock_parse, mock_extract, monkeypatch):
@@ -201,18 +184,91 @@ def test_a_category_sheet_picked_along_keeps_the_check_strict(mock_parse, mock_e
     assert not mock_extract.called
     [result] = response.results
     assert (result.verdict, result.resolved_via) == ("Entailed", "strict")
-    # The extractor is shown the time series only.
-    assert "Suku Bunga" not in seen[0][1].content
+    # The category table is shown too, with its columns in place of periods.
+    assert "[S2: Suku Bunga — tabel kategori tanpa periode, kolom: '1 bulan'" in seen[0][1].content
 
 
-def test_strict_needs_an_uploaded_workbook_not_only_document_tables():
+RATES_TEXT = ("[== Halaman 1 ==]\nSuku bunga deposito Bank Persero tenor 1 bulan tercatat 7,5 persen, "
+              "lebih rendah 0,4 persen dari tenor 3 bulan (selisih relatif 5,3 persen).\n")
+
+
+def _category_llm(cells, operation="value", value="7,5", unit="persen"):
+    claim = StrictClaim(anchor_quote=f"{value} persen", subject="suku bunga deposito Bank Persero", operation=operation,
+                        claimed_value_raw=value, unit=unit, cells=cells)
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(lambda _p: StrictClaims(claims=[claim])))
+    return llm
+
+
+def _rates():
+    items = BITableData(title="Suku Bunga", unit="%", row_labels=["Bank Persero", "BPD"])
+    items.axis_type, items.col_labels = "categorical", ["1 bulan", "3 bulan"]
+    items._data.update({("Bank Persero", "1 bulan"): 7.5, ("Bank Persero", "3 bulan"): 7.9,
+                        ("BPD", "1 bulan"): 6.8, ("BPD", "3 bulan"): 7.0})
+    return items
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_a_category_table_alone_is_checked_by_strict(mock_parse):
+    mock_parse.return_value = _rates()
+    llm = _category_llm([CellRef(table="S1", row="Bank Persero", period="1 bulan")])
+
+    response = _verify(llm=llm, excel_sources=[(b"y", "Suku Bunga", "ub.xlsx")],
+                       narrative_text=RATES_TEXT)
+
+    [result] = response.results
+    assert (result.verdict, result.resolved_via) == ("Entailed", "strict")
+    [cell] = result.periods
+    assert (cell.metric_label, cell.col_label, cell.year, cell.excel_value) == ("Bank Persero", "1 bulan", None, 7.5)
+    assert "S1 · Bank Persero · 1 bulan = 7.5" in result.reasoning
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_a_category_table_compares_across_columns_but_has_no_change_over_time(mock_parse):
+    mock_parse.return_value = _rates()
+    diff = _category_llm([CellRef(table="S1", row="Bank Persero", period="1 bulan"),
+                          CellRef(table="S1", row="Bank Persero", period="3 bulan")], operation="diff", value="0,4")
+    yoy = _category_llm([CellRef(table="S1", row="Bank Persero", period="1 bulan"),
+                         CellRef(table="S1", row="Bank Persero", period="3 bulan")], operation="yoy_growth", value="5,3")
+    narrative = RATES_TEXT
+
+    [by_diff] = _verify(llm=diff, excel_sources=[(b"y", "Suku Bunga", "ub.xlsx")], narrative_text=narrative).results
+    [by_yoy] = _verify(llm=yoy, excel_sources=[(b"y", "Suku Bunga", "ub.xlsx")], narrative_text=narrative).results
+
+    assert by_diff.verdict == "Entailed"
+    assert (by_yoy.verdict, by_yoy.reason_code) == ("Inconclusive", "jenis")
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_an_unknown_column_is_tidak_cukup_data(mock_parse):
+    mock_parse.return_value = _rates()
+    llm = _category_llm([CellRef(table="S1", row="Bank Persero", period="12 bulan")])
+
+    [result] = _verify(llm=llm, excel_sources=[(b"y", "Suku Bunga", "ub.xlsx")],
+                       narrative_text=RATES_TEXT).results
+
+    assert (result.verdict, result.reason_code) == ("Inconclusive", "tidak_ditemukan")
+
+
+def test_an_unreadable_sheet_is_named_in_the_notes():
     from paired_verifier import _ExcelSource
-    from strict.pipeline import applies
+    from strict.tables import build_views, unreadable_sheets
+
+    blank = BITableData(title="?", unit="", row_labels=[])
+    unread = _ExcelSource(table=blank, filename="ub.xlsx", sheet="Rekap", pointer_only=True)
+    series = _ExcelSource(table=_table(), filename="t.xls", sheet="5.39")
+
+    assert [v.source.sheet for v in build_views([unread, series])] == ["5.39"]
+    assert unreadable_sheets([unread, series]) == ["ub.xlsx › Rekap"]
+
+
+def test_document_tables_alone_are_strict_views():
+    from paired_verifier import _ExcelSource
+    from strict.tables import build_views
 
     own = _ExcelSource(table=_table(), filename="Laporan.docx", sheet="Lampiran 1", origin="pdf")
 
-    assert not applies([own], "both", has_charts=False)
-    assert applies([_ExcelSource(table=_table(), filename="t.xls", sheet="5.39"), own], "both", has_charts=False)
+    assert [v.code for v in build_views([own])] == ["S1"]
 
 
 # --- two stages: the workbooks first, the documents' tables only for what they lack ----------------

@@ -6,12 +6,15 @@ Excel-vs-PDF comparison).
 """
 
 import asyncio
+import functools
 from unittest.mock import Mock, patch
 
 import pytest
 
 from excel_parser_bi import BITableData
 from paired_verifier import _ExcelSource, _evaluate_fact, verify_paired
+# The label-matching path, which these tests cover until it is deleted; the app runs strict.
+verify_paired = functools.partial(verify_paired, legacy_label_path=True)
 from pdf_table_extraction import PdfTable, _PdfTableOut, _assemble_grid
 from structured_extractor import ExtractedFact, PeriodPoint
 

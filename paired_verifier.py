@@ -5757,6 +5757,7 @@ async def verify_paired(
     review_new_refuted: str = "note",
     table_texts: Optional[Dict[str, str]] = None,
     unreadable_tables: Optional[Dict[str, str]] = None,
+    legacy_label_path: bool = False,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -5891,12 +5892,12 @@ async def verify_paired(
             parsed_sources.append(source)
             excel_parsers.append(parser_used)
 
-    # STRICT_EXTRACTION: a check against uploaded Excel time-series tables ("excel" or "both", the
-    # document's own and the other document's tables included) goes to the strict path, where the
-    # extractor names the cells and nothing below (matching, guards, cell pointer) runs. Imported
-    # here: strict builds on this module.
+    # Every check goes to the strict path, where the extractor names the cells and nothing below
+    # (matching, guards, cell pointer, chart labels) runs. The label-matching path below is kept only
+    # for its own tests until it is deleted (`legacy_label_path`). Imported here: strict builds on
+    # this module.
     from strict import pipeline as strict_pipeline
-    if strict_pipeline.enabled() and strict_pipeline.applies(parsed_sources, mode, bool(chart_readings)):
+    if not legacy_label_path:
         return await strict_pipeline.run_check(
             narrative_text, parsed_sources, llm, pdf_filename=pdf_filename, vision_llm=vision_llm,
             publication=publication, team_notes=team_notes,

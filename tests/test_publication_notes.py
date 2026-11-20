@@ -124,7 +124,7 @@ def test_verify_paired_passes_the_notes_only_when_the_flag_is_on(
     mock_parse.return_value = table
     mock_extract.return_value = []
 
-    asyncio.run(verify_paired(narrative_text=NARRATIVE, excel_sources=[(b"x", "Lain", "x.xlsx")],
+    asyncio.run(verify_paired(legacy_label_path=True, narrative_text=NARRATIVE, excel_sources=[(b"x", "Lain", "x.xlsx")],
                               llm=Mock(), publication="pmi"))
 
     notes = mock_extract.call_args.kwargs.get("publication_notes", "")

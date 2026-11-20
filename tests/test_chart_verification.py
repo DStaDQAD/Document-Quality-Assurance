@@ -9,6 +9,7 @@ _chart_row_names before anything is compared.
 """
 
 import asyncio
+import functools
 from unittest.mock import Mock, patch
 
 import pytest
@@ -25,6 +26,8 @@ from paired_verifier import (
     summarize_chart,
     verify_paired,
 )
+# The label-matching path, which these tests cover until it is deleted; the app runs strict.
+verify_paired = functools.partial(verify_paired, legacy_label_path=True)
 from pdf_chart_extraction import ChartPoint, ChartReading
 from structured_extractor import ExtractedFact, PeriodPoint
 
