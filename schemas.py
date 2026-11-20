@@ -170,6 +170,9 @@ class TypoIssue(BaseModel):
     suggestion: str
     explanation: str
     page_number: Optional[int] = None
+    # Set for a word in one of the document's own tables ("Tabel 3", "Lampiran 2"); None in the
+    # narrative. Its start/end then count within that table's words, not the narrative.
+    location: Optional[str] = None
 
 
 class TypoCheckResponse(BaseModel):

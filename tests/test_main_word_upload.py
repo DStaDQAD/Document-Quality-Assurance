@@ -190,3 +190,40 @@ def test_excel_mode_names_the_tables_whose_picture_holds_no_text():
     assert main._unread_tables(word, "excel") == ["Tabel 3. Y — gambar PNG, isinya tidak bisa dibaca"]
     assert main._unread_tables(word, "both") == ["Tabel 9. X — tidak bisa disusun"]
     assert main._unread_tables(None, "excel") == []
+
+
+@patch("main.check_table_typos")
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.get_vision_llm")
+def test_the_word_tables_words_join_the_typo_check(mock_vision, mock_verify, mock_typos, mock_table_typos):
+    from schemas import TypoIssue
+    mock_vision.return_value = Mock()
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+    mock_table_typos.return_value = [TypoIssue(word="Kompensansi", start=0, end=11, category="ejaan",
+                                               suggestion="kompensasi", explanation="", location="Tabel 1")]
+
+    response = client.post("/api/verify-paired?mode=internal", files=_WORD_UPLOAD)
+
+    assert response.status_code == 200, response.text
+    [tables, _llm] = mock_table_typos.call_args.args
+    assert [t.location for t in tables] == ["Tabel 1"]          # the EMF table's printed words
+    assert "Uang Beredar Sempit (M1)" in tables[0].cells
+    typo = response.json()["typo_check"]
+    assert typo["total_issues"] == 1 and typo["issues"][0]["location"] == "Tabel 1"
+
+
+@patch("main.check_table_typos", side_effect=RuntimeError("model down"))
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.get_vision_llm")
+def test_a_failing_table_typo_check_keeps_the_narratives(mock_vision, mock_verify, mock_typos, _mock_table_typos):
+    mock_vision.return_value = Mock()
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired?mode=internal", files=_WORD_UPLOAD)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["typo_check"]["summary"] == "Tidak ditemukan isu."

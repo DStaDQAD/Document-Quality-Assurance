@@ -22,6 +22,17 @@ def _disable_basic_auth():
 
 
 @pytest.fixture(autouse=True)
+def _no_table_typo_model(monkeypatch):
+    """The typo check of the document's own tables (main.check_table_typos) would ask a model about
+    every unknown word of a test's fixture tables. Endpoint tests patch the narrative typo check
+    themselves; this keeps the tables' one quiet too. Tests of it patch it again, or call
+    table_typos directly."""
+    import main
+    monkeypatch.setattr(main, "check_table_typos", lambda tables, llm: [])
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_pdf_table_cache():
     """main caches each PDF's transcribed tables by content, so that a PDF sent as a reference
     in one request is not transcribed again in the next. Tests reuse the same fake bytes with

@@ -86,7 +86,7 @@ from llm_provider import get_llm, get_review_llm, get_vision_llm
 from perf_log import StageTimer, log_perf, usage_totals
 from orchestrator import verify_document
 from paired_verifier import verify_paired
-from pdf_table_extraction import PdfTable, detect_number_format_mix, extract_tables_from_pdf
+from pdf_table_extraction import PdfTable, detect_number_format_mix, extract_tables_from_pdf, extract_tables_natively
 from pdf_extraction import (
     MIN_USEFUL_CHARS,
     extract_narrative_text,
@@ -116,6 +116,7 @@ from schemas import (
     VerifyDocumentResponse,
 )
 from translation_llm import check_translation_llm
+from table_typos import TableWords, check_table_typos, merge_typos, pdf_table_words, word_table_words
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
 from word_extraction import WordDocument, is_legacy_word_document, is_word_document, read_word_document
@@ -136,6 +137,19 @@ _GAP_REASON_MAX_CHARS = 240
 # Small and in-process: it only has to outlive one run, never a restart.
 _PDF_TABLE_CACHE: "OrderedDict[Tuple[str, bool], List[PdfTable]]" = OrderedDict()
 _PDF_TABLE_CACHE_SIZE = 8
+
+
+def _own_tables_for_typos(word: Optional[WordDocument], pdf_bytes: bytes,
+                          already_read: List[PdfTable]) -> List[TableWords]:
+    """The words of the document's own tables for the typo check: what each picture table of a Word
+    file prints, or a PDF's tables as read for the check, else as the native text-layer reader
+    finds them (no model, no cost). A scanned PDF has no text layer, so its tables are not checked."""
+    if word is not None:
+        return word_table_words(word.table_texts)
+    if already_read:
+        return pdf_table_words(already_read)
+    tables, _answered, _pages = extract_tables_natively(pdf_bytes)
+    return pdf_table_words(tables)
 
 
 async def _tables_of(
@@ -784,6 +798,14 @@ async def _run_paired_pipeline(
         # from inside the thread, keeping the emit contract single-threaded.
         _emit("typo", "running")
         result = await asyncio.to_thread(check_typos, narrative_text, typo_llm)
+        # The document's own tables too: their captions, headers and row names (never numbers),
+        # which the narrative never carries. A failure here never costs the narrative's result.
+        try:
+            tables = await asyncio.to_thread(_own_tables_for_typos, word, pdf_bytes, pdf_tables)
+            table_issues = await asyncio.to_thread(check_table_typos, tables, typo_llm)
+            result = merge_typos(result, table_issues)
+        except Exception:
+            logger.warning("Cek typo tabel dokumen gagal; hanya narasi yang diperiksa", exc_info=True)
         _emit("typo", "done", detail=result.summary)
         return result
 

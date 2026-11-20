@@ -376,6 +376,9 @@ Each candidate has a "kind":
   perfectly valid despite sometimes tripping a dictionary lookup). Only mark is_issue=true if the
   word is genuinely misspelled - judge from the surrounding context. When it IS a typo, category
   should usually be "ejaan" and suggestion should be the corrected spelling.
+  A foreign (usually English) word used in the text must be spelled correctly in its own
+  language: "Marchandise" for "Merchandise" or "Goverment" for "Government" IS a typo. A
+  correctly spelled foreign word, a country or company name, or a unit (mbbl, MMBTU) is not.
 
 - "di_ke_prefix": the text currently shows "di X" or "ke X" written as TWO SEPARATE words, where
   joining them ("diX"/"keX") also happens to be a valid dictionary word. Decide which is

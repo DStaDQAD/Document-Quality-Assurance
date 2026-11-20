@@ -2665,7 +2665,9 @@ body.auth-locked .app {
     const cards = !issues.length
       ? "<p class='muted-text'>Tidak ditemukan isu ejaan atau tata bahasa pada dokumen ini.</p>"
       : issues.map((issue) => {
-          const pageBadge = issue.page_number != null ? `<span class="page-badge">Hal.&nbsp;${issue.page_number}</span>` : "";
+          // A word in one of the document's own tables names its table ("Tabel 3"), and its page for a PDF.
+          const where = [issue.location, issue.page_number != null ? `Hal.&nbsp;${issue.page_number}` : ""].filter(Boolean);
+          const pageBadge = where.length ? `<span class="page-badge">${where.map((w, i) => i === 0 && issue.location ? escapeHtml(w) : w).join(" · ")}</span>` : "";
           return `<div class="typo-card ${escapeHtml(issue.category)}">
             <div class="typo-card-top">
               <span class="badge ${escapeHtml(issue.category)}">${escapeHtml(TYPO_CATEGORY_LABEL[issue.category] || issue.category)}</span>
