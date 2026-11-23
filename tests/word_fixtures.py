@@ -88,3 +88,66 @@ def docx_bytes(body_xml: str, media: Optional[Dict[str, bytes]] = None) -> bytes
         for name, data in media.items():
             z.writestr(f"word/media/{name}", data)
     return buf.getvalue()
+
+
+# --- EMF drawing records, for the chart renderer (emf_render) ----------------------------------
+
+def _rec(record_type: int, body: bytes) -> bytes:
+    return struct.pack("<II", record_type, 8 + len(body)) + body
+
+
+def emf_chart(records: List[bytes], width: int = 400, height: int = 200) -> bytes:
+    """An EMF whose header bounds are (0, 0, width - 1, height - 1) holding `records`."""
+    header = bytearray(88)
+    struct.pack_into("<II", header, 0, _EMR_HEADER, 88)
+    struct.pack_into("<iiii", header, 8, 0, 0, width - 1, height - 1)
+    header[40:44] = b" EMF"
+    return bytes(header) + b"".join(records) + struct.pack("<II", _EMR_EOF, 20) + bytes(12)
+
+
+def emf_pen(index: int, rgb: Tuple[int, int, int], width: int = 3) -> bytes:
+    r, g, b = rgb
+    return _rec(38, struct.pack("<IIiiI", index, 0, width, 0, r | g << 8 | b << 16))
+
+
+def emf_brush(index: int, rgb: Tuple[int, int, int]) -> bytes:
+    r, g, b = rgb
+    return _rec(39, struct.pack("<IIII", index, 0, r | g << 8 | b << 16, 0))
+
+
+def emf_select(index: int) -> bytes:
+    return _rec(37, struct.pack("<I", index))
+
+
+def _points16(record_type: int, points: List[Tuple[int, int]]) -> bytes:
+    xs, ys = [p[0] for p in points], [p[1] for p in points]
+    body = struct.pack("<iiiiI", min(xs), min(ys), max(xs), max(ys), len(points))
+    return _rec(record_type, body + b"".join(struct.pack("<hh", x, y) for x, y in points))
+
+
+def emf_polyline16(points: List[Tuple[int, int]]) -> bytes:
+    return _points16(87, points)
+
+
+def emf_polygon16(points: List[Tuple[int, int]]) -> bytes:
+    return _points16(86, points)
+
+
+def emf_text(text: str, bounds: Tuple[int, int, int, int], rgb: Tuple[int, int, int] = (0, 0, 0)) -> bytes:
+    """A text colour record, then the text placed by its bounds."""
+    r, g, b = rgb
+    colour = _rec(24, struct.pack("<I", r | g << 8 | b << 16))
+    return colour + emf_bytes([(0, 0, text)], bounds=[bounds])[88:-20]
+
+
+def emf_font(index: int, height: int = 24, escapement: int = 0, weight: int = 400) -> bytes:
+    """EXTCREATEFONTINDIRECTW: a LOGFONTW with the given height, escapement (tenths of a degree)
+    and weight, face name Calibri."""
+    logfont = struct.pack("<iiiiiBBBBBBBB", -height, 0, escapement, escapement, weight, 0, 0, 0, 0, 0, 0, 0, 0)
+    logfont += "Calibri".encode("utf-16-le").ljust(64, b"\0")
+    return _rec(82, struct.pack("<I", index) + logfont)
+
+
+def emf_world(m11: float, m12: float, m21: float, m22: float, dx: float = 0.0, dy: float = 0.0) -> bytes:
+    """SETWORLDTRANSFORM."""
+    return _rec(35, struct.pack("<6f", m11, m12, m21, m22, dx, dy))
