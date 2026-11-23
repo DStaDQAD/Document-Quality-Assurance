@@ -108,3 +108,16 @@ def test_the_polling_requests_do_not_fill_the_log():
         assert httpx_log.getEffectiveLevel() >= logging.WARNING
     finally:
         root.setLevel(saved[0]); httpx_log.setLevel(saved[1])
+
+
+def test_every_message_forbids_the_agent_to_search_the_web():
+    # 2026-11-23: with its positions missing, the agent answered a chart question from BPS, BI and
+    # news sites. The report is unpublished and the answer must come from the uploaded tables only.
+    m, sent = _model(["oke", '{"items": []}'])
+
+    asyncio.run(m.ainvoke("Cek M2."))
+    asyncio.run(m.with_structured_output(_Figures).ainvoke("Cek M2."))
+
+    for text in sent:
+        assert text.startswith(copilot_chat.NO_WEB)
+    assert "internet" in copilot_chat.NO_WEB and "HANYA" in copilot_chat.NO_WEB

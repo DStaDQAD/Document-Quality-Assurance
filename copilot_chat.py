@@ -30,6 +30,12 @@ DIRECTLINE_URL = "https://directline.botframework.com"
 _USER = {"id": "fact-checker", "name": "fact-checker"}
 # Several report chunks run at once; a handful of open agent conversations at a time.
 _CONCURRENCY = 4
+# The agent has web search on (2026-11-23: asked about a chart whose label positions were missing, it
+# answered from BPS, BI and news sites). Every message forbids it: the report is unpublished, so its
+# text must not become a search query, and an answer must come from what the message gives. The real
+# fix is switching web search off in the agent's settings; this holds until then, and after.
+NO_WEB = ("[ATURAN] Jangan mencari di internet dan jangan memakai sumber atau pengetahuan dari luar. "
+          "Jawab HANYA dari teks dan tabel di pesan ini.")
 _semaphores: dict = {}
 
 
@@ -113,7 +119,7 @@ class CopilotStudioChat(BaseChatModel):
 
     async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
                          run_manager=None, **kwargs: Any) -> ChatResult:
-        text = flatten(messages)
+        text = NO_WEB + "\n\n" + flatten(messages)
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):
             try:
