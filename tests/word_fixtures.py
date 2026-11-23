@@ -13,17 +13,21 @@ from xml.sax.saxutils import escape
 _EMR_HEADER, _EMR_EXTTEXTOUTW, _EMR_EOF = 1, 84, 14
 
 
-def emf_bytes(runs: List[Tuple[int, int, str]]) -> bytes:
-    """An EMF holding one EMR_EXTTEXTOUTW record per (x, y, text) run."""
+def emf_bytes(runs: List[Tuple[int, int, str]],
+              bounds: Optional[List[Tuple[int, int, int, int]]] = None) -> bytes:
+    """An EMF holding one EMR_EXTTEXTOUTW record per (x, y, text) run. `bounds`, one (left, top,
+    right, bottom) per run, fills each record's bounds as an Excel chart's EMF does; zeros otherwise."""
     header = bytearray(88)
     struct.pack_into("<II", header, 0, _EMR_HEADER, 88)
     header[40:44] = b" EMF"
     records = [bytes(header)]
-    for x, y, text in runs:
+    for i, (x, y, text) in enumerate(runs):
         encoded = text.encode("utf-16-le")
         encoded += b"\0" * (-len(encoded) % 4)
         record = bytearray(76)
         struct.pack_into("<II", record, 0, _EMR_EXTTEXTOUTW, 76 + len(encoded))
+        if bounds:
+            struct.pack_into("<iiii", record, 8, *bounds[i])
         struct.pack_into("<ii", record, 36, x, y)
         struct.pack_into("<II", record, 44, len(text), 76)
         records.append(bytes(record) + encoded)

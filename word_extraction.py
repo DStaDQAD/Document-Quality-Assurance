@@ -78,6 +78,35 @@ def emf_text_runs(data: bytes) -> List[EmfText]:
     return runs
 
 
+def emf_text_boxes(data: bytes) -> List[EmfText]:
+    """Every EMR_EXTTEXTOUTW record's text at the centre of its bounds, in file order. An Excel
+    chart's EMF leaves every reference point at 0,0 and places its texts by the bounds alone; a
+    record whose bounds are all zero keeps its reference point (as emf_text_runs reads it)."""
+    if (len(data) < 44 or struct.unpack_from("<I", data, 0)[0] != _EMR_HEADER
+            or data[40:44] != _EMF_SIGNATURE):
+        return []
+    boxes: List[EmfText] = []
+    offset = 0
+    while offset + 8 <= len(data):
+        record_type, size = struct.unpack_from("<II", data, offset)
+        if size < 8 or offset + size > len(data):
+            break
+        if record_type == _EMR_EXTTEXTOUTW and size >= _EXTTEXTOUT_FIXED_BYTES:
+            left, top, right, bottom = struct.unpack_from("<iiii", data, offset + 8)
+            x, y = struct.unpack_from("<ii", data, offset + 36)
+            if (left, top, right, bottom) != (0, 0, 0, 0):
+                x, y = (left + right) // 2, (top + bottom) // 2
+            n_chars, off_string = struct.unpack_from("<II", data, offset + 44)
+            start = offset + off_string
+            end = start + 2 * n_chars
+            if end <= offset + size:
+                text = data[start:end].decode("utf-16-le", "replace").strip()
+                if text:
+                    boxes.append(EmfText(x, y, text))
+        offset += size
+    return boxes
+
+
 def _is_number(text: str) -> bool:
     return bool(_NUM_CELL_RE.match(text))
 
