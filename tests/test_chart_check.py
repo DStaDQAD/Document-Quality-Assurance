@@ -82,3 +82,64 @@ def test_a_box_outside_the_page_is_clamped_and_a_sliver_dropped():
     [chart] = asyncio.run(locate_charts(ScannedPage(1, _png(200, 400)), _Model(reply)))
 
     assert chart.caption == "Grafik 1" and Image.open(io.BytesIO(chart.png)).size == (200, 200)
+
+
+# --- reading a chart ----------------------------------------------------------------------------
+
+from chart_check import ChartLabel, ChartRead, SeriesRef, read_chart
+from chart_images import ChartImage
+from excel_parser_bi import BITableData
+from paired_verifier import _ExcelSource
+from strict.tables import build_views
+from word_extraction import EmfText
+
+
+def _views():
+    sbt = BITableData(title="T1 Kegiatan Usaha", unit="% Saldo Bersih Tertimbang - SBT", row_labels=["TOTAL", "Pertanian"])
+    sbt._data.update({("TOTAL", 2026, "Q2"): 12.97, ("TOTAL", 2026, "Q3"): 11.46, ("TOTAL", 2025, "Q3"): 11.55,
+                      ("Pertanian", 2026, "Q2"): 8.1})
+    gas = BITableData(title="Neraca Pembayaran", unit="Juta USD", row_labels=["Gas > Ekspor"])
+    gas._data.update({("Gas > Ekspor", 2026, "Q3"): 1661.83})
+    return build_views([_ExcelSource(table=sbt, filename="skdu.xlsx", sheet="T1"),
+                        _ExcelSource(table=gas, filename="npi.xlsx", sheet="Id")])
+
+
+_READ_REPLY = ('```json\n{"title": "Kegiatan Usaha", "unit": "%", "last_period": "Q3 2026",'
+               ' "series": [{"name": "SBT Kegiatan Usaha", "table": "S1", "row": "TOTAL"},'
+               ' {"name": "Pertumbuhan PDB", "table": null, "row": null}],'
+               ' "labels": [{"text": "12,97", "series": "SBT Kegiatan Usaha", "period": "Q2 2026"}]}\n```')
+
+
+def test_a_chart_read_names_each_series_row_and_each_label():
+    chart = ChartImage("Grafik 1", "Kegiatan Usaha", None, _png())
+
+    read = asyncio.run(read_chart(chart, _views(), _Model(_READ_REPLY)))
+
+    assert read.series == [SeriesRef(name="SBT Kegiatan Usaha", table="S1", row="TOTAL"),
+                           SeriesRef(name="Pertumbuhan PDB", table=None, row=None)]
+    assert read.labels == [ChartLabel(text="12,97", series="SBT Kegiatan Usaha", period="Q2 2026")]
+    assert (read.unit, read.last_period) == ("%", "Q3 2026")
+
+
+def test_the_prompt_shows_the_tables_rows_never_their_values():
+    model = _Model(_READ_REPLY)
+
+    asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), model))
+
+    prompt = model.messages[0][0].content[0]["text"]
+    assert "[S1:" in prompt and "- TOTAL" in prompt and "[S2:" in prompt
+    assert "12.97" not in prompt and "1661" not in prompt
+
+
+def test_an_emf_chart_sends_its_texts_to_copy_labels_from():
+    model = _Model(_READ_REPLY)
+    chart = ChartImage("Grafik 1", "", None, _png(), emf_boxes=[EmfText(2899, 481, "12,97")])
+
+    asyncio.run(read_chart(chart, _views(), model))
+
+    assert "x=2899 y=481 teks='12,97'" in model.messages[0][0].content[0]["text"]
+
+
+def test_a_reply_that_is_not_json_is_unreadable():
+    with pytest.raises(ChartUnreadable):
+        asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), _Model("Grafik ini menunjukkan ...")))
