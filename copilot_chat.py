@@ -15,7 +15,7 @@ import json
 import logging
 import re
 import time
-from typing import Any, List, Optional
+from typing import Any, List, Optional, Tuple
 
 import httpx
 from langchain_core.language_models import BaseChatModel
@@ -82,23 +82,36 @@ class CopilotStudioChat(BaseChatModel):
     base_url: str = DIRECTLINE_URL
     timeout_s: float = 240.0
     max_attempts: int = 3
+    transport: Any = None              # an httpx transport, for tests
 
     @property
     def _llm_type(self) -> str:
         return "copilot-studio"
 
-    async def _send(self, text: str) -> str:
-        """One message in a new conversation; the agent's reply texts joined ('' when none came)."""
+    async def _send(self, text: str, attachment: Optional[Tuple[str, bytes, str]] = None) -> str:
+        """One message in a new conversation; the agent's reply texts joined ('' when none came).
+        An attachment (name, bytes, mime) goes with the message through Direct Line's upload
+        endpoint: the only way the agent sees a picture (a data-URI attachment is refused with
+        InvalidUriContent, probe 2026-11-23)."""
         base = self.base_url.rstrip("/") + "/v3/directline"
         async with _semaphore():
-            async with httpx.AsyncClient(timeout=60.0, headers={"Authorization": f"Bearer {self.secret}"}) as c:
+            async with httpx.AsyncClient(timeout=60.0, transport=self.transport,
+                                         headers={"Authorization": f"Bearer {self.secret}"}) as c:
                 conv = (await c.post(f"{base}/conversations")).raise_for_status().json()
                 cid = conv["conversationId"]
                 if conv.get("token"):
                     c.headers["Authorization"] = f"Bearer {conv['token']}"
-                sent = (await c.post(f"{base}/conversations/{cid}/activities",
-                                     json={"type": "message", "from": _USER, "text": text, "locale": "id-ID"})
-                        ).raise_for_status().json()
+                activity = {"type": "message", "from": _USER, "text": text, "locale": "id-ID"}
+                if attachment is None:
+                    sent = (await c.post(f"{base}/conversations/{cid}/activities", json=activity)
+                            ).raise_for_status().json()
+                else:
+                    name, data, mime = attachment
+                    sent = (await c.post(f"{base}/conversations/{cid}/upload", params={"userId": _USER["id"]},
+                                         files={"file": (name, data, mime),
+                                                "activity": ("blob", json.dumps(activity),
+                                                             "application/vnd.microsoft.activity")})
+                            ).raise_for_status().json()
                 t0, watermark, replies = time.monotonic(), None, []
                 while time.monotonic() - t0 < self.timeout_s:
                     await asyncio.sleep(1.5)
@@ -107,7 +120,10 @@ class CopilotStudioChat(BaseChatModel):
                     watermark = got.get("watermark", watermark)
                     done = False
                     for a in got.get("activities", []):
-                        if a.get("from", {}).get("id") == _USER["id"] or a.get("replyToId") != sent["id"]:
+                        if a.get("from", {}).get("id") == _USER["id"]:
+                            continue
+                        # A reply to an upload may come without replyToId (probe 2026-11-23).
+                        if a.get("replyToId") != sent.get("id") and not (attachment and a.get("replyToId") is None):
                             continue
                         if a.get("type") == "message" and a.get("text"):
                             replies.append(a["text"])
@@ -117,21 +133,30 @@ class CopilotStudioChat(BaseChatModel):
                         break
                 return "\n".join(replies)
 
-    async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
-                         run_manager=None, **kwargs: Any) -> ChatResult:
-        text = NO_WEB + "\n\n" + flatten(messages)
+    async def _ask(self, text: str, attachment: Optional[Tuple[str, bytes, str]] = None) -> str:
+        """`NO_WEB` and the text, retried while the agent is silent or Direct Line errs."""
+        text = NO_WEB + "\n\n" + text
         last_error: Optional[Exception] = None
         for attempt in range(self.max_attempts):
             try:
-                reply = await self._send(text)
+                reply = await self._send(text, attachment) if attachment else await self._send(text)
                 if reply.strip():
-                    return ChatResult(generations=[ChatGeneration(message=AIMessage(content=reply))])
+                    return reply
                 last_error = CopilotNoReply(f"no reply to a {len(text)}-character message")
             except httpx.HTTPError as e:  # throttling or a transient Direct Line error
                 last_error = e
             if attempt + 1 < self.max_attempts:
                 await asyncio.sleep(5 * (attempt + 1))
         raise last_error if isinstance(last_error, CopilotNoReply) else CopilotNoReply(str(last_error))
+
+    async def ainvoke_with_image(self, text: str, image: bytes, mime: str) -> str:
+        """The agent's answer to `text` about the picture `image`."""
+        return await self._ask(text, ("chart." + mime.split("/")[-1], image, mime))
+
+    async def _agenerate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
+                         run_manager=None, **kwargs: Any) -> ChatResult:
+        reply = await self._ask(flatten(messages))
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=reply))])
 
     def _generate(self, messages: List[BaseMessage], stop: Optional[List[str]] = None,
                   run_manager=None, **kwargs: Any) -> ChatResult:

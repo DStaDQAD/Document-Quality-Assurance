@@ -121,3 +121,36 @@ def test_every_message_forbids_the_agent_to_search_the_web():
     for text in sent:
         assert text.startswith(copilot_chat.NO_WEB)
     assert "internet" in copilot_chat.NO_WEB and "HANYA" in copilot_chat.NO_WEB
+
+
+def test_an_image_goes_through_the_upload_endpoint_with_the_rule_first(monkeypatch):
+    import json as _json
+
+    import httpx
+
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/conversations"):
+            return httpx.Response(200, json={"conversationId": "c1", "token": "t"})
+        if path.endswith("/upload"):
+            seen["query"] = dict(request.url.params)
+            seen["body"] = request.read()
+            return httpx.Response(200, json={"id": "a1"})
+        return httpx.Response(200, json={"watermark": "1", "activities": [
+            {"type": "message", "from": {"id": "bot"}, "replyToId": "a1", "text": "oke"},
+            {"type": "event", "name": "turn.complete", "from": {"id": "bot"}, "replyToId": "a1"}]})
+
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(copilot_chat.asyncio, "sleep", lambda s: real_sleep(0))
+    m = copilot_chat.CopilotStudioChat(secret="s", transport=httpx.MockTransport(handler))
+
+    reply = asyncio.run(m.ainvoke_with_image("Baca grafik ini.", b"\x89PNGdata", "image/png"))
+
+    assert reply == "oke"
+    assert seen["query"]["userId"] == "fact-checker"
+    assert b"\x89PNGdata" in seen["body"]
+    activity = seen["body"].split(b"application/vnd.microsoft.activity")[1]
+    text = _json.loads(activity[activity.index(b"{"):activity.rindex(b"}") + 1])["text"]
+    assert text.startswith(copilot_chat.NO_WEB) and text.endswith("Baca grafik ini.")
