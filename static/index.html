@@ -930,6 +930,7 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 .chart-drawing { font-size: 12px; margin-top: 6px; line-height: 1.5; }
 .chart-drawing.warn { padding: 4px 8px; border-radius: 6px; background: var(--amber-100); color: var(--amber-700); }
 .chart-unchecked { font-size: 11px; margin-top: 4px; }
+.typo-chip.chip-warn { background: var(--amber-100); color: var(--amber-700); }
 .chart-issues { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .chart-issue { border: 1px solid var(--border, #E2E8F0); border-radius: 8px; padding: 8px 10px; background: white; }
 .chart-issue-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
@@ -2588,11 +2589,15 @@ body.auth-locked .app {
   // a tie toward the worse one); only the labels that did not match are listed, the rest counted.
   function renderChartSection(chartChecks, unreadPages) {
     const n = (v) => chartChecks.filter((c) => c.verdict === v).length;
+    // A card keeps its labels' verdict; a drawing judged "perlu dicek" is counted up here so it is not
+    // missed under a green card.
+    const drawingsOff = chartChecks.filter((c) => c.drawing === "perlu dicek").length;
     const chips = `<div class="typo-stat-chips">
       <span class="typo-chip">${chartChecks.length} grafik</span>
       <span class="typo-chip">Sesuai: ${n("Entailed")}</span>
       <span class="typo-chip">Tidak Sesuai: ${n("Refuted")}</span>
       <span class="typo-chip">Tidak Cukup Data: ${n("Inconclusive")}</span>
+      ${drawingsOff ? `<span class="typo-chip chip-warn">Gambar perlu dicek: ${drawingsOff}</span>` : ""}
     </div>`;
     const unread = unreadPages.length ? `<div class="conflict-strip gap-strip">
       <span class="material-symbols-outlined">warning</span>
@@ -2658,6 +2663,8 @@ body.auth-locked .app {
                 ${c.drawing ? `<div class="chart-drawing ${c.drawing === "masuk akal" ? "ok" : "warn"}">
                   <span class="fact-val-label">Gambar:</span> ${escapeHtml(c.drawing)}${c.drawing === "perlu dicek" && c.drawing_note
                     ? ` — ${escapeHtml(c.drawing_note)}` : ""}</div>` : ""}
+                ${(c.series_rows || []).length ? `<div class="chart-unchecked muted-text">Dibandingkan dengan:
+                  ${escapeHtml(c.series_rows.join("; "))}</div>` : ""}
                 ${(c.unchecked_series || []).length ? `<div class="chart-unchecked muted-text">Tidak bisa dicek (tidak ada di
                   tabel yang diunggah): ${escapeHtml(c.unchecked_series.join(", "))}</div>` : ""}
                 ${issues ? `<ul class="chart-issues">${issues}</ul>` : ""}
