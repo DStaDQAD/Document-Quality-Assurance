@@ -26,6 +26,10 @@ logger = logging.getLogger("fact-checker")
 _CAPTION = re.compile(r"^\s*(Grafik\s*\d+)\s*[.:]?\s*(.*)$", re.IGNORECASE)
 _MIMES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 _MAX_PX = 1600
+# A PDF page is rendered twice as sharp: the model gets it scaled down to _MAX_PX to locate its
+# charts (chart_vision.ask_chart), and each chart is cropped out of this sharp page. At 1600 px the
+# eight small charts of SPE Agustus 2026 page 6 had ~500 px each and "3,7" was read as "3".
+_PAGE_PX = 3200
 _SCANNED_BELOW_CHARS = 20          # a page whose text layer holds fewer characters is a picture
 _TITLE_LINES = 2                    # title lines under a chart caption, at most
 _TITLE_CHARS = 150                 # a longer line is prose, not a title
@@ -170,7 +174,7 @@ def _render_page(pdf: bytes, page_number: int) -> bytes:
     try:
         page = document[page_number - 1]
         width, height = page.get_size()
-        image = page.render(scale=_MAX_PX / max(width, height)).to_pil().convert("RGB")
+        image = page.render(scale=_PAGE_PX / max(width, height)).to_pil().convert("RGB")
         out = io.BytesIO()
         image.save(out, format="PNG", optimize=True)
         return out.getvalue()

@@ -92,8 +92,11 @@ Tugas:
 2. series: setiap seri di legenda. name disalin persis dari legenda; bila grafik tidak punya legenda (satu
    seri), name = apa yang diukur grafik menurut judul atau sumbunya. table dan row: kode tabel dan nama baris
    yang disalin PERSIS dari TABLES dan memuat data seri itu; null bila tidak ada tabel yang memuatnya. Jangan
-   memilih baris yang hanya mirip. growth: true bila grafik menggambar pertumbuhan (% yoy) sedangkan baris
-   itu berisi level (nilai, bukan persen pertumbuhan); program yang menghitung pertumbuhannya.
+   memilih baris yang hanya mirip. Bila seri grafik adalah pertumbuhan (% yoy, % qtq, % mtm) dan TABLES sudah
+   punya baris pertumbuhan itu (mis. di bawah 'TAHUNAN (YOY)', 'TRIWULANAN (QTQ)', 'Pertumbuhan (%, yoy)', atau
+   tabel berjudul pertumbuhan), pilih baris itu dan jangan hitung dari level: growth = false. growth: true
+   HANYA bila tabel tidak punya baris pertumbuhannya dan baris yang ada berisi level (nilai, bukan persen
+   pertumbuhan); program yang menghitung pertumbuhannya.
 3. labels: setiap angka data yang TERCETAK pada grafik (bukan angka sumbu): text persis seperti tercetak,
    series = name seri pemiliknya (sama persis dengan salah satu name di series), period = periodenya
    ditulis seperti TABLES menulis periode.
@@ -307,6 +310,104 @@ def label_results(read: ChartRead, views: List[TableView], caption: str) -> List
     return out
 
 
+# --- a label that does not fit, read once more --------------------------------------------------------
+
+REREAD_PROMPT = """Terlampir lagi gambar grafik dari laporan statistik Bank Indonesia ({caption}{title}).
+Jika kamu tidak menerima atau tidak bisa melihat gambar, jawab persis '{no_image}'.
+
+Baca ulang dengan teliti HANYA label angka berikut: {labels}
+Untuk setiap label: seri pemiliknya adalah garis atau batang tempat label itu menempel; cocokkan WARNA
+angka label dengan warna seri di legenda, dan posisinya pada garis atau batang. Periodenya adalah titik
+pada sumbu tepat di bawah label (hitung titik sumbu satu per satu bila labelnya rapat).
+Seri yang ada (salin nama persis): {series}
+Tulis period seperti contoh: {example}
+
+Jawab HANYA JSON:
+{{"labels": [{{"text": "...", "series": "...", "period": "..."}}]}}"""
+
+_MONTH_ORDER = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+class _Reread(BaseModel):
+    labels: List[ChartLabel] = []
+
+
+def _next_to(period: str) -> List[str]:
+    """The periods just before and after `period` ("Jul 2025" → "Jun 2025", "Aug 2025")."""
+    key = parse_period(period)
+    if key is None:
+        return []
+    year, token = key
+    if token in _MONTH_ORDER:
+        i = _MONTH_ORDER.index(token)
+        around = [(year - (i == 0), _MONTH_ORDER[i - 1]), (year + (i == 11), _MONTH_ORDER[(i + 1) % 12])]
+    elif token in ("Q1", "Q2", "Q3", "Q4"):
+        q = int(token[1])
+        around = [(year - (q == 1), f"Q{4 if q == 1 else q - 1}"), (year + (q == 4), f"Q{1 if q == 4 else q + 1}")]
+    elif token == ANNUAL:
+        around = [(year - 1, ANNUAL), (year + 1, ANNUAL)]
+    else:
+        return []
+    return [period_header(y, t) for y, t in around]
+
+
+def _fits_elsewhere(label: ChartLabel, read: ChartRead, by_code: Dict[str, TableView], views: List[TableView],
+                    caption: str) -> bool:
+    """The label's number is exactly in the tables for another series of the chart at its period, or
+    for its own series a period before or after: the model likely put it on the wrong line or point."""
+    candidates = [ChartLabel(text=label.text, series=s.name, period=label.period)
+                  for s in read.series if _fold(s.name) != _fold(label.series)]
+    candidates += [ChartLabel(text=label.text, series=label.series, period=p) for p in _next_to(label.period)]
+    return any(evaluate_claim(_claim(c, read, by_code, caption), views).verdict == "Entailed" for c in candidates)
+
+
+async def reread_labels(chart: ChartImage, read: ChartRead, labels: List[ChartLabel],
+                        llm: BaseChatModel) -> List[ChartLabel]:
+    """The model reads `labels` once more on the picture: which series (by colour) and period each is."""
+    prompt = REREAD_PROMPT.format(
+        caption=chart.caption, title=f": {chart.title}" if chart.title else "", no_image=NO_IMAGE,
+        labels="; ".join(label.text for label in labels),
+        series="; ".join(s.name for s in read.series),
+        example=", ".join(dict.fromkeys(label.period for label in labels)))
+    reply = await ask_chart(llm, prompt, chart.png, chart.mime)
+    try:
+        return _Reread.model_validate_json(extract_json(reply)).labels
+    except (ValidationError, ValueError) as e:
+        raise ChartUnreadable(f"{chart.caption}: bacaan ulang bukan JSON ({e.__class__.__name__})")
+
+
+async def _recheck(chart: ChartImage, read: ChartRead, results: List[FactVerificationResult],
+                   views: List[TableView], llm: BaseChatModel) -> List[FactVerificationResult]:
+    """Labels that came back Tidak Sesuai although their number is in the tables next to where the model
+    put them are read once more. The second reading decides: Sesuai when it fits, else Tidak Sesuai."""
+    by_code = {v.code: v for v in views}
+    suspects = [i for i, (label, result) in enumerate(zip(read.labels, results))
+                if result.verdict == "Refuted" and _fits_elsewhere(label, read, by_code, views, chart.caption)]
+    if not suspects:
+        return results
+    try:
+        again = await reread_labels(chart, read, [read.labels[i] for i in suspects], llm)
+    except Exception as e:                          # the first verdicts stand
+        logger.warning("%s: bacaan ulang label gagal (%s)", chart.caption, e)
+        return results
+    out = list(results)
+    for i in suspects:
+        first = read.labels[i]
+        second = next((label for label in again if parse_label(label.text) == parse_label(first.text)), None)
+        if second is None:
+            continue
+        where = (f"Dicek ulang: AI semula membaca label {first.text} di {first.series} {first.period}; "
+                 f"bacaan ulang: {second.series} {second.period}.")
+        result = evaluate_claim(_claim(second, read, by_code, chart.caption), views)
+        if result.verdict == "Entailed":
+            out[i] = result.model_copy(update={"checked_item": "chart",
+                                               "reasoning": f"{where} {result.reasoning or ''}".strip()})
+        else:
+            out[i] = results[i].model_copy(update={
+                "reasoning": f"{results[i].reasoning or ''} | {where} Tetap tidak cocok.".strip(" |")})
+    return out
+
+
 # --- one card per chart ------------------------------------------------------------------------------
 
 _SEVERITY = {"Entailed": 0, "Inconclusive": 1, "Refuted": 2}
@@ -320,7 +421,7 @@ def _thumbnail(png: bytes) -> Optional[str]:
 
 async def _card(chart: ChartImage, views: List[TableView], llm: BaseChatModel) -> ChartCheck:
     read = await read_chart(chart, views, llm)
-    results = label_results(read, views, chart.caption)
+    results = await _recheck(chart, read, label_results(read, views, chart.caption), views, llm)
     data = series_data(read, views)
     try:
         judged = await judge_drawing(chart, data, llm)

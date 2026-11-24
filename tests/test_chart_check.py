@@ -430,3 +430,100 @@ def test_at_most_four_charts_are_read_at_once_whatever_the_model(monkeypatch):
     asyncio.run(check_charts(charts, [], _views(), object()))
 
     assert running["most"] == 4
+
+
+# --- a label that does not fit, read once more (2026-11-24) -----------------------------------------
+
+def _two_series_read(labels):
+    return ChartRead(unit="%", series=[SeriesRef(name="SBT", table="S1", row="TOTAL"),
+                                       SeriesRef(name="Tani", table="S1", row="Pertanian")],
+                     labels=[ChartLabel(text=t, series=s, period=p) for t, s, p in labels])
+
+
+def _reread_steps(monkeypatch, read, reread=None):
+    calls = []
+
+    async def read_chart(chart, views, llm):
+        return read
+
+    async def judge(chart, data, llm):
+        return None
+
+    async def again(chart, read_, labels, llm):
+        calls.append([l.text for l in labels])
+        if isinstance(reread, Exception):
+            raise reread
+        return reread or []
+
+    monkeypatch.setattr(chart_check, "read_chart", read_chart)
+    monkeypatch.setattr(chart_check, "judge_drawing", judge)
+    monkeypatch.setattr(chart_check, "reread_labels", again)
+    return calls
+
+
+def test_a_label_on_the_wrong_series_is_read_again_and_sesuai_when_the_second_reading_fits(monkeypatch):
+    # SK Sep 2026 Grafik 11: the model put IEKLK's pink 123,1 on IEKU's grey line.
+    calls = _reread_steps(monkeypatch, _two_series_read([("8,1", "SBT", "Q2 2026")]),
+                          [ChartLabel(text="8,1", series="Tani", period="Q2 2026")])
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 11", "", None, _png())], [], _views(), object()))
+
+    assert calls == [["8,1"]]
+    assert (card.entailed_count, card.refuted_count) == (1, 0) and card.verdict == "Entailed"
+
+
+def test_a_label_one_period_off_is_read_again(monkeypatch):
+    # SPE Agu 2026 Grafik 10: 11,7 belongs to Aug 2025; the model read Jul 2025.
+    calls = _reread_steps(monkeypatch, _two_series_read([("11,46", "SBT", "Q2 2026")]),
+                          [ChartLabel(text="11,46", series="SBT", period="Q3 2026")])
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 10", "", None, _png())], [], _views(), object()))
+
+    assert calls == [["11,46"]] and card.verdict == "Entailed"
+
+
+def test_a_second_reading_that_still_does_not_fit_stays_tidak_sesuai(monkeypatch):
+    _reread_steps(monkeypatch, _two_series_read([("8,1", "SBT", "Q2 2026")]),
+                  [ChartLabel(text="8,1", series="SBT", period="Q2 2026")])
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 11", "", None, _png())], [], _views(), object()))
+
+    assert card.refuted_count == 1 and card.verdict == "Refuted"
+    assert "dicek ulang" in card.issues[0].reasoning.lower()
+
+
+def test_a_label_whose_number_is_nowhere_in_the_chart_is_not_read_again(monkeypatch):
+    calls = _reread_steps(monkeypatch, _two_series_read([("99,9", "SBT", "Q2 2026")]))
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 1", "", None, _png())], [], _views(), object()))
+
+    assert calls == [] and card.refuted_count == 1
+
+
+def test_a_second_reading_that_fails_keeps_the_first_verdict(monkeypatch):
+    _reread_steps(monkeypatch, _two_series_read([("8,1", "SBT", "Q2 2026")]), ChartUnreadable("timeout"))
+
+    [card], unread = asyncio.run(check_charts([ChartImage("Grafik 11", "", None, _png())], [], _views(), object()))
+
+    assert card.refuted_count == 1 and unread == []
+
+
+def test_the_second_reading_asks_only_about_the_labels_and_their_colours():
+    from chart_check import reread_labels
+    model = _Model('{"labels": [{"text": "8,1", "series": "Tani", "period": "Q2 2026"}]}')
+    read = _two_series_read([("8,1", "SBT", "Q2 2026")])
+
+    labels = asyncio.run(reread_labels(ChartImage("Grafik 11", "IEK", None, _png()), read, read.labels, model))
+
+    assert [(l.text, l.series, l.period) for l in labels] == [("8,1", "Tani", "Q2 2026")]
+    prompt = model.messages[0][0].content[0]["text"]
+    assert "8,1" in prompt and "warna" in prompt.lower() and "SBT" in prompt and "Tani" in prompt
+
+
+def test_the_prompt_prefers_a_growth_row_the_tables_already_have():
+    model = _Model(_READ_REPLY)
+
+    asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), model))
+
+    prompt = model.messages[0][0].content[0]["text"]
+    assert "TAHUNAN (YOY)" in prompt and "jangan hitung" in prompt.lower()

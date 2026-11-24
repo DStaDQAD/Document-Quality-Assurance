@@ -261,3 +261,36 @@ def test_a_caption_under_its_picture_has_one_title_line_and_not_the_heading_afte
                      {"image1.png": _png()})
 
     assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 2", "Transaksi Berjalan")]
+
+
+def test_a_pdf_page_is_rendered_sharp_enough_for_its_small_charts(monkeypatch):
+    # SPE Agustus 2026 page 6: eight charts on one page; at 1600 px a page gave each ~500 px and the
+    # model read "3,7" as "3". The page is rendered at 3200 px; the model gets it scaled to 1600 to
+    # locate the charts, and each chart is cropped out of the sharp page.
+    import pypdfium2
+
+    scales = []
+
+    class _Page:
+        def get_size(self):
+            return 595.0, 842.0
+
+        def render(self, scale):
+            scales.append(scale)
+            return Mock(to_pil=lambda: Image.new("RGB", (round(595 * scale), round(842 * scale))))
+
+    class _Doc:
+        def __init__(self, data):
+            pass
+
+        def __getitem__(self, i):
+            return _Page()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", _Doc)
+
+    png = chart_images._render_page(b"%PDF", 1)
+
+    assert max(Image.open(io.BytesIO(png)).size) == 3200
