@@ -377,3 +377,56 @@ def test_a_card_names_the_table_row_each_series_was_compared_with(monkeypatch):
 
     assert card.series_rows == ["y.o.y: TOTAL (skdu.xlsx, sheet T1)",
                                 "M2: Pertanian (skdu.xlsx, sheet T1), pertumbuhan yoy dihitung dari level"]
+
+
+# --- small findings of the final review (2026-11-24) -----------------------------------------------
+
+def test_a_label_finds_its_series_whatever_the_spacing_and_case():
+    read = _read([("12,97", "sbt ", "Q2 2026")])
+
+    [result] = label_results(read, _views(), "Grafik 1")
+
+    assert result.verdict == "Entailed"
+
+
+def test_the_caption_number_does_not_decide_a_labels_decimals():
+    # "Grafik 2 … = 2,0": the "2" of the caption is not how the label is printed.
+    t = BITableData(title="T", unit="%", row_labels=["TOTAL"])
+    t._data.update({("TOTAL", 2026, "Q2"): 2.05})
+    views = build_views([_ExcelSource(table=t, filename="skdu.xlsx", sheet="T1")])
+    read = ChartRead(unit="%", series=[SeriesRef(name="SBT", table="S1", row="TOTAL")],
+                     labels=[ChartLabel(text="2,0", series="SBT", period="Q2 2026")])
+
+    [result] = label_results(read, views, "Grafik 2")
+
+    assert result.verdict == "Refuted"                  # 2,05 shows as 2,1 at one decimal; a 0,05 tolerance let it by
+    assert "1 desimal" in result.reasoning
+
+
+def test_a_label_the_model_sends_as_a_number_keeps_its_decimals():
+    label = ChartLabel.model_validate({"text": 1.287, "series": "SBT", "period": "Q2 2026"})
+
+    assert label.text == "1,287" and parse_label(label.text) == 1.287
+
+
+def test_a_table_code_sent_as_a_number_is_read_as_its_code():
+    assert SeriesRef.model_validate({"name": "SBT", "table": 1, "row": "TOTAL"}).table == "S1"
+    assert SeriesRef.model_validate({"name": "SBT", "table": "s2", "row": "TOTAL"}).table == "s2"
+
+
+def test_at_most_four_charts_are_read_at_once_whatever_the_model(monkeypatch):
+    running = {"now": 0, "most": 0}
+
+    async def card(chart, views, llm):
+        running["now"] += 1
+        running["most"] = max(running["most"], running["now"])
+        await asyncio.sleep(0.01)
+        running["now"] -= 1
+        return None
+
+    monkeypatch.setattr(chart_check, "_card", card)
+    charts = [ChartImage(f"Grafik {i}", "", None, _png()) for i in range(10)]
+
+    asyncio.run(check_charts(charts, [], _views(), object()))
+
+    assert running["most"] == 4

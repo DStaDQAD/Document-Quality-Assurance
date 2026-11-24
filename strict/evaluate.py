@@ -206,7 +206,7 @@ def _derived(claim: Claim, computed: float) -> Tuple[float, float, str, str]:
     falls back to MATCH_TOLERANCE."""
     claimed = _claimed(claim)
     delta, verdict = _numeric_verdict(claimed, round(computed, 4))
-    decimals = _printed_decimals(claimed, claim.context_quote)
+    decimals = _printed_decimals(claimed, claim.printed or claim.context_quote)
     if decimals is None:
         return round(computed, 4), delta, verdict, f"Δ = {delta} (toleransi {MATCH_TOLERANCE})"
     if decimals == 0:
@@ -290,7 +290,7 @@ def _judge(claim: Claim, read: List[Read]) -> Tuple[Optional[float], Optional[fl
             raise _Undecided("klaim_tidak_lengkap", "Klaim nilai harus menyebut tepat satu sel.")
         cell_value = abs(read[0][2]) if claim.size_of_negative else read[0][2]
         computed = cell_value / _factor(claim, unit)
-        delta, verdict, tail = _value_verdict(_claimed(claim), computed, claim.context_quote)
+        delta, verdict, tail = _value_verdict(_claimed(claim), computed, claim.printed or claim.context_quote)
         return round(computed, 4), delta, verdict, tail
     if op in ("diff", "yoy_growth"):
         read = _ordered(read)

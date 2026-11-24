@@ -85,6 +85,9 @@ class Claim:
     size_of_negative: bool = False
     not_in_tables: bool = False
     reason: Optional[str] = None
+    # The number exactly as printed, when the quote holds other numbers (a chart label's quote
+    # "Grafik 2: … = 2,0"): the printed decimals are read from it instead of from the quote.
+    printed: Optional[str] = None
 
 
 def claim_to_dict(claim: Claim) -> dict:

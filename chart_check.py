@@ -22,7 +22,7 @@ from copilot_chat import extract_json
 from schemas import ChartCheck, FactVerificationResult
 from strict.claims import Cell, Claim
 from strict.evaluate import evaluate_claim
-from strict.tables import ANNUAL, TableView, find_column, find_row, parse_period, period_header, table_block
+from strict.tables import ANNUAL, TableView, _fold, find_column, find_row, parse_period, period_header, table_block
 
 logger = logging.getLogger("fact-checker")
 
@@ -40,6 +40,12 @@ class SeriesRef(BaseModel):
 
     _name = field_validator("name", mode="before")(_text_or_empty)
 
+    @field_validator("table", mode="before")
+    @classmethod
+    def _table(cls, value):
+        # A code the model wrote as a number (1) is the code it stands for ("S1").
+        return f"S{value}" if isinstance(value, int) and not isinstance(value, bool) else value
+
     @field_validator("growth", mode="before")
     @classmethod
     def _growth(cls, value):
@@ -52,7 +58,16 @@ class ChartLabel(BaseModel):
     series: str = ""                  # a SeriesRef.name
     period: str = ""                  # as the tables write it: "Q2 2026", "Jun 2026", "Tahun 2025"
 
-    _strings = field_validator("text", "series", "period", mode="before")(_text_or_empty)
+    _strings = field_validator("series", "period", mode="before")(_text_or_empty)
+
+    @field_validator("text", mode="before")
+    @classmethod
+    def _text(cls, value):
+        # A label the model sent as a JSON number (1.287) is a decimal point, not thousands: written
+        # back the way the report prints it ("1,287") so parse_label and the decimals read it right.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return repr(value).replace(".", ",")
+        return _text_or_empty(value)
 
 
 class ChartRead(BaseModel):
@@ -151,9 +166,10 @@ def parse_label(text: str) -> Optional[float]:
 
 def _claim(label: ChartLabel, read: ChartRead, views: Dict[str, TableView], caption: str) -> Claim:
     quote = f"{caption}: {label.series} {label.period} = {label.text}"
-    base = dict(operation="value", subject=label.series, context_quote=quote,
+    # The label alone says how it is printed: "Grafik 2 … = 2,0" must not read the caption's "2".
+    base = dict(operation="value", subject=label.series, context_quote=quote, printed=label.text,
                 claimed_value=parse_label(label.text), unit=read.unit)
-    ref = next((s for s in read.series if s.name == label.series), None)
+    ref = next((s for s in read.series if _fold(s.name) == _fold(label.series)), None)
     if ref is None or not ref.table or not ref.row:
         return Claim(cells=[], not_in_tables=True, reason="seri grafik ini tidak ada di tabel yang diunggah", **base)
     view = views.get(ref.table.strip().upper())
@@ -294,6 +310,7 @@ def label_results(read: ChartRead, views: List[TableView], caption: str) -> List
 # --- one card per chart ------------------------------------------------------------------------------
 
 _SEVERITY = {"Entailed": 0, "Inconclusive": 1, "Refuted": 2}
+MAX_AT_ONCE = 4                       # charts (or PDF pages) with the model at once
 
 
 def _thumbnail(png: bytes) -> Optional[str]:
@@ -331,9 +348,17 @@ async def check_charts(charts: List[ChartImage], scanned: List[ScannedPage], vie
                        llm: BaseChatModel,
                        on_progress: Optional[Callable[[int, int], None]] = None) -> Tuple[List[ChartCheck], List[str]]:
     """One card per chart (scanned pages located first), and the charts that could not be read.
-    A chart's failure never stops the others; the model client caps how many run at once."""
+    A chart's failure never stops the others; at most MAX_AT_ONCE are with the model at once."""
     unread: List[str] = []
-    located = await asyncio.gather(*(locate_charts(page, llm) for page in scanned), return_exceptions=True)
+    # At most MAX_AT_ONCE model calls at once for any model (Copilot's client caps itself too): a
+    # report with 30 charts sent to Gemini at once runs into the API's rate limit.
+    gate = asyncio.Semaphore(MAX_AT_ONCE)
+
+    async def locate(page: ScannedPage):
+        async with gate:
+            return await locate_charts(page, llm)
+
+    located = await asyncio.gather(*(locate(page) for page in scanned), return_exceptions=True)
     for page, found in zip(scanned, located):
         if isinstance(found, BaseException):
             logger.warning("Halaman %d: letak grafik tidak terbaca (%s)", page.page_number, found)
@@ -345,7 +370,8 @@ async def check_charts(charts: List[ChartImage], scanned: List[ScannedPage], vie
     async def one(chart: ChartImage) -> Optional[ChartCheck]:
         nonlocal done
         try:
-            return await _card(chart, views, llm)
+            async with gate:
+                return await _card(chart, views, llm)
         except Exception as e:                          # one chart never fails the check
             logger.warning("%s tidak terbaca: %s", chart.caption, e)
             unread.append(chart.caption)
