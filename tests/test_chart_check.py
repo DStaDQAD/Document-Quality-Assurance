@@ -143,3 +143,56 @@ def test_an_emf_chart_sends_its_texts_to_copy_labels_from():
 def test_a_reply_that_is_not_json_is_unreadable():
     with pytest.raises(ChartUnreadable):
         asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), _Model("Grafik ini menunjukkan ...")))
+
+
+# --- labels as strict claims --------------------------------------------------------------------
+
+from chart_check import label_results, parse_label
+
+
+def _read(labels, unit="%", series=None):
+    return ChartRead(unit=unit, series=series or [SeriesRef(name="SBT", table="S1", row="TOTAL"),
+                                                   SeriesRef(name="Ekspor gas", table="S2", row="Gas > Ekspor"),
+                                                   SeriesRef(name="PDB", table=None, row=None)],
+                     labels=[ChartLabel(text=t, series=s, period=p) for t, s, p in labels])
+
+
+def test_a_label_equal_to_its_cell_is_sesuai():
+    [result] = label_results(_read([("12,97", "SBT", "Q2 2026")]), _views(), "Grafik 1")
+
+    assert (result.verdict, result.checked_item) == ("Entailed", "chart")
+    assert result.context_quote == "Grafik 1: SBT Q2 2026 = 12,97"
+
+
+def test_a_label_off_its_cell_is_tidak_sesuai():
+    [result] = label_results(_read([("13,10", "SBT", "Q2 2026")]), _views(), "Grafik 1")
+
+    assert result.verdict == "Refuted"
+
+
+def test_a_label_in_the_charts_unit_meets_a_table_in_another():
+    [result] = label_results(_read([("1,7", "Ekspor gas", "Tw III 2026")], unit="miliar dolar AS"), _views(), "Grafik 9")
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_series_in_no_table_is_tidak_cukup_data():
+    [result] = label_results(_read([("4,04", "PDB", "Q2 2025")]), _views(), "Grafik 1")
+
+    assert (result.verdict, result.reason_code) == ("Inconclusive", "di_luar_tabel")
+
+
+def test_a_row_or_period_the_table_lacks_is_tidak_cukup_data():
+    bad_row = _read([("8,1", "Sektor", "Q2 2026")], series=[SeriesRef(name="Sektor", table="S1", row="Industri")])
+    bad_period = _read([("12,97", "SBT", "Q2 2019")])
+    unknown_series = _read([("12,97", "Lainnya", "Q2 2026")])
+
+    for read in (bad_row, bad_period, unknown_series):
+        [result] = label_results(read, _views(), "Grafik 1")
+        assert result.verdict == "Inconclusive"
+
+
+@pytest.mark.parametrize("text, value", [("12,97", 12.97), ("-1,5", -1.5), ("(1,2)", -1.2), ("22.6%", 22.6),
+                                         ("10,77*", 10.77), ("1.287", 1287.0), ("−0,1", -0.1), ("Tw.II", None)])
+def test_printed_forms_parse(text, value):
+    assert parse_label(text) == value
