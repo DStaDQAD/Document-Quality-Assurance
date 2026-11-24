@@ -37,6 +37,7 @@ class SeriesRef(BaseModel):
     table: Optional[str] = None       # "S1"; None when no table holds it
     row: Optional[str] = None         # exact row name from TABLES
     growth: bool = False              # the chart draws the yoy growth of a row the table holds as levels
+    unit: Optional[str] = None        # this series' unit when it has its own axis ("Indeks" left, "%" right)
 
     _name = field_validator("name", mode="before")(_text_or_empty)
 
@@ -96,14 +97,15 @@ Tugas:
    punya baris pertumbuhan itu (mis. di bawah 'TAHUNAN (YOY)', 'TRIWULANAN (QTQ)', 'Pertumbuhan (%, yoy)', atau
    tabel berjudul pertumbuhan), pilih baris itu dan jangan hitung dari level: growth = false. growth: true
    HANYA bila tabel tidak punya baris pertumbuhannya dan baris yang ada berisi level (nilai, bukan persen
-   pertumbuhan); program yang menghitung pertumbuhannya.
+   pertumbuhan); program yang menghitung pertumbuhannya. unit: satuan seri ini bila berbeda dari unit grafik,
+   misalnya grafik dua sumbu dengan sumbu kiri 'Indeks' dan sumbu kanan '%'; null bila sama.
 3. labels: setiap angka data yang TERCETAK pada grafik (bukan angka sumbu): text persis seperti tercetak,
    series = name seri pemiliknya (sama persis dengan salah satu name di series), period = periodenya
    ditulis seperti TABLES menulis periode.
 {emf_block}
 Jawab HANYA JSON:
 {{"title": "...", "unit": "...", "last_period": "...",
- "series": [{{"name": "...", "table": "S1", "row": "...", "growth": false}}],
+ "series": [{{"name": "...", "table": "S1", "row": "...", "growth": false, "unit": null}}],
  "labels": [{{"text": "...", "series": "...", "period": "..."}}]}}
 
 TABLES:
@@ -169,10 +171,11 @@ def parse_label(text: str) -> Optional[float]:
 
 def _claim(label: ChartLabel, read: ChartRead, views: Dict[str, TableView], caption: str) -> Claim:
     quote = f"{caption}: {label.series} {label.period} = {label.text}"
-    # The label alone says how it is printed: "Grafik 2 … = 2,0" must not read the caption's "2".
-    base = dict(operation="value", subject=label.series, context_quote=quote, printed=label.text,
-                claimed_value=parse_label(label.text), unit=read.unit)
     ref = next((s for s in read.series if _fold(s.name) == _fold(label.series)), None)
+    # The label alone says how it is printed: "Grafik 2 … = 2,0" must not read the caption's "2".
+    # A series on its own axis has its own unit (SHPR: index on the left, % on the right).
+    base = dict(operation="value", subject=label.series, context_quote=quote, printed=label.text,
+                claimed_value=parse_label(label.text), unit=(ref.unit if ref and ref.unit else read.unit))
     if ref is None or not ref.table or not ref.row:
         return Claim(cells=[], not_in_tables=True, reason="seri grafik ini tidak ada di tabel yang diunggah", **base)
     view = views.get(ref.table.strip().upper())
@@ -300,8 +303,14 @@ async def judge_drawing(chart: ChartImage, data: Dict[str, List[Tuple[str, float
         raise ChartUnreadable(f"{chart.caption}: penilaian gambar bukan JSON ({e.__class__.__name__})")
 
 
+def _numeric(read: ChartRead) -> ChartRead:
+    """The read with only the labels that are numbers (a map's city names are not labels)."""
+    return read.model_copy(update={"labels": [l for l in read.labels if parse_label(l.text) is not None]})
+
+
 def label_results(read: ChartRead, views: List[TableView], caption: str) -> List[FactVerificationResult]:
     """One strict verdict per printed label, judged on the cell of its series' row at its period."""
+    read = _numeric(read)
     by_code = {v.code: v for v in views}
     out = []
     for label in read.labels:
@@ -420,7 +429,7 @@ def _thumbnail(png: bytes) -> Optional[str]:
 
 
 async def _card(chart: ChartImage, views: List[TableView], llm: BaseChatModel) -> ChartCheck:
-    read = await read_chart(chart, views, llm)
+    read = _numeric(await read_chart(chart, views, llm))
     results = await _recheck(chart, read, label_results(read, views, chart.caption), views, llm)
     data = series_data(read, views)
     try:

@@ -527,3 +527,32 @@ def test_the_prompt_prefers_a_growth_row_the_tables_already_have():
 
     prompt = model.messages[0][0].content[0]["text"]
     assert "TAHUNAN (YOY)" in prompt and "jangan hitung" in prompt.lower()
+
+
+def test_a_series_on_its_own_axis_carries_its_own_unit():
+    # SHPR Tw II-2026 Grafik 1: IHPR (index, left axis) with growth in % on the right axis.
+    t = BITableData(title="IHPR", unit="Indeks (2018=100)", row_labels=["TOTAL"])
+    t._data.update({("TOTAL", 2025, "Q2"): 110.13})
+    views = build_views([_ExcelSource(table=t, filename="shpr.xlsx", sheet="TABEL 1")])
+    read = ChartRead.model_validate({"unit": "%", "series": [{"name": "IHPR (lhs)", "table": "S1", "row": "TOTAL",
+                                                               "unit": "Indeks"}],
+                                     "labels": [{"text": "110,13", "series": "IHPR (lhs)", "period": "Q2 2025"}]})
+
+    [result] = label_results(read, views, "Grafik 1")
+
+    assert result.verdict == "Entailed"
+
+
+def test_a_label_that_is_not_a_number_is_left_out():
+    # SPE Agu 2026 Gambar 1, a map: the model listed the city names as labels.
+    read = _read([("MEDAN", "SBT", "Q2 2026"), ("12,97", "SBT", "Q2 2026")])
+
+    assert [r.verdict for r in label_results(read, _views(), "Gambar 1")] == ["Entailed"]
+
+
+def test_the_prompt_asks_for_a_series_unit_on_a_second_axis():
+    model = _Model(_READ_REPLY)
+
+    asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), model))
+
+    assert "sumbu kanan" in model.messages[0][0].content[0]["text"]
