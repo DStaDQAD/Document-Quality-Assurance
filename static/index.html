@@ -927,6 +927,9 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
 }
 .chart-note { margin: 0 0 12px; font-size: 12px; }
 .chart-counts { font-size: 12px; color: var(--text-500); }
+.chart-drawing { font-size: 12px; margin-top: 6px; line-height: 1.5; }
+.chart-drawing.warn { padding: 4px 8px; border-radius: 6px; background: var(--amber-100); color: var(--amber-700); }
+.chart-unchecked { font-size: 11px; margin-top: 4px; }
 .chart-issues { list-style: none; margin: 10px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .chart-issue { border: 1px solid var(--border, #E2E8F0); border-radius: 8px; padding: 8px 10px; background: white; }
 .chart-issue-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
@@ -1373,6 +1376,13 @@ body.auth-locked .app {
                     <span class="rule-text">
                       <span class="rule-title">Konsistensi intra-file</span>
                       <span class="rule-hint" id="rule-intra-hint">Narasi vs tabel di PDF yang sama</span>
+                    </span>
+                  </label>
+                  <label class="rule-check">
+                    <input type="checkbox" id="rule-charts" checked>
+                    <span class="rule-text">
+                      <span class="rule-title">Cek grafik</span>
+                      <span class="rule-hint" id="rule-charts-hint">Angka di grafik dicek ke tabel; bentuk grafik dinilai AI</span>
                     </span>
                   </label>
                   <label class="rule-check is-disabled">
@@ -1951,9 +1961,9 @@ body.auth-locked .app {
   // only the Excel, a figure the Excel lacks (UB's penyaluran kredit) may be put on a look-alike
   // row and come back a false Tidak Sesuai. The other document's tables (antar-file) are not a
   // source since 2026-11-02. A press release as a rule has no charts.
-  const WITH_REPORT_RULES = ["excel", "intra", "typo"];
+  const WITH_REPORT_RULES = ["excel", "intra", "charts", "typo"];
   const PRESS_ONLY_RULES = ["excel", "intra", "typo"];
-  const REPORT_ONLY_RULES = ["excel", "intra", "typo"];
+  const REPORT_ONLY_RULES = ["excel", "intra", "charts", "typo"];
   const PUBLICATIONS = {
     "uang-beredar":    { label: "Uang Beredar", report: true, rules: WITH_REPORT_RULES },
     "uang-primer-m0":  { label: "Uang Primer (M0) Adjusted", report: false, rules: PRESS_ONLY_RULES },
@@ -2088,16 +2098,18 @@ body.auth-locked .app {
   }
 
   const RULE_BOXES = {
-    intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", typo: "rule-typo",
+    intra: "rule-intra", cross: "rule-cross-pdf", excel: "rule-excel", charts: "rule-charts", typo: "rule-typo",
   };
   const RULE_HINTS = {
     intra: ["Untuk angka yang tidak ada di Excel: dicek ke tabel di dokumen yang sama · opsional"],
     cross: ["Narasi vs tabel di dokumen lain", "unggah Siaran Pers dan Laporan untuk menjalankan"],
     excel: ["Narasi vs tabel Excel", "unggah file Excel untuk menjalankan"],
+    charts: ["Angka di grafik dicek ke tabel; bentuk grafik dinilai AI · opsional · menambah ±1–2 menit"],
   };
-  // The rule a checker may switch: the document's own tables (off; see WITH_REPORT_RULES). The
-  // choice is kept when another publication is picked. Charts are not checked (only "(Grafik N)").
-  const wanted = { intra: false };
+  // The rules a checker may switch: cek grafik (on; it costs model calls and minutes) and the
+  // document's own tables (off; see WITH_REPORT_RULES). The choice is kept when another
+  // publication is picked.
+  const wanted = { charts: true, intra: false };
   for (const key of Object.keys(wanted)) {
     document.getElementById(RULE_BOXES[key]).addEventListener("change", (e) => { wanted[key] = e.target.checked; });
   }
@@ -2132,7 +2144,9 @@ body.auth-locked .app {
       pub ? `Aturan untuk ${pub.label}` : "Aturan pemeriksaan";
     document.getElementById("rules-fixed-note").textContent = !pub
       ? "Pilih jenis publikasi untuk melihat aturannya."
-      : "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan.";
+      : rulesOf(currentPublication()).includes("charts")
+        ? "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan, cek grafik boleh dimatikan."
+        : "Ditetapkan untuk publikasi ini. Tabel di dokumen boleh dinyalakan.";
   }
 
   syncRules();
@@ -2586,8 +2600,9 @@ body.auth-locked .app {
       Model AI gagal membaca label angkanya, jadi grafik itu tidak ikut diperiksa — jalankan
       ulang pemeriksaan untuk melengkapinya.</span>
     </div>` : "";
-    const note = `<p class="muted-text chart-note">Angka yang tercetak pada setiap grafik dibaca AI
-      lalu dicocokkan dengan tabel. Status grafik mengikuti status sebagian besar labelnya.</p>`;
+    const note = `<p class="muted-text chart-note">Angka yang tercetak pada setiap grafik dicocokkan
+      dengan tabel; bentuk grafik dinilai AI terhadap data tabel. Status grafik mengikuti sebagian besar
+      labelnya, atau penilaian gambarnya bila grafik tidak punya label angka.</p>`;
 
     const cards = !chartChecks.length
       ? "<p class='muted-text'>Tidak ada grafik yang terbaca.</p>"
@@ -2628,17 +2643,23 @@ body.auth-locked .app {
               <span class="badge ${escapeHtml(c.verdict)}">${escapeHtml(VERDICT_LABEL[c.verdict] || c.verdict)}</span>
               <span class="fact-metric">${escapeHtml(c.caption)}</span>
               <span class="chart-title">${escapeHtml(c.title)}</span>
-              <span class="page-badge">Hal.&nbsp;${c.page_number}</span>
+              ${c.page_number != null ? `<span class="page-badge">Hal.&nbsp;${c.page_number}</span>` : ""}
             </div>
             <div class="chart-card-body">
               ${c.thumbnail && c.thumbnail.startsWith("data:image/") ? `<img class="chart-thumb"
                 src="${c.thumbnail}" alt="${escapeHtml(c.caption)}" title="Klik untuk memperbesar">` : ""}
               <div class="chart-card-info">
                 <div class="fact-comparison">
-                  <span class="fact-val ${c.verdict === "Entailed" ? "ok" : ""}">${ok} dari ${c.label_count}</span>
+                  ${c.label_count ? `<span class="fact-val ${c.verdict === "Entailed" ? "ok" : ""}">${ok} dari ${c.label_count}</span>
                   <span class="fact-val-label">label cocok dengan tabel</span>
-                  ${counts ? `<span class="chart-counts">· ${escapeHtml(counts)}</span>` : ""}
+                  ${counts ? `<span class="chart-counts">· ${escapeHtml(counts)}</span>` : ""}`
+                  : `<span class="fact-val-label">Tidak ada label angka di grafik ini.</span>`}
                 </div>
+                ${c.drawing ? `<div class="chart-drawing ${c.drawing === "masuk akal" ? "ok" : "warn"}">
+                  <span class="fact-val-label">Gambar:</span> ${escapeHtml(c.drawing)}${c.drawing === "perlu dicek" && c.drawing_note
+                    ? ` — ${escapeHtml(c.drawing_note)}` : ""}</div>` : ""}
+                ${(c.unchecked_series || []).length ? `<div class="chart-unchecked muted-text">Tidak bisa dicek (tidak ada di
+                  tabel yang diunggah): ${escapeHtml(c.unchecked_series.join(", "))}</div>` : ""}
                 ${issues ? `<ul class="chart-issues">${issues}</ul>` : ""}
               </div>
             </div>
@@ -3720,7 +3741,7 @@ body.auth-locked .app {
   const STAGE_EXCEL   = ["excel",   "Parsing tabel Excel"];
   const STAGE_TABLES  = ["tables",  "Membaca tabel di dalam PDF"];
   const STAGE_REFTABLES = ["reftables", "Membaca tabel di PDF lain"];
-  const STAGE_CHARTS  = ["charts",  "Membaca angka pada grafik"];
+  const STAGE_CHARTS  = ["charts",  "Memeriksa grafik"];
   const STAGE_EXTRACT = ["extract", "Ekstraksi klaim"];
   const STAGE_TYPO    = ["typo",    "Cek ejaan & tata bahasa"];
 
@@ -3813,7 +3834,7 @@ body.auth-locked .app {
     try {
       await streamNdjson(
         `/api/verify-paired-stream?sheet_names=${encodeURIComponent(sheetNames)}` +
-          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}` +
+          `&mode=${encodeURIComponent(mode)}&run_typo_check=${withTypo}&check_charts=${withCharts}` +
           `&checker_name=${encodeURIComponent(checkerName)}&publication=${encodeURIComponent(publication)}`,
         { method: "POST", body: formData, signal },
         (ev) => {
@@ -3861,7 +3882,7 @@ body.auth-locked .app {
     const mode = currentMode();
     const withTypo = document.getElementById("rule-typo").checked;
     const crossPdf = document.getElementById("rule-cross-pdf").checked;
-    const withCharts = false;  // charts are no longer read; only "(Grafik N)" pointers are checked
+    const withCharts = document.getElementById("rule-charts").checked;
     const checkerName = listedChecker(checkerNameEl.value);
     if (!publication) {
       resultEl.innerHTML = `<div class="error-banner">Pilih jenis publikasi terlebih dahulu.</div>`;
