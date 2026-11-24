@@ -341,3 +341,39 @@ def test_a_growth_label_is_a_yoy_claim_on_two_cells():
 
     assert (right.verdict, wrong.verdict) == ("Entailed", "Refuted")
     assert [(p.year, p.month) for p in right.periods] == [(2025, "Sep"), (2026, "Sep")]
+
+
+# --- final review (2026-11-24) --------------------------------------------------------------------
+
+@pytest.mark.parametrize("written, growth", [("false", False), ("no", False), (None, False), ("true", True), (True, True)])
+def test_growth_written_as_text_is_read_as_its_meaning(written, growth):
+    # bool("false") is True: a levels series would have been judged as the yoy of its levels.
+    assert SeriesRef.model_validate({"name": "M2", "growth": written}).growth is growth
+
+
+def _annual_views():
+    t = BITableData(title="Inflasi", unit="%", row_labels=["Inflasi"])
+    t._data.update({("Inflasi", 2024, "Dec"): 1.57, ("Inflasi", 2025, "Dec"): 2.72, ("Inflasi", 2026, "Jun"): 2.1})
+    t.annual.update({("Inflasi", 2023): 2.61, ("Inflasi", 2024): 1.57, ("Inflasi", 2025): 2.72})
+    return build_views([_ExcelSource(table=t, filename="skdu.xlsx", sheet="T7")])
+
+
+def test_a_chart_ending_on_a_year_reads_the_annual_values_up_to_that_year():
+    # SKDU Grafik 7 "Realisasi Inflasi Tahun 2018 … 2025": its last period is a year, not a month.
+    read = ChartRead(last_period="Tahun 2025", series=[SeriesRef(name="Realisasi", table="S1", row="Inflasi")])
+
+    assert series_data(read, _annual_views()) == {
+        "Realisasi": [("Tahun 2023", 2.61), ("Tahun 2024", 1.57), ("Tahun 2025", 2.72)]}
+
+
+def test_a_card_names_the_table_row_each_series_was_compared_with(monkeypatch):
+    # NPI Grafik 5 draws c.i.f. imports; the workbook only has fob: the card says which row was used.
+    read = ChartRead(series=[SeriesRef(name="y.o.y", table="S1", row="TOTAL"),
+                             SeriesRef(name="M2", table="S1", row="Pertanian", growth=True),
+                             SeriesRef(name="PDB", table=None, row=None)])
+    _fake_steps(monkeypatch, {"Grafik 5": read})
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 5", "", None, _png())], [], _views(), object()))
+
+    assert card.series_rows == ["y.o.y: TOTAL (skdu.xlsx, sheet T1)",
+                                "M2: Pertanian (skdu.xlsx, sheet T1), pertumbuhan yoy dihitung dari level"]

@@ -22,7 +22,7 @@ from copilot_chat import extract_json
 from schemas import ChartCheck, FactVerificationResult
 from strict.claims import Cell, Claim
 from strict.evaluate import evaluate_claim
-from strict.tables import TableView, find_column, find_row, parse_period, period_header, table_block
+from strict.tables import ANNUAL, TableView, find_column, find_row, parse_period, period_header, table_block
 
 logger = logging.getLogger("fact-checker")
 
@@ -43,7 +43,8 @@ class SeriesRef(BaseModel):
     @field_validator("growth", mode="before")
     @classmethod
     def _growth(cls, value):
-        return bool(value)
+        # null is "no"; "false" / "no" as text are parsed by pydantic, never bool("false") == True.
+        return False if value is None else value
 
 
 class ChartLabel(BaseModel):
@@ -177,6 +178,27 @@ def _number(value: float) -> str:
     return f"{round(value, 2):g}".replace(".", ",")
 
 
+def _ordinal(period: str) -> int:
+    """A period's place within its year; a year's annual value comes after its months and quarters."""
+    return 13 if period == ANNUAL else _period_ordinal(period)
+
+
+def series_rows(read: ChartRead, views: List[TableView]) -> List[str]:
+    """Each mapped series with the table row it was compared with, for the card: a chart drawn on
+    another definition (c.i.f. against a fob row, giro rupiah + valas against giro rupiah) shows
+    as such instead of as an error in the report."""
+    by_code = {v.code: v for v in views}
+    out = []
+    for ref in read.series:
+        view = by_code.get((ref.table or "").strip().upper())
+        row = find_row(view, ref.row) if view and ref.row else None
+        if row is None:
+            continue
+        text = f"{ref.name}: {row} ({view.source.filename}, sheet {view.source.sheet})"
+        out.append(text + (", pertumbuhan yoy dihitung dari level" if ref.growth else ""))
+    return out
+
+
 def series_data(read: ChartRead, views: List[TableView], max_points: int = 40) -> Dict[str, List[Tuple[str, float]]]:
     """Each mapped series' values from its table row: the last `max_points` periods up to the chart's
     last period (a category table: its columns in order). Series no table holds are left out."""
@@ -190,17 +212,21 @@ def series_data(read: ChartRead, views: List[TableView], max_points: int = 40) -
             continue
         if view.is_categorical:
             points = [(col, view.table._data[(row, col)]) for col in view.table.col_labels if (row, col) in view.table._data]
+        elif last is not None and last[1] == ANNUAL:
+            # A chart of years (SKDU "Realisasi Inflasi Tahun 2018 … 2025"): the table's annual values.
+            keyed = sorted(((year, ANNUAL), v) for (r, year), v in (view.table.annual or {}).items() if r == row)
         else:
             keyed = sorted((((k[1], k[2]), v) for k, v in view.table._data.items() if len(k) == 3 and k[0] == row),
-                           key=lambda kv: (kv[0][0], _period_ordinal(kv[0][1])))
+                           key=lambda kv: (kv[0][0], _ordinal(kv[0][1])))
+        if not view.is_categorical:
             if ref.growth:
                 # The chart draws growth (% yoy) of a row the table holds as levels: computed here.
                 levels = dict(keyed)
                 keyed = [((year, period), (value / levels[(year - 1, period)] - 1) * 100)
                          for (year, period), value in keyed if levels.get((year - 1, period))]
             if last is not None:
-                stop = (last[0], _period_ordinal(last[1]))
-                keyed = [kv for kv in keyed if (kv[0][0], _period_ordinal(kv[0][1])) <= stop]
+                stop = (last[0], _ordinal(last[1]))
+                keyed = [kv for kv in keyed if (kv[0][0], _ordinal(kv[0][1])) <= stop]
             points = [(period_header(year, period), value) for (year, period), value in keyed]
         if points:
             out[ref.name] = [(p, round(v, 2)) for p, v in points[-max_points:]]
@@ -297,6 +323,7 @@ async def _card(chart: ChartImage, views: List[TableView], llm: BaseChatModel) -
         issues=[r for r in results if r.verdict != "Entailed"], thumbnail=_thumbnail(chart.png),
         drawing=judged.verdict if judged else None, drawing_note=judged.reason if judged else "",
         unchecked_series=[s.name for s in read.series if s.name not in data],
+        series_rows=series_rows(read, views),
     )
 
 

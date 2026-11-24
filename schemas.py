@@ -166,6 +166,9 @@ class ChartCheck(BaseModel):
     drawing_note: str = ""
     # Legend series no uploaded table holds: their labels are Tidak Cukup Data, their lines unjudged.
     unchecked_series: List[str] = Field(default_factory=list)
+    # Each mapped series and the table row it was compared with ("y.o.y: Total Impor (fob) > Nonmigas
+    # (npi.xlsx, sheet Id)"): a chart drawn on another definition shows as such.
+    series_rows: List[str] = Field(default_factory=list)
 
 
 class TypoIssue(BaseModel):

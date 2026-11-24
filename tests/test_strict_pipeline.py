@@ -383,3 +383,47 @@ def test_no_charts_means_no_chart_check(mock_parse, monkeypatch):
     response = _verify(llm=_llm([]))
 
     assert response.chart_checks == []
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_the_chart_check_stops_when_the_check_is_cancelled(mock_parse, monkeypatch):
+    # Batalkan cancels the pipeline; the chart task must not go on calling the model (credits).
+    import time
+    import chart_check
+    from chart_images import ChartImage
+    from paired_verifier import verify_paired
+
+    mock_parse.return_value = _table()
+    state = {"cancelled": False}
+
+    async def slow_check(charts, scanned, views, llm, on_progress=None):
+        state["started"].set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            state["cancelled"] = True
+            raise
+        return [], []
+
+    monkeypatch.setattr(chart_check, "check_charts", slow_check)
+
+    def slow_extraction(prompt_value):
+        time.sleep(1.0)                                   # extraction still running when Batalkan comes
+        return StrictClaims(claims=[])
+
+    llm = Mock()
+    llm.with_structured_output = Mock(return_value=RunnableLambda(slow_extraction))
+
+    async def scenario():
+        state["started"] = asyncio.Event()
+        check = asyncio.create_task(verify_paired(narrative_text=NARRATIVE, excel_sources=[(b"x", "5.39", "t.xls")],
+                                                  llm=llm, charts=[ChartImage("Grafik 1", "", None, b"png")]))
+        await state["started"].wait()
+        await asyncio.sleep(0.05)
+        check.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await check
+        await asyncio.sleep(0.05)
+        return state["cancelled"]                         # before asyncio.run cancels what is left
+
+    assert asyncio.run(scenario()) is True
