@@ -78,3 +78,25 @@ def test_a_text_turned_by_the_world_transform_is_drawn_upright():
 
     left, top, right, bottom = _dark_box(image)
     assert bottom - top > right - left
+
+
+def test_a_large_emf_is_drawn_at_the_output_size_never_at_its_full_size(monkeypatch):
+    # SPE's largest EMF is 10653 × 2688 px (~86 MB as RGB) on a 512 MB Render instance.
+    import emf_render
+    from PIL import Image as PILImage
+
+    sizes = []
+    real_new = PILImage.new
+
+    def new(mode, size, *args, **kwargs):
+        sizes.append(size)
+        return real_new(mode, size, *args, **kwargs)
+
+    monkeypatch.setattr(emf_render.Image, "new", new)
+
+    image = _image(emf_chart([emf_pen(1, (0, 0, 0)), emf_select(1), emf_polyline16([(0, 0), (7999, 1999)])],
+                             width=8000, height=2000), max_px=1600)
+
+    assert max(max(size) for size in sizes) <= 1600
+    left, top, right, bottom = _dark_box(image)
+    assert left <= 2 and right >= 1597 and bottom >= 397           # the line still crosses the whole chart

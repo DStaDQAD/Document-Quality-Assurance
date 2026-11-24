@@ -71,6 +71,7 @@ class _Canvas:
     saved: List[_State] = field(default_factory=list)
     objects: Dict[int, tuple] = field(default_factory=dict)
     path: Optional[List[List[Point]]] = None
+    zoom: float = 1.0                                    # device pixels → image pixels (≤ 1)
 
     @property
     def draw(self) -> ImageDraw.ImageDraw:
@@ -84,7 +85,7 @@ class _Canvas:
         sy = s.viewport_ext[1] / s.window_ext[1] if s.map_mode != 1 and s.window_ext[1] else 1.0
         dx = (wx - s.window_org[0]) * sx + s.viewport_org[0]
         dy = (wy - s.window_org[1]) * sy + s.viewport_org[1]
-        return dx - self.origin[0], dy - self.origin[1]
+        return (dx - self.origin[0]) * self.zoom, (dy - self.origin[1]) * self.zoom
 
     def scale(self) -> float:
         """How long one logical unit is in pixels (for pen widths)."""
@@ -224,7 +225,11 @@ def render_emf(data: bytes, max_px: int = 1600) -> Optional[bytes]:
     width, height = right - left + 1, bottom - top + 1
     if width <= 1 or height <= 1 or width * height > 60_000_000:
         return None
-    canvas = _Canvas(Image.new("RGB", (width, height), _WHITE), origin=(left, top))
+    # Drawn straight at the output size: a full-size canvas of SPE's largest EMF (10653 × 2688) is
+    # ~86 MB of RGB on a 512 MB Render instance.
+    zoom = min(1.0, max_px / max(width, height))
+    size = (max(1, min(max_px, math.ceil(width * zoom))), max(1, min(max_px, math.ceil(height * zoom))))
+    canvas = _Canvas(Image.new("RGB", size, _WHITE), origin=(left, top), zoom=zoom)
     drew = False
     offset = 0
     while offset + 8 <= len(data):
@@ -382,7 +387,8 @@ def _record(c: _Canvas, data: bytes, off: int, t: int, size: int) -> bool:
         text = data[off + off_string: off + off_string + 2 * n_chars].decode("utf-16-le", "replace").strip()
         if not text or (l, tp, r, b) == (0, 0, 0, 0):
             return False
-        _text(c, text, (l - c.origin[0], tp - c.origin[1], r - c.origin[0], b - c.origin[1]))
+        ox, oy, z = c.origin[0], c.origin[1], c.zoom
+        _text(c, text, ((l - ox) * z, (tp - oy) * z, (r - ox) * z, (b - oy) * z))
         return True
     elif t == 81:                                   # STRETCHDIBITS
         x, y = i32(24), i32(28)
