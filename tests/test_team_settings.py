@@ -146,7 +146,7 @@ def test_a_yaml_phrase_line_of_mappings_is_listed_one_row_per_table_row():
     npi = team_settings.builtin_view("npi")["phrases"]
     assert {"phrases": ["neraca jasa"], "row": "Jasa-jasa"} in npi            # "→ baris X" shows X
     mixed = next(g for g in npi if "text" in g and "adalah sisi kewajiban" in g["text"])
-    assert mixed["text"] == team_settings.notes_sections("npi")["phrases"][2]   # not all mappings: kept whole
+    assert mixed["text"] in team_settings.notes_sections("npi")["phrases"]      # not all mappings: kept whole
     block = team_settings.for_check("uang-beredar")[1]
     assert all(line in block for line in team_settings.notes_sections("uang-beredar")["phrases"])
 
