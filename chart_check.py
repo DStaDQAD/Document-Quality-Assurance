@@ -12,7 +12,7 @@ import re
 from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 
 from paired_verifier import _period_ordinal
 
@@ -27,16 +27,31 @@ from strict.tables import TableView, find_column, find_row, parse_period, period
 logger = logging.getLogger("fact-checker")
 
 
+def _text_or_empty(value):
+    """The agent writes null for a missing name or title (a chart with no legend); read it as ""."""
+    return "" if value is None else str(value)
+
+
 class SeriesRef(BaseModel):
-    name: str                         # as in the legend
+    name: str = ""                    # as in the legend; for a chart with no legend, what it measures
     table: Optional[str] = None       # "S1"; None when no table holds it
     row: Optional[str] = None         # exact row name from TABLES
+    growth: bool = False              # the chart draws the yoy growth of a row the table holds as levels
+
+    _name = field_validator("name", mode="before")(_text_or_empty)
+
+    @field_validator("growth", mode="before")
+    @classmethod
+    def _growth(cls, value):
+        return bool(value)
 
 
 class ChartLabel(BaseModel):
     text: str                         # as printed, "12,97"
-    series: str                       # a SeriesRef.name
-    period: str                       # as the tables write it: "Q2 2026", "Jun 2026", "Tahun 2025"
+    series: str = ""                  # a SeriesRef.name
+    period: str = ""                  # as the tables write it: "Q2 2026", "Jun 2026", "Tahun 2025"
+
+    _strings = field_validator("text", "series", "period", mode="before")(_text_or_empty)
 
 
 class ChartRead(BaseModel):
@@ -45,6 +60,8 @@ class ChartRead(BaseModel):
     last_period: Optional[str] = None
     series: List[SeriesRef] = []
     labels: List[ChartLabel] = []
+
+    _title = field_validator("title", mode="before")(_text_or_empty)
 
 
 READ_PROMPT = """Terlampir gambar sebuah grafik dari laporan statistik Bank Indonesia ({caption}{title}).
@@ -56,15 +73,18 @@ sengaja tidak ditampilkan.
 Tugas:
 1. title: judul grafik bila ada. unit: satuan angka pada grafik (mis. 'miliar dolar AS', '%'). last_period:
    periode terakhir yang tergambar, ditulis seperti TABLES menulis periode ('Q3 2026', 'Sep 2026', 'Tahun 2025').
-2. series: setiap seri di legenda. name disalin persis dari legenda. table dan row: kode tabel dan nama baris
+2. series: setiap seri di legenda. name disalin persis dari legenda; bila grafik tidak punya legenda (satu
+   seri), name = apa yang diukur grafik menurut judul atau sumbunya. table dan row: kode tabel dan nama baris
    yang disalin PERSIS dari TABLES dan memuat data seri itu; null bila tidak ada tabel yang memuatnya. Jangan
-   memilih baris yang hanya mirip.
+   memilih baris yang hanya mirip. growth: true bila grafik menggambar pertumbuhan (% yoy) sedangkan baris
+   itu berisi level (nilai, bukan persen pertumbuhan); program yang menghitung pertumbuhannya.
 3. labels: setiap angka data yang TERCETAK pada grafik (bukan angka sumbu): text persis seperti tercetak,
-   series = name seri pemiliknya, period = periodenya ditulis seperti TABLES menulis periode.
+   series = name seri pemiliknya (sama persis dengan salah satu name di series), period = periodenya
+   ditulis seperti TABLES menulis periode.
 {emf_block}
 Jawab HANYA JSON:
 {{"title": "...", "unit": "...", "last_period": "...",
- "series": [{{"name": "...", "table": "S1", "row": "..."}}],
+ "series": [{{"name": "...", "table": "S1", "row": "...", "growth": false}}],
  "labels": [{{"text": "...", "series": "...", "period": "..."}}]}}
 
 TABLES:
@@ -140,6 +160,14 @@ def _claim(label: ChartLabel, read: ChartRead, views: Dict[str, TableView], capt
     if view is not None and view.is_categorical:
         cell = Cell(code=ref.table, row_text=ref.row, period_text=label.period, row=row,
                     column=find_column(view, label.period))
+    elif ref.growth:
+        # Growth of a row held as levels: a yoy claim on the same period a year earlier, then this one.
+        key = parse_period(label.period)
+        earlier = (key[0] - 1, key[1]) if key else None
+        cells = [Cell(code=ref.table, row_text=ref.row, period_text=f"{label.period} (tahun sebelumnya)", row=row,
+                      key=earlier),
+                 Cell(code=ref.table, row_text=ref.row, period_text=label.period, row=row, key=key)]
+        return Claim(cells=cells, **{**base, "operation": "yoy_growth"})
     else:
         cell = Cell(code=ref.table, row_text=ref.row, period_text=label.period, row=row, key=parse_period(label.period))
     return Claim(cells=[cell], **base)
@@ -165,6 +193,11 @@ def series_data(read: ChartRead, views: List[TableView], max_points: int = 40) -
         else:
             keyed = sorted((((k[1], k[2]), v) for k, v in view.table._data.items() if len(k) == 3 and k[0] == row),
                            key=lambda kv: (kv[0][0], _period_ordinal(kv[0][1])))
+            if ref.growth:
+                # The chart draws growth (% yoy) of a row the table holds as levels: computed here.
+                levels = dict(keyed)
+                keyed = [((year, period), (value / levels[(year - 1, period)] - 1) * 100)
+                         for (year, period), value in keyed if levels.get((year - 1, period))]
             if last is not None:
                 stop = (last[0], _period_ordinal(last[1]))
                 keyed = [kv for kv in keyed if (kv[0][0], _period_ordinal(kv[0][1])) <= stop]

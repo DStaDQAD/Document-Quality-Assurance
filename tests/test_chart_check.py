@@ -293,3 +293,51 @@ def test_scanned_pages_are_located_before_they_are_checked(monkeypatch):
     cards, _ = asyncio.run(check_charts([], [ScannedPage(7, _png())], _views(), object()))
 
     assert [(c.caption, c.page_number) for c in cards] == [("Grafik 5", 7)]
+
+
+# --- after the measurement (2026-11-24) -----------------------------------------------------------
+
+def test_a_chart_without_a_legend_answers_with_nulls_and_still_parses():
+    # SKDU Tw III Grafik 4: one series, no legend; the agent wrote null names and a null title.
+    reply = ('{"title": null, "unit": "SB, %", "last_period": "Q3 2026", "series": [{"name": null, "table": "S1",'
+             ' "row": "TOTAL"}], "labels": [{"text": "15,56", "series": null, "period": "Q3 2025"}]}')
+
+    read = asyncio.run(read_chart(ChartImage("Grafik 4", "", None, _png()), _views(), _Model(reply)))
+
+    assert read.title == "" and read.series[0].name == "" and read.labels[0].series == ""
+    [result] = label_results(read, _views(), "Grafik 4")
+    assert result.verdict == "Refuted"                   # 15,56 against TOTAL Q3 2025 = 11,55
+
+
+def test_the_prompt_asks_for_a_name_when_there_is_no_legend_and_marks_growth():
+    model = _Model(_READ_REPLY)
+
+    asyncio.run(read_chart(ChartImage("Grafik 1", "", None, _png()), _views(), model))
+
+    prompt = model.messages[0][0].content[0]["text"]
+    assert "tidak punya legenda" in prompt and '"growth"' in prompt
+
+
+def _level_views():
+    m2 = BITableData(title="I.1A Uang Beredar", unit="Miliar Rp", row_labels=["M2"])
+    m2._data.update({("M2", 2025, "Sep"): 9_780_000.0, ("M2", 2025, "Aug"): 9_700_000.0,
+                     ("M2", 2026, "Aug"): 10_495_400.0, ("M2", 2026, "Sep"): 10_587_929.0})
+    return build_views([_ExcelSource(table=m2, filename="seki.xls", sheet="I.1A")])
+
+
+def test_a_growth_series_is_computed_from_its_levels():
+    # UB Sep 2026 Grafik 1 draws M2 growth (% yoy); SEKI I.1A holds M2 levels.
+    read = ChartRead(series=[SeriesRef(name="M2", table="S1", row="M2", growth=True)])
+
+    assert series_data(read, _level_views()) == {"M2": [("Aug 2026", 8.2), ("Sep 2026", 8.26)]}
+
+
+def test_a_growth_label_is_a_yoy_claim_on_two_cells():
+    read = ChartRead(unit="%", series=[SeriesRef(name="M2", table="S1", row="M2", growth=True)],
+                     labels=[ChartLabel(text="8,3", series="M2", period="Sep 2026"),
+                             ChartLabel(text="9,1", series="M2", period="Sep 2026")])
+
+    right, wrong = label_results(read, _level_views(), "Grafik 1")
+
+    assert (right.verdict, wrong.verdict) == ("Entailed", "Refuted")
+    assert [(p.year, p.month) for p in right.periods] == [(2025, "Sep"), (2026, "Sep")]

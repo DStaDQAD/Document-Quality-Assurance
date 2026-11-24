@@ -75,34 +75,21 @@ def test_the_next_caption_closes_the_one_before():
 
 
 def _pdf_fakes(monkeypatch, regions, captions, texts, pages=3):
-    monkeypatch.setattr(chart_images, "chart_regions", lambda pdf: regions)
-    monkeypatch.setattr(chart_images, "_render_regions",
-                        lambda pdf, wanted, max_px: [(p, base64.b64encode(_png()).decode()) for p in sorted(wanted)
-                                                     for _ in wanted[p]])
     monkeypatch.setattr(chart_images, "_page_texts", lambda pdf: texts)
     monkeypatch.setattr(chart_images, "_page_count", lambda pdf: pages)
     monkeypatch.setattr(chart_images, "_render_page", lambda pdf, page: _png(160, 220))
     monkeypatch.setattr(chart_images, "_caption_lines", lambda pdf: captions)
 
 
-def test_a_pdf_chart_is_a_rendered_region_named_by_its_caption(monkeypatch):
-    _pdf_fakes(monkeypatch, {3: [(50, 300, 550, 600)]}, {3: ["Grafik 4 Ekspor Nonmigas"]},
-               {1: "x" * 50, 2: "x" * 50, 3: "x" * 50})
+def test_a_pdf_page_with_a_chart_caption_goes_to_the_model_whole(monkeypatch):
+    # NPI Tw III-2026 R0.1: the text-layer locator cut most charts to their axis and legend, so a
+    # page that names a chart is sent whole and the model gives each chart's box (locate_charts).
+    _pdf_fakes(monkeypatch, {}, {3: ["Grafik 4 Ekspor Nonmigas"]}, {1: "x" * 50, 2: "x" * 50, 3: "x" * 50})
 
-    charts, scanned = pdf_charts(b"%PDF")
+    charts, pages = pdf_charts(b"%PDF")
 
-    [chart] = charts
-    assert (chart.caption, chart.title, chart.page_number) == ("Grafik 4", "Ekspor Nonmigas", 3)
-    assert chart.png == _png() and scanned == []
-
-
-def test_pdf_regions_without_a_matching_caption_are_named_by_page(monkeypatch):
-    _pdf_fakes(monkeypatch, {3: [(50, 600, 300, 800), (50, 200, 300, 400)]}, {3: []},
-               {1: "x" * 50, 2: "x" * 50, 3: "x" * 50})
-
-    charts, _ = pdf_charts(b"%PDF")
-
-    assert [c.caption for c in charts] == ["Grafik hal. 3 (1)", "Grafik hal. 3 (2)"]
+    assert charts == [] and [p.page_number for p in pages] == [3]
+    assert Image.open(io.BytesIO(pages[0].png)).size == (160, 220)
 
 
 def test_a_pdf_page_without_a_text_layer_is_a_scanned_page(monkeypatch):
@@ -114,23 +101,12 @@ def test_a_pdf_page_without_a_text_layer_is_a_scanned_page(monkeypatch):
     assert Image.open(io.BytesIO(scanned[0].png)).size == (160, 220)
 
 
-def test_a_zero_width_region_is_skipped(monkeypatch):
-    # NPI Tw III-2026 R0.1 (PDF) page 5 is the list of charts: each of its lines came back as a box
-    # of no width (left == right), which pypdfium2 refuses to crop.
-    _pdf_fakes(monkeypatch, {5: [(28.5, 394.8, 28.5, 469.6)], 7: [(50, 300, 550, 600)]},
-               {5: ["Grafik 1 Neraca ... 7"], 7: ["Grafik 1 Neraca Pembayaran"]}, {p: "x" * 50 for p in range(1, 9)}, pages=8)
-
-    charts, _ = pdf_charts(b"%PDF")
-
-    assert [(c.caption, c.page_number) for c in charts] == [("Grafik 1", 7)]
-
-
 def test_the_list_of_charts_page_gives_no_charts(monkeypatch):
     # NPI Tw III-2026 page 5, "DAFTAR GRAFIK": every entry came back as a box under its caption.
     _pdf_fakes(monkeypatch, {5: [(28.5, 394.8, 300, 469.6)], 7: [(50, 300, 550, 600)]},
                {5: ["Grafik 1 Neraca Pembayaran ..... 7"], 7: ["Grafik 1 Neraca Pembayaran"]},
                {**{p: "x" * 50 for p in range(1, 9)}, 5: "DAFTAR GRAFIK Grafik 1 Neraca Pembayaran ..... 7"}, pages=8)
 
-    charts, _ = pdf_charts(b"%PDF")
+    charts, pages = pdf_charts(b"%PDF")
 
-    assert [(c.caption, c.page_number) for c in charts] == [("Grafik 1", 7)]
+    assert charts == [] and [p.page_number for p in pages] == [7]
