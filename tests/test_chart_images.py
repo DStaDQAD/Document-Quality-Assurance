@@ -18,6 +18,7 @@ def test_without_bounds_the_reference_point_is_kept():
 
 import base64
 import io
+from unittest.mock import Mock
 
 from PIL import Image
 
@@ -133,3 +134,130 @@ def test_charts_side_by_side_take_their_pictures_in_caption_order():
 
     assert [(c.caption, c.title, c.png) for c in charts] == [("Grafik 3", "Kondisi Likuiditas", first),
                                                              ("Grafik 4", "Kondisi Rentabilitas", second)]
+
+
+# --- final review (2026-11-24) --------------------------------------------------------------------
+
+def test_pdf_pages_are_counted_and_rendered_holding_the_pdfium_lock(monkeypatch):
+    # Two threads inside PDFium at once killed Render with no traceback (pdf_extraction._PDFIUM_LOCK).
+    import threading
+    import pypdfium2
+    import pdf_extraction
+
+    held = []
+
+    class _Lock:
+        def __init__(self):
+            self.depth = 0
+
+        def __enter__(self):
+            self.depth += 1
+
+        def __exit__(self, *exc):
+            self.depth -= 1
+
+    lock = _Lock()
+    monkeypatch.setattr(pdf_extraction, "_PDFIUM_LOCK", lock)
+
+    class _Page:
+        def get_size(self):
+            held.append(lock.depth)
+            return 100, 200
+
+        def render(self, scale):
+            return Mock(to_pil=lambda: Image.new("RGB", (10, 20)))
+
+    class _Doc:
+        def __init__(self, data):
+            held.append(lock.depth)
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, i):
+            return _Page()
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pypdfium2, "PdfDocument", _Doc)
+
+    chart_images._page_count(b"%PDF")
+    chart_images._render_page(b"%PDF", 1)
+
+    assert held and all(depth > 0 for depth in held)
+
+
+def test_a_sentence_that_starts_with_grafik_n_is_not_a_caption():
+    doc = docx_bytes(para("Grafik 2 menunjukkan bahwa pertumbuhan kredit melambat sejalan dengan permintaan yang"
+                          " tertahan di tengah ketidakpastian global yang masih tinggi pada triwulan ini.")
+                     + para("Grafik 3") + para("Kredit") + picture("rId1"), {"image1.png": _png()})
+
+    assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 3", "Kredit")]
+
+
+def test_the_list_of_charts_queues_no_captions():
+    doc = docx_bytes(para("DAFTAR GRAFIK") + para("Grafik 1 Neraca Pembayaran") + para("7")
+                     + para("Grafik 2 Transaksi Berjalan") + para("8")
+                     + para("Grafik 1") + para("Neraca Pembayaran") + picture("rId1"), {"image1.png": _png()})
+
+    assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 1", "Neraca Pembayaran")]
+
+
+def test_a_caption_over_a_native_word_chart_takes_that_chart_not_the_next_picture():
+    native = ('<w:p><w:r><w:drawing><a:graphic><a:graphicData><c:chart xmlns:c="http://schemas.openxmlformats.org/'
+              'drawingml/2006/chart" r:id="rId9"/></a:graphicData></a:graphic></w:drawing></w:r></w:p>')
+    doc = docx_bytes(para("Grafik 1") + para("Ekspor") + native + para("Teks narasi singkat.")
+                     + para("Grafik 2") + para("Impor") + picture("rId1"), {"image1.png": _png()})
+
+    assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 2", "Impor")]
+
+
+def test_a_caption_whose_picture_never_comes_is_dropped_at_the_next_paragraph_of_prose():
+    doc = docx_bytes(para("Grafik 1") + para("Ekspor")
+                     + para("Ekspor nonmigas tumbuh 9,3% (yoy) pada triwulan III 2026, lebih tinggi dibandingkan "
+                            "triwulan sebelumnya, didorong oleh peningkatan ekspor produk agrikultur dan bahan bakar.")
+                     + para("Grafik 2") + para("Impor") + picture("rId1"), {"image1.png": _png()})
+
+    assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 2", "Impor")]
+
+
+def test_a_caption_under_its_picture_takes_that_picture():
+    # NPI Tw II-2026 R2: the picture, then "Grafik 4", then its title, then the text goes on.
+    first, second = _png(colour=(1, 2, 3)), _png(colour=(4, 5, 6))
+    prose = ("Secara nominal, ekspor nonmigas pada triwulan II 2026 tercatat sebesar 70,5 miliar dolar AS, lebih "
+             "tinggi dibandingkan triwulan sebelumnya yang tercatat sebesar 66,1 miliar dolar AS.")
+    doc = docx_bytes(para(prose) + picture("rId1") + para("Grafik 4") + para("Pertumbuhan Ekspor Nonmigas")
+                     + para(prose) + picture("rId2") + para("Grafik 5") + para("Pertumbuhan Impor Nonmigas")
+                     + para("Tabel 1"), {"image1.png": first, "image2.png": second})
+
+    assert [(c.caption, c.title, c.png) for c in word_charts(doc)] == [
+        ("Grafik 4", "Pertumbuhan Ekspor Nonmigas", first), ("Grafik 5", "Pertumbuhan Impor Nonmigas", second)]
+
+
+def test_a_source_line_after_a_picture_is_not_a_title_and_keeps_the_next_caption_waiting():
+    # SKDU Tw III-2026 Grafik 8, 9: both captions, the first picture, "Sumber: …", the second picture.
+    first, second = _png(colour=(1, 2, 3)), _png(colour=(4, 5, 6))
+    doc = docx_bytes(para("Grafik 8") + para("Kegiatan Usaha") + para("Grafik 9") + para("Tenaga Kerja")
+                     + para("LU Pertanian") + picture("rId1") + para("Sumber: SKDU (BI)") + picture("rId2"),
+                     {"image1.png": first, "image2.png": second})
+
+    assert [(c.caption, c.title, c.png) for c in word_charts(doc)] == [
+        ("Grafik 8", "Kegiatan Usaha", first), ("Grafik 9", "Tenaga Kerja LU Pertanian", second)]
+
+
+def test_the_pictures_under_a_table_caption_are_not_taken_by_the_chart_caption_after_them():
+    table, chart = _png(colour=(1, 2, 3)), _png(colour=(4, 5, 6))
+    doc = docx_bytes(para("Tabel 3") + para("Uang Beredar") + picture("rId1") + para("Grafik 5") + para("Kredit")
+                     + picture("rId2"), {"image1.png": table, "image2.png": chart})
+
+    assert [(c.caption, c.png) for c in word_charts(doc)] == [("Grafik 5", chart)]
+
+
+def test_a_caption_under_its_picture_has_one_title_line_and_not_the_heading_after_it():
+    doc = docx_bytes(picture("rId1") + para("Grafik 2") + para("Transaksi Berjalan") + para("Neraca Perdagangan Barang")
+                     + para("Neraca perdagangan barang triwulan II 2026 mencatat surplus yang lebih tinggi terutama "
+                            "dipengaruhi peningkatan surplus neraca perdagangan nonmigas dan defisit migas yang turun."),
+                     {"image1.png": _png()})
+
+    assert [(c.caption, c.title) for c in word_charts(doc)] == [("Grafik 2", "Transaksi Berjalan")]

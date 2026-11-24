@@ -14,9 +14,11 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional, Tuple
 
 from emf_render import render_emf
+from pdf_extraction import pdfium_exclusive
 from pdf_table_extraction import _page_lines
 from word_extraction import (
-    _ANY_CHART_CAPTION_RE, _TABLE_CAPTION_RE, _W, EmfText, _relationships, _walk, emf_text_boxes,
+    _ANY_CAPTION_RE, _ANY_CHART_CAPTION_RE, _TABLE_CAPTION_RE, _W, EmfText, _is_contents_entry, _relationships, _walk,
+    emf_text_boxes,
 )
 
 logger = logging.getLogger("fact-checker")
@@ -53,8 +55,16 @@ def _split_caption(text: str) -> Tuple[str, str]:
 
 
 def word_charts(docx: bytes) -> List[ChartImage]:
-    """Each "Grafik N" caption with the first picture after it. A table caption, or the next chart
-    caption, closes a caption that found no picture."""
+    """Each "Grafik N" caption with its picture, the caption printed above the picture (SKDU, UB) or
+    below it (NPI Tw II-2026: picture, then "Grafik 4", then its title).
+
+    Captions wait in order for the pictures after them: charts set side by side print both captions
+    (each with its title lines) and then both pictures (SKDU Tw III-2026 Grafik 3, 4). A picture no
+    caption is waiting for waits in turn for the caption under it. A table caption or a paragraph of
+    prose ends the waiting on both sides, so one caption without a picture never shifts the pictures
+    of the charts after it. The pictures under a "Tabel N" caption are the table's. A native Word
+    chart takes its caption's place and gives no picture. A sentence that starts "Grafik 2
+    menunjukkan …" and the list of charts are not captions."""
     with zipfile.ZipFile(io.BytesIO(docx)) as z:
         body = ET.fromstring(z.read("word/document.xml")).find(_W + "body")
         paragraphs: list = []
@@ -62,43 +72,77 @@ def word_charts(docx: bytes) -> List[ChartImage]:
             _walk(body, paragraphs)
         rels = _relationships(z)
         names = set(z.namelist())
-        charts: List[ChartImage] = []
-        # Captions waiting for their picture, oldest first: charts set side by side print both
-        # captions (each with its title lines) and then both pictures (SKDU Tw III-2026 Grafik 3, 4).
-        pending: List[List] = []                        # [caption, [title lines]]
-        for p in paragraphs:
+        found: List[dict] = []          # each caption: its title lines, picture rId, native chart
+        loose: List[str] = []           # pictures waiting for the caption under them
+        in_table = False                # pictures now belong to a "Tabel N" caption
+
+        def waiting():
+            return [entry for entry in found if entry["rid"] is None and not entry["native"]]
+
+        def end_waiting():
+            nonlocal loose
+            found[:] = [entry for entry in found if entry["rid"] is not None or entry["native"]]
+            loose = []
+            for entry in found:
+                entry["closed"] = True
+
+        for index, p in enumerate(paragraphs):
             text = (p.text or "").strip()
-            if _ANY_CHART_CAPTION_RE.match(text):
+            short = len(text) <= _TITLE_CHARS
+            if _ANY_CHART_CAPTION_RE.match(text) and short and not _is_contents_entry(paragraphs, index):
                 caption, title = _split_caption(text)
-                pending.append([caption, [title] if title else []])
-            elif _TABLE_CAPTION_RE.match(text):
-                pending = []
-            elif text and pending and len(pending[-1][1]) < _TITLE_LINES and len(text) <= _TITLE_CHARS:
+                for entry in found:
+                    if entry["rid"] is not None:
+                        entry["closed"] = True
+                found.append({"caption": caption, "lines": [title] if title else [], "native": False,
+                              "rid": loose.pop(0) if loose else None, "closed": False})
+                in_table = False
+            elif _TABLE_CAPTION_RE.match(text) or _ANY_CAPTION_RE.match(text):
+                end_waiting()                           # "Tabel 3", "Lampiran 1": the pictures under it are its
+                in_table = True
+            elif _ANY_CHART_CAPTION_RE.match(text) or not short:
+                end_waiting()                           # prose, a sentence about a chart, a list entry
+                in_table = False
+            elif text and found and not found[-1]["closed"] and len(found[-1]["lines"]) < (
+                    1 if found[-1]["rid"] is not None else _TITLE_LINES):
                 # The title printed under its caption, one or two lines ("Perkembangan Tenaga Kerja" /
-                # "LU Pertanian, Kehutanan, dan Perikanan").
-                pending[-1][1].append(text)
+                # "LU Pertanian, Kehutanan, dan Perikanan"); a line after its picture ("Sumber: …") is
+                # not. A caption under its picture has one title line: the next is the text's heading.
+                found[-1]["lines"].append(text)
+            for _ in p.charts:
+                open_ = waiting()
+                if open_:
+                    open_[0].update(native=True, closed=True)
+                    logger.info("%s: grafik bawaan Word, tidak ada gambar untuk dibaca", open_[0]["caption"])
             for rid in p.pictures:
-                if not pending:
+                open_ = waiting()
+                if open_:
+                    open_[0].update(rid=rid, closed=True)
+                elif not in_table:
+                    loose.append(rid)
+                    for entry in found:
+                        entry["closed"] = True
+        charts: List[ChartImage] = []
+        for entry in found:
+            path = rels.get(entry["rid"] or "", "")
+            if entry["native"] or path not in names:
+                continue
+            caption, title = entry["caption"], " ".join(entry["lines"])
+            data, ext = z.read(path), path.rsplit(".", 1)[-1].lower()
+            if ext in _MIMES:
+                charts.append(ChartImage(caption, title, None, data, _MIMES[ext]))
+            elif ext == "emf":
+                png = render_emf(data, max_px=_MAX_PX)
+                if png is None:
+                    logger.warning("%s: EMF tidak bisa digambar", caption)
                     continue
-                path = rels.get(rid, "")
-                caption, lines = pending.pop(0)
-                title = " ".join(lines)
-                if path not in names:
-                    continue
-                data, ext = z.read(path), path.rsplit(".", 1)[-1].lower()
-                if ext in _MIMES:
-                    charts.append(ChartImage(caption, title, None, data, _MIMES[ext]))
-                elif ext == "emf":
-                    png = render_emf(data, max_px=_MAX_PX)
-                    if png is None:
-                        logger.warning("%s: EMF tidak bisa digambar", caption)
-                        continue
-                    charts.append(ChartImage(caption, title, None, png, "image/png", emf_text_boxes(data)))
+                charts.append(ChartImage(caption, title, None, png, "image/png", emf_text_boxes(data)))
     return charts
 
 
 # --- PDF ---------------------------------------------------------------------------------------
 
+@pdfium_exclusive
 def _page_count(pdf: bytes) -> int:
     import pypdfium2 as pdfium
     document = pdfium.PdfDocument(pdf)
@@ -119,6 +163,7 @@ def _caption_lines(pdf: bytes) -> Dict[int, List[str]]:
             for page, (reading, _visual) in _page_lines(pdf).items()}
 
 
+@pdfium_exclusive
 def _render_page(pdf: bytes, page_number: int) -> bytes:
     import pypdfium2 as pdfium
     document = pdfium.PdfDocument(pdf)

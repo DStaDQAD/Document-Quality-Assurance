@@ -166,6 +166,7 @@ _R = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
 _V = "{urn:schemas-microsoft-com:vml}"
 _MC = "{http://schemas.openxmlformats.org/markup-compatibility/2006}"
+_CHART = "{http://schemas.openxmlformats.org/drawingml/2006/chart}"
 _PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 
 # Stricter than pdf_table_extraction._CAPTION_RE: in Word every paragraph is a candidate, and a
@@ -217,6 +218,9 @@ class _Paragraph:
     # Not a paragraph: the start of a real Word table holding no picture. Such a table is typed
     # into Word rather than pasted from Excel, and closes the caption above it (see _walk).
     word_table: bool = False
+    # Native Word charts (c:chart, relationship ids): no picture to read, but each takes the place
+    # of a chart picture under its "Grafik N" caption (chart_images.word_charts).
+    charts: List[str] = field(default_factory=list)
 
 
 def is_word_document(data: bytes) -> bool:
@@ -270,10 +274,13 @@ def _read_paragraph(p: ET.Element, out: List[_Paragraph]) -> None:
                 pictures.append(child.get(_R + "embed"))
             elif tag == _V + "imagedata" and child.get(_R + "id"):
                 pictures.append(child.get(_R + "id"))
+            elif tag == _CHART + "chart" and child.get(_R + "id"):
+                charts.append(child.get(_R + "id"))
             visit(child)
 
+    charts: List[str] = []
     visit(p)
-    out.append(_Paragraph(_clean("".join(texts)), pictures, page_break))
+    out.append(_Paragraph(_clean("".join(texts)), pictures, page_break, charts=charts))
     for box in boxes:
         _walk(box, out)
 
