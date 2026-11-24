@@ -25,6 +25,8 @@ _CAPTION = re.compile(r"^\s*(Grafik\s*\d+)\s*[.:]?\s*(.*)$", re.IGNORECASE)
 _MIMES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg"}
 _MAX_PX = 1600
 _SCANNED_BELOW_CHARS = 20          # a page whose text layer holds fewer characters is a picture
+_TITLE_LINES = 2                    # title lines under a chart caption, at most
+_TITLE_CHARS = 150                 # a longer line is prose, not a title
 _CONTENTS_PAGE = re.compile(r"\bDAFTAR\s+(?:GRAFIK|ISI|TABEL)\b", re.IGNORECASE)
 
 
@@ -61,18 +63,26 @@ def word_charts(docx: bytes) -> List[ChartImage]:
         rels = _relationships(z)
         names = set(z.namelist())
         charts: List[ChartImage] = []
-        pending: Optional[Tuple[str, str]] = None
+        # Captions waiting for their picture, oldest first: charts set side by side print both
+        # captions (each with its title lines) and then both pictures (SKDU Tw III-2026 Grafik 3, 4).
+        pending: List[List] = []                        # [caption, [title lines]]
         for p in paragraphs:
-            if _ANY_CHART_CAPTION_RE.match(p.text or ""):
-                pending = _split_caption(p.text)
-            elif _TABLE_CAPTION_RE.match(p.text or ""):
-                pending = None
+            text = (p.text or "").strip()
+            if _ANY_CHART_CAPTION_RE.match(text):
+                caption, title = _split_caption(text)
+                pending.append([caption, [title] if title else []])
+            elif _TABLE_CAPTION_RE.match(text):
+                pending = []
+            elif text and pending and len(pending[-1][1]) < _TITLE_LINES and len(text) <= _TITLE_CHARS:
+                # The title printed under its caption, one or two lines ("Perkembangan Tenaga Kerja" /
+                # "LU Pertanian, Kehutanan, dan Perikanan").
+                pending[-1][1].append(text)
             for rid in p.pictures:
-                if pending is None:
+                if not pending:
                     continue
                 path = rels.get(rid, "")
-                caption, title = pending
-                pending = None
+                caption, lines = pending.pop(0)
+                title = " ".join(lines)
                 if path not in names:
                     continue
                 data, ext = z.read(path), path.rsplit(".", 1)[-1].lower()

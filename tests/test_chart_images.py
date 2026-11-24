@@ -68,8 +68,9 @@ def test_a_table_caption_is_not_a_chart():
     assert word_charts(doc) == []
 
 
-def test_the_next_caption_closes_the_one_before():
-    doc = docx_bytes(para("Grafik 1. A") + para("Grafik 2. B") + picture("rId1"), {"image1.png": _png()})
+def test_a_caption_whose_pictures_never_come_is_dropped_at_the_next_table():
+    doc = docx_bytes(para("Grafik 1. A") + para("Tabel 1. Uang Beredar") + picture("rId1") + para("Grafik 2. B")
+                     + picture("rId2"), {"image1.png": _png(), "image2.png": _png()})
 
     assert [c.caption for c in word_charts(doc)] == ["Grafik 2"]
 
@@ -110,3 +111,25 @@ def test_the_list_of_charts_page_gives_no_charts(monkeypatch):
     charts, pages = pdf_charts(b"%PDF")
 
     assert charts == [] and [p.page_number for p in pages] == [7]
+
+
+def test_the_title_lines_after_a_caption_are_its_title():
+    # SKDU Tw III-2026: "Grafik 9" / "Perkembangan Tenaga Kerja" / "LU Pertanian, Kehutanan, dan Perikanan" / picture.
+    doc = docx_bytes(para("Grafik 9") + para("Perkembangan Tenaga Kerja") + para("LU Pertanian, Kehutanan, dan Perikanan")
+                     + picture("rId1"), {"image1.png": _png()})
+
+    [chart] = word_charts(doc)
+
+    assert (chart.caption, chart.title) == ("Grafik 9", "Perkembangan Tenaga Kerja LU Pertanian, Kehutanan, dan Perikanan")
+
+
+def test_charts_side_by_side_take_their_pictures_in_caption_order():
+    # SKDU Tw III-2026: "Grafik 3" "Kondisi Likuiditas" "Grafik 4" "Kondisi Rentabilitas", then both pictures.
+    first, second = _png(colour=(1, 2, 3)), _png(colour=(4, 5, 6))
+    doc = docx_bytes(para("Grafik 3") + para("Kondisi Likuiditas") + para("Grafik 4") + para("Kondisi Rentabilitas")
+                     + picture("rId1") + picture("rId2"), {"image1.png": first, "image2.png": second})
+
+    charts = word_charts(doc)
+
+    assert [(c.caption, c.title, c.png) for c in charts] == [("Grafik 3", "Kondisi Likuiditas", first),
+                                                             ("Grafik 4", "Kondisi Rentabilitas", second)]
