@@ -33,6 +33,20 @@ def _no_table_typo_model(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_pdf_tidy_model(monkeypatch):
+    """main hands every PDF's text layer to the text model to tidy (pdf_tidy). Tests run with a
+    key-less provider, so it would only fail and fall back page by page: the text stays as the
+    PDF gives it. Tests of the tidy step call pdf_tidy directly or patch it again."""
+    import pdf_tidy
+
+    async def unchanged(text, llm):
+        return text
+
+    monkeypatch.setattr(pdf_tidy, "tidy_text", unchanged)
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _fresh_pdf_table_cache():
     """main caches each PDF's transcribed tables by content, so that a PDF sent as a reference
     in one request is not transcribed again in the next. Tests reuse the same fake bytes with

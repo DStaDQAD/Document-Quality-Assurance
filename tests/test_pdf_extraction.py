@@ -440,3 +440,37 @@ def test_a_running_header_repeated_on_every_page_is_not_prose(
     asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock()))
 
     mock_vision.assert_called_once()
+
+
+# --- the text layer tidied by the model (pdf_tidy) ---------------------------------------------
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_extract_narrative_text_has_the_text_model_tidy_the_text_layer(mock_extract_text, mock_count_pages, monkeypatch):
+    import pdf_tidy
+    mock_extract_text.return_value = "[== Halaman 1 ==]\n" + _PROSE
+    mock_count_pages.return_value = 1
+    seen = []
+
+    async def tidy(text, llm):
+        seen.append((text, llm))
+        return text.replace("[== Halaman 1 ==]\n", "[== Halaman 1 ==]\nRAPI ")
+
+    monkeypatch.setattr(pdf_tidy, "tidy_text", tidy)
+    text_llm = Mock()
+
+    result = asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock(), text_llm=text_llm))
+
+    assert seen == [(mock_extract_text.return_value, text_llm)]
+    assert result.startswith("[== Halaman 1 ==]\nRAPI ")
+
+
+@patch("pdf_extraction._count_total_pages")
+@patch("pdf_extraction.extract_text_from_pdf")
+def test_extract_narrative_text_without_a_text_model_is_not_tidied(mock_extract_text, mock_count_pages, monkeypatch):
+    import pdf_tidy
+    mock_extract_text.return_value = "[== Halaman 1 ==]\n" + _PROSE
+    mock_count_pages.return_value = 1
+    monkeypatch.setattr(pdf_tidy, "tidy_text", Mock(side_effect=AssertionError("called")))
+
+    assert asyncio.run(extract_narrative_text(b"%PDF-1.4 fake", vision_llm=Mock())) == mock_extract_text.return_value

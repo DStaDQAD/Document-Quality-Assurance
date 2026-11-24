@@ -725,8 +725,15 @@ async def _run_paired_pipeline(
     if word is not None:
         narrative_text = word.narrative_text
     else:
+        # The text model tidies the text layer's split words and numbers ("Ju li", "Rp10. 448 ,1")
+        # under a lock that lets it move only spaces (pdf_tidy).
+        try:
+            tidy_llm = get_llm(temperature=0.0, callbacks=callbacks)
+        except Exception:
+            logger.warning("Model teks tidak tersedia; teks PDF tidak dirapikan", exc_info=True)
+            tidy_llm = None
         narrative_text = await extract_narrative_text(
-            pdf_bytes, vision_llm, on_vision_gap=_gap_recorder("pdf")
+            pdf_bytes, vision_llm, on_vision_gap=_gap_recorder("pdf"), text_llm=tidy_llm
         )
     n_pages = len(_PAGE_MARKER_RE.findall(narrative_text))
     n_chars = len(_PAGE_MARKER_RE.sub("", narrative_text).strip())

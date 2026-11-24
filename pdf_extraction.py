@@ -748,8 +748,13 @@ async def extract_narrative_text(
     file_bytes: bytes,
     vision_llm: Optional[BaseChatModel] = None,
     on_vision_gap: Optional[Callable[[List[int], str], None]] = None,
+    text_llm: Optional[BaseChatModel] = None,
 ) -> str:
     """Extract a PDF's narrative text, falling back to vision extraction when the text layer is too short.
+
+    With `text_llm`, a usable text layer is first tidied page by page by that model under a lock
+    that lets it move only spaces and line breaks (pdf_tidy): words and numbers the text layer
+    splits ("Ju li", "Rp10. 448 ,1") come out whole.
 
     Single entry point for any caller that needs the full narrative text (with page markers) —
     call this once and share the result across multiple downstream consumers instead of extracting
@@ -802,5 +807,9 @@ async def extract_narrative_text(
         # Statistical-table rows still leak into the text layer; strip them so the typo checker
         # and structured extractor only see prose. The vision path already runs this per-page
         # (see extract_text_from_pdf_vision_async); the text-layer path needs it too.
-        text = prose
+        if text_llm is not None:
+            import pdf_tidy  # here: pdf_tidy imports this module's PAGE_MARKER_RE
+            text = _strip_tabular_content(await pdf_tidy.tidy_text(text, text_llm))
+        else:
+            text = prose
     return text

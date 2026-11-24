@@ -99,7 +99,7 @@ def test_verify_paired_endpoint_reports_the_pages_that_were_not_checked(
     """Pages the model failed on must reach the reader, or the counts overstate the check."""
     mock_get_vision_llm.side_effect = RuntimeError("no key configured")
 
-    async def _narrative(pdf_bytes, vision_llm, on_vision_gap=None):
+    async def _narrative(pdf_bytes, vision_llm, on_vision_gap=None, text_llm=None):
         on_vision_gap([3], "503 overloaded")
         return "[== Halaman 1 ==]\nInflasi tumbuh 9,7% (yoy)."
 
@@ -169,3 +169,28 @@ def test_verify_paired_endpoint_passes_the_publication_to_the_table_parsers(
     )
 
     assert mock_verify_paired.call_args.kwargs["publication"] == "sulni"
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.extract_narrative_text")
+@patch("main.get_vision_llm")
+def test_a_pdf_report_has_its_text_layer_tidied_by_the_text_model(
+    mock_get_vision_llm, mock_extract_narrative_text, mock_verify_paired, mock_check_typos
+):
+    mock_get_vision_llm.side_effect = RuntimeError("no key configured")
+    mock_extract_narrative_text.return_value = "[== Halaman 1 ==]\nInflasi tumbuh 9,7% (yoy)."
+    mock_verify_paired.return_value = _fact_response(total_facts=1, entailed_count=1)
+    mock_check_typos.return_value = TypoCheckResponse(total_issues=0, ejaan_count=0, tidak_baku_count=0,
+                                                      grammar_count=0, summary="", issues=[])
+
+    response = client.post(
+        "/api/verify-paired",
+        files=[
+            ("pdf_file", ("report.pdf", b"%PDF-1.4 fake", "application/pdf")),
+            ("excel_file", ("TABEL1_1.xls", b"xls-bytes", "application/vnd.ms-excel")),
+        ],
+    )
+
+    assert response.status_code == 200
+    assert mock_extract_narrative_text.call_args.kwargs.get("text_llm") is not None
