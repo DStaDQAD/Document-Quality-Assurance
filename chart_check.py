@@ -5,19 +5,21 @@ against the tables' series. See docs/superpowers/specs/2026-11-23-chart-check-de
 Two model calls per chart: `read_chart` (the picture + the tables' rows, no values) and
 `judge_drawing` (the picture + the mapped series' data). The labels are judged by the program.
 """
+import asyncio
+import base64
 import logging
 import re
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Tuple
 
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, ValidationError
 
 from paired_verifier import _period_ordinal
 
-from chart_images import ChartImage
-from chart_vision import NO_IMAGE, ChartUnreadable, ask_chart
+from chart_images import ChartImage, ScannedPage
+from chart_vision import NO_IMAGE, ChartUnreadable, ask_chart, locate_charts
 from copilot_chat import extract_json
-from schemas import FactVerificationResult
+from schemas import ChartCheck, FactVerificationResult
 from strict.claims import Cell, Claim
 from strict.evaluate import evaluate_claim
 from strict.tables import TableView, find_column, find_row, parse_period, period_header, table_block
@@ -228,3 +230,70 @@ def label_results(read: ChartRead, views: List[TableView], caption: str) -> List
         result = evaluate_claim(_claim(label, read, by_code, caption), views)
         out.append(result.model_copy(update={"checked_item": "chart"}))
     return out
+
+
+# --- one card per chart ------------------------------------------------------------------------------
+
+_SEVERITY = {"Entailed": 0, "Inconclusive": 1, "Refuted": 2}
+
+
+def _thumbnail(png: bytes) -> Optional[str]:
+    from pdf_chart_extraction import _thumbnail as thumbnail
+    return thumbnail(base64.b64encode(png).decode("ascii"))
+
+
+async def _card(chart: ChartImage, views: List[TableView], llm: BaseChatModel) -> ChartCheck:
+    read = await read_chart(chart, views, llm)
+    results = label_results(read, views, chart.caption)
+    data = series_data(read, views)
+    try:
+        judged = await judge_drawing(chart, data, llm)
+    except ChartUnreadable:
+        logger.warning("%s: penilaian gambar tidak terbaca", chart.caption, exc_info=True)
+        judged = None
+    counts = {verdict: sum(r.verdict == verdict for r in results) for verdict in _SEVERITY}
+    if results:
+        # The verdict most labels got, a tie going to the worse (Tidak Sesuai, then Tidak Cukup Data).
+        verdict = max(counts, key=lambda v: (counts[v], _SEVERITY[v]))
+    else:
+        verdict = "Entailed" if judged is not None and judged.verdict == "masuk akal" else "Inconclusive"
+    return ChartCheck(
+        page_number=chart.page_number, caption=chart.caption, title=chart.title or read.title,
+        verdict=verdict, label_count=len(results), entailed_count=counts["Entailed"],
+        refuted_count=counts["Refuted"], inconclusive_count=counts["Inconclusive"],
+        issues=[r for r in results if r.verdict != "Entailed"], thumbnail=_thumbnail(chart.png),
+        drawing=judged.verdict if judged else None, drawing_note=judged.reason if judged else "",
+        unchecked_series=[s.name for s in read.series if s.name not in data],
+    )
+
+
+async def check_charts(charts: List[ChartImage], scanned: List[ScannedPage], views: List[TableView],
+                       llm: BaseChatModel,
+                       on_progress: Optional[Callable[[int, int], None]] = None) -> Tuple[List[ChartCheck], List[str]]:
+    """One card per chart (scanned pages located first), and the charts that could not be read.
+    A chart's failure never stops the others; the model client caps how many run at once."""
+    unread: List[str] = []
+    located = await asyncio.gather(*(locate_charts(page, llm) for page in scanned), return_exceptions=True)
+    for page, found in zip(scanned, located):
+        if isinstance(found, BaseException):
+            logger.warning("Halaman %d: letak grafik tidak terbaca (%s)", page.page_number, found)
+            unread.append(f"Hal. {page.page_number}")
+        else:
+            charts = list(charts) + found
+    done = 0
+
+    async def one(chart: ChartImage) -> Optional[ChartCheck]:
+        nonlocal done
+        try:
+            return await _card(chart, views, llm)
+        except Exception as e:                          # one chart never fails the check
+            logger.warning("%s tidak terbaca: %s", chart.caption, e)
+            unread.append(chart.caption)
+            return None
+        finally:
+            done += 1
+            if on_progress is not None:
+                on_progress(done, len(charts))
+
+    cards = await asyncio.gather(*(one(chart) for chart in charts))
+    return [card for card in cards if card is not None], unread

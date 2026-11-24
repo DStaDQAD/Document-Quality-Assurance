@@ -4,6 +4,7 @@ Every check goes through here (verify_paired hands it over after reading the doc
 sheets and applying the team's settings): Word or PDF, time-series or category tables, whatever
 parser read them. There is no other path for a check the app runs.
 """
+import asyncio
 import logging
 from typing import Callable, Dict, List, Optional
 
@@ -72,12 +73,26 @@ async def run_check(
     mode: str = "excel",
     table_texts: Optional[Dict[str, str]] = None,
     unreadable_tables: Optional[Dict[str, str]] = None,
+    charts: Optional[list] = None,
+    scanned: Optional[list] = None,
 ) -> PairedVerificationResponse:
     def emit(stage: str, status: str, **extra) -> None:
         if progress_cb is not None:
             progress_cb({"type": "stage", "stage": stage, "status": status, **extra})
 
     views = build_views(sources)
+    # The charts are checked alongside the narrative (each chart is two model calls; the client
+    # caps how many run at once), and waited for at the end.
+    chart_task = None
+    if charts or scanned:
+        import chart_check  # here, as ai_review: it builds on strict
+        emit("charts", "running")
+
+        def _on_chart(done: int, total: int) -> None:
+            emit("charts", "running", current=done, total=total, detail=f"{total} grafik")
+
+        chart_task = asyncio.create_task(
+            chart_check.check_charts(charts or [], scanned or [], views, llm, on_progress=_on_chart))
     workbooks = [v for v in views if v.source.origin == "excel"]
     documents = [v for v in views if v.source.origin != "excel"]
 
@@ -133,6 +148,17 @@ async def run_check(
     inconclusive = sum(r.verdict == "Inconclusive" for r in results)
     detail = f"{entailed} sesuai · {refuted} tidak sesuai · {inconclusive} tidak dapat dipastikan"
     emit("compare", "done", detail=detail + (f" · {n_reviewed} diubah tinjauan AI" if n_reviewed else ""))
+    chart_checks = []
+    if chart_task is not None:
+        try:
+            chart_checks, unread = await chart_task
+            if unread:
+                ai_notes.append("Grafik ini tidak terbaca sehingga tidak diperiksa: " + ", ".join(unread) + ".")
+        except Exception:
+            logger.warning("Cek grafik gagal; hasil narasi tetap dipakai", exc_info=True)
+            ai_notes.append("Cek grafik tidak selesai; grafik tidak diperiksa.")
+        n_labels = sum(c.label_count for c in chart_checks)
+        emit("charts", "done", detail=f"{len(chart_checks)} grafik · {n_labels} label angka")
     return PairedVerificationResponse(
         pdf_filename=pdf_filename,
         excel_filenames=[s.filename for s in sources],
@@ -147,4 +173,5 @@ async def run_check(
         results=results,
         strict_claims=[claim_to_dict(c) for c in claims],
         ai_notes=ai_notes,
+        chart_checks=chart_checks,
     )

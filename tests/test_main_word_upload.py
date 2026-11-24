@@ -227,3 +227,46 @@ def test_a_failing_table_typo_check_keeps_the_narratives(mock_vision, mock_verif
 
     assert response.status_code == 200, response.text
     assert response.json()["typo_check"]["summary"] == "Tidak ditemukan isu."
+
+
+_WORD_WITH_CHART = docx_bytes(
+    para("Posisi M2 pada April 2026 tercatat sebesar Rp10.253,7 triliun.")
+    + para("Tabel 1.  Uang Beredar dan Komponennya (triliun Rp)") + picture("rId1")
+    + para("Grafik 1. Pertumbuhan M2 (yoy)") + picture("rId2"),
+    {"image1.emf": emf_bytes(SNIPPET_RUNS), "image2.png": b"\x89PNG\r\n\x1a\n" + bytes(20)},
+)
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.get_vision_llm")
+def test_a_word_upload_hands_its_charts_to_the_check(mock_vision, mock_verify, mock_typos):
+    mock_vision.return_value = Mock()
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired?mode=internal",
+                           files=[("pdf_file", ("laporan.docx", _WORD_WITH_CHART, _DOCX_MIME))])
+
+    assert response.status_code == 200, response.text
+    assert [c.caption for c in mock_verify.call_args.kwargs["charts"]] == ["Grafik 1"]
+    assert response.json()["charts_checked"] is True
+
+
+@patch("main.check_typos")
+@patch("main.verify_paired")
+@patch("main.get_vision_llm")
+def test_check_charts_false_reads_no_charts(mock_vision, mock_verify, mock_typos):
+    mock_vision.return_value = Mock()
+    mock_verify.return_value = _fact_response()
+    mock_typos.return_value = _typo_response()
+
+    response = client.post("/api/verify-paired-stream?mode=internal&check_charts=false",
+                           files=[("pdf_file", ("laporan.docx", _WORD_WITH_CHART, _DOCX_MIME))])
+
+    assert response.status_code == 200
+    assert mock_verify.call_args.kwargs["charts"] == []
+    events = [json.loads(line) for line in response.text.splitlines() if line.strip()]
+    assert not [e for e in events if e.get("stage") == "charts"]
+    final = [e for e in events if e.get("type") == "result"]
+    assert final and final[-1]["data"]["charts_checked"] is False

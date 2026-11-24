@@ -5758,6 +5758,8 @@ async def verify_paired(
     table_texts: Optional[Dict[str, str]] = None,
     unreadable_tables: Optional[Dict[str, str]] = None,
     legacy_label_path: bool = False,
+    charts: Optional[list] = None,
+    scanned: Optional[list] = None,
 ) -> PairedVerificationResponse:
     """Verify all quantitative claims in a PDF narrative against one or more reference tables.
 
@@ -5904,6 +5906,7 @@ async def verify_paired(
             review_llm=review_llm, review_new_refuted=review_new_refuted, progress_cb=progress_cb,
             on_extract_gap=on_extract_gap, excel_parsers=excel_parsers, mode=mode,
             table_texts=table_texts, unreadable_tables=unreadable_tables,
+            charts=charts, scanned=scanned,
         )
 
     # Per-source label groups with table title context (used by the LLM to understand

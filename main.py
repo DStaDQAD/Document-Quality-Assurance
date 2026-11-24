@@ -116,6 +116,7 @@ from schemas import (
     VerifyDocumentResponse,
 )
 from translation_llm import check_translation_llm
+from chart_images import pdf_charts, word_charts
 from table_typos import TableWords, check_table_typos, merge_typos, pdf_table_words, word_table_words
 from typo_checker import check_typos
 from verifier import build_judge_chain, build_sql_chain, verify_claim
@@ -641,6 +642,7 @@ async def _run_paired_pipeline(
     mode: str = "excel",
     run_typo_check: bool = True,
     reference_pdfs: Optional[List[Tuple[bytes, str]]] = None,
+    check_charts: bool = True,
     checker_name: str = "",
     publication: str = "",
 ) -> PairedVerificationResponse:
@@ -812,6 +814,19 @@ async def _run_paired_pipeline(
     async def _maybe_typo_check():
         return await _run_typo_check() if run_typo_check else None
 
+    # The document's charts, as pictures (Word pictures after "Grafik N", EMF drawn by emf_render;
+    # PDF regions; scanned PDF pages for the model to locate charts on). Checked inside strict.
+    charts: list = []
+    scanned: list = []
+    if check_charts:
+        try:
+            if word is not None:
+                charts = await asyncio.to_thread(word_charts, pdf_bytes)
+            else:
+                charts, scanned = await asyncio.to_thread(pdf_charts, pdf_bytes)
+        except Exception:
+            logger.warning("Grafik dokumen tidak bisa dibaca; cek grafik dilewati", exc_info=True)
+
     # Fact verification and the typo/grammar check both only depend on narrative_text,
     # so run them concurrently to overlap their LLM round-trips instead of waiting for
     # the whole fact check to finish before the (single-call) typo pass even starts.
@@ -832,6 +847,8 @@ async def _run_paired_pipeline(
             review_new_refuted=_ai_review_new_refuted(),
             table_texts=word.table_texts if word is not None else None,
             unreadable_tables=word.unreadable_tables if word is not None else None,
+            charts=charts,
+            scanned=scanned,
         ),
         _maybe_typo_check(),
     )
@@ -871,6 +888,7 @@ async def _run_paired_pipeline(
         "coverage_gaps": coverage_gaps,
         "unread_tables": _unread_tables(word, mode),
         "charts_title_only": len(chart_titles(word.narrative_text)) if word is not None else 0,
+        "charts_checked": check_charts,
     })
     return await _record_in_history(
         response,
@@ -929,6 +947,7 @@ async def verify_paired_endpoint(
     sheet_names: str = "I.1",
     mode: str = "excel",
     run_typo_check: bool = True,
+    check_charts: bool = True,
     reference_pdf: List[UploadFile] = File(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
@@ -952,6 +971,10 @@ async def verify_paired_endpoint(
 
     run_typo_check: set false to skip the spelling/grammar pass (typo_check comes back null).
 
+    check_charts: set false to skip the chart check (on by default). On, every chart of the
+    document is read by the model: its printed labels are judged against the tables, its drawing
+    against the tables' series (chart_checks); the choice is kept in charts_checked.
+
     checker_name: optional; stored with the check in the history (GET /api/history).
 
     publication: optional publication type ("sk", "uang-primer-m0", ...; see
@@ -968,7 +991,7 @@ async def verify_paired_endpoint(
     try:
         return await _run_paired_pipeline(
             pdf_bytes, pdf_name, excel_sources, mode=mode, run_typo_check=run_typo_check,
-            reference_pdfs=references, checker_name=checker_name,
+            reference_pdfs=references, check_charts=check_charts, checker_name=checker_name,
             publication=publication,
         )
     except Exception as exc:
@@ -983,6 +1006,7 @@ async def verify_paired_stream_endpoint(
     sheet_names: str = "I.1",
     mode: str = "excel",
     run_typo_check: bool = True,
+    check_charts: bool = True,
     reference_pdf: List[UploadFile] = File(
         default=[], description="The other PDFs of the run; their tables are a fallback reference."
     ),
@@ -1018,6 +1042,7 @@ async def verify_paired_stream_endpoint(
                 return await _run_paired_pipeline(
                     pdf_bytes, pdf_name, excel_sources, emit=queue.put_nowait,
                     mode=mode, run_typo_check=run_typo_check, reference_pdfs=references,
+                    check_charts=check_charts,
                     checker_name=checker_name,
                     publication=publication,
                 )

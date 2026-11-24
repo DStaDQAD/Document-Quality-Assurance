@@ -228,3 +228,68 @@ def test_the_prompt_carries_the_data_and_the_judgement_parses():
     assert "Q2 2026 = 12,97" in model.messages[0][0].content[0]["text"]
     assert isinstance(judged, DrawingJudgement)
     assert (judged.verdict, judged.series[0].off_periods, judged.last_period_same) == ("perlu dicek", ["Q2 2026"], True)
+
+
+# --- cards, and the check runs them -------------------------------------------------------------
+
+import chart_check
+from chart_check import check_charts
+
+
+def _fake_steps(monkeypatch, reads, judged=None, unreadable=()):
+    async def read(chart, views, llm):
+        if chart.caption in unreadable:
+            raise ChartUnreadable("no picture")
+        return reads[chart.caption]
+
+    async def judge(chart, data, llm):
+        return judged
+
+    monkeypatch.setattr(chart_check, "read_chart", read)
+    monkeypatch.setattr(chart_check, "judge_drawing", judge)
+
+
+def test_a_chart_card_counts_its_labels_and_carries_the_drawing(monkeypatch):
+    _fake_steps(monkeypatch, {"Grafik 1": _read([("12,97", "SBT", "Q2 2026"), ("13,00", "SBT", "Q3 2026"),
+                                                 ("4,04", "PDB", "Q2 2025")])},
+                DrawingJudgement(verdict="perlu dicek", reason="Q3 2026 menyimpang"))
+
+    cards, unread = asyncio.run(check_charts([ChartImage("Grafik 1", "Kegiatan Usaha", None, _png())], [], _views(), object()))
+
+    [card] = cards
+    assert (card.caption, card.label_count, card.entailed_count, card.refuted_count, card.inconclusive_count) == (
+        "Grafik 1", 3, 1, 1, 1)
+    assert card.verdict == "Refuted"                    # a tie goes to the worse
+    assert (card.drawing, card.drawing_note) == ("perlu dicek", "Q3 2026 menyimpang")
+    assert card.unchecked_series == ["PDB"]                  # in no uploaded table
+    assert len(card.issues) == 2 and unread == []
+
+
+def test_a_chart_with_no_labels_takes_its_status_from_the_drawing(monkeypatch):
+    _fake_steps(monkeypatch, {"Grafik 2": _read([])}, DrawingJudgement(verdict="masuk akal"))
+
+    [card], _ = asyncio.run(check_charts([ChartImage("Grafik 2", "", None, _png())], [], _views(), object()))
+
+    assert (card.label_count, card.verdict, card.drawing) == (0, "Entailed", "masuk akal")
+
+
+def test_one_unreadable_chart_does_not_stop_the_others(monkeypatch):
+    _fake_steps(monkeypatch, {"Grafik 2": _read([("12,97", "SBT", "Q2 2026")])}, unreadable={"Grafik 1"})
+    charts = [ChartImage("Grafik 1", "", None, _png()), ChartImage("Grafik 2", "", None, _png())]
+
+    cards, unread = asyncio.run(check_charts(charts, [], _views(), object()))
+
+    assert [c.caption for c in cards] == ["Grafik 2"] and unread == ["Grafik 1"]
+
+
+def test_scanned_pages_are_located_before_they_are_checked(monkeypatch):
+    _fake_steps(monkeypatch, {"Grafik 5": _read([("12,97", "SBT", "Q2 2026")])})
+
+    async def locate(page, llm):
+        return [ChartImage("Grafik 5", "", page.page_number, _png())]
+
+    monkeypatch.setattr(chart_check, "locate_charts", locate)
+
+    cards, _ = asyncio.run(check_charts([], [ScannedPage(7, _png())], _views(), object()))
+
+    assert [(c.caption, c.page_number) for c in cards] == [("Grafik 5", 7)]

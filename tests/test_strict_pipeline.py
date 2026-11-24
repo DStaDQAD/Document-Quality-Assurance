@@ -349,3 +349,37 @@ def test_no_second_stage_when_the_workbooks_answer_everything(mock_parse, monkey
             llm=_staged_llm(seen, [AFLN], [NETO_IN_DOC]))
 
     assert len(seen) == 1
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_run_check_fills_chart_checks(mock_parse, monkeypatch):
+    import chart_check
+    from chart_images import ChartImage
+    from schemas import ChartCheck
+
+    mock_parse.return_value = _table()
+    seen = {}
+
+    async def fake_check(charts, scanned, views, llm, on_progress=None):
+        seen["charts"], seen["codes"] = [c.caption for c in charts], [v.code for v in views]
+        return ([ChartCheck(caption="Grafik 1", title="", verdict="Entailed", label_count=1, entailed_count=1,
+                            refuted_count=0, inconclusive_count=0, drawing="masuk akal")], ["Grafik 2"])
+
+    monkeypatch.setattr(chart_check, "check_charts", fake_check)
+
+    response = _verify(llm=_llm([]), charts=[ChartImage("Grafik 1", "", None, b"png"), ChartImage("Grafik 2", "", None, b"png")])
+
+    assert seen == {"charts": ["Grafik 1", "Grafik 2"], "codes": ["S1"]}
+    assert [c.caption for c in response.chart_checks] == ["Grafik 1"]
+    assert any("Grafik 2" in note for note in response.ai_notes)
+
+
+@patch("paired_verifier.parse_bi_table")
+def test_no_charts_means_no_chart_check(mock_parse, monkeypatch):
+    import chart_check
+    mock_parse.return_value = _table()
+    monkeypatch.setattr(chart_check, "check_charts", Mock(side_effect=AssertionError("called")))
+
+    response = _verify(llm=_llm([]))
+
+    assert response.chart_checks == []

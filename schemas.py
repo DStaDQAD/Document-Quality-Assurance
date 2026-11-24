@@ -149,7 +149,7 @@ class ChartCheck(BaseModel):
     Only the labels that did not come back Sesuai are carried, in `issues`; the others are
     counted.
     """
-    page_number: int
+    page_number: Optional[int] = None  # PDF page; None for a Word chart
     caption: str                      # "Grafik 2"
     title: str                        # "IKK per Kelompok Pengeluaran"
     verdict: Literal["Entailed", "Refuted", "Inconclusive"]
@@ -160,6 +160,12 @@ class ChartCheck(BaseModel):
     issues: List[FactVerificationResult] = Field(default_factory=list)
     # The chart itself, small: a data-URL JPEG of the region its labels were read from.
     thumbnail: Optional[str] = None
+    # The drawing judged against the tables' series (chart_check.judge_drawing): "masuk akal" or
+    # "perlu dicek" with its reason; None when no series of the chart is in the uploaded tables.
+    drawing: Optional[Literal["masuk akal", "perlu dicek"]] = None
+    drawing_note: str = ""
+    # Legend series no uploaded table holds: their labels are Tidak Cukup Data, their lines unjudged.
+    unchecked_series: List[str] = Field(default_factory=list)
 
 
 class TypoIssue(BaseModel):
@@ -265,6 +271,8 @@ class PairedVerificationResponse(BaseModel):
     # of printed labels behind them; chart_pages_unread the pages whose charts were located but
     # came back unread.
     chart_checks: List[ChartCheck] = Field(default_factory=list)
+    # Whether the "Cek grafik" box was ticked for this check (None: a check from before it came back).
+    charts_checked: Optional[bool] = None
     chart_label_count: int = 0
     chart_pages_unread: List[int] = Field(default_factory=list)
     # A strict check's claims with the cells they name (strict.claims.claim_to_dict), so a replay
