@@ -196,3 +196,35 @@ def test_a_row_or_period_the_table_lacks_is_tidak_cukup_data():
                                          ("10,77*", 10.77), ("1.287", 1287.0), ("−0,1", -0.1), ("Tw.II", None)])
 def test_printed_forms_parse(text, value):
     assert parse_label(text) == value
+
+
+# --- the drawing against the data ---------------------------------------------------------------
+
+from chart_check import DrawingJudgement, judge_drawing, series_data
+
+
+def test_series_data_reads_the_mapped_row_up_to_the_last_period():
+    read = ChartRead(last_period="Q2 2026", series=[SeriesRef(name="SBT", table="S1", row="TOTAL"),
+                                                    SeriesRef(name="PDB", table=None, row=None)])
+
+    assert series_data(read, _views()) == {"SBT": [("Q3 2025", 11.55), ("Q2 2026", 12.97)]}
+
+
+def test_no_mapped_series_means_no_call():
+    model = _Model("{}")
+
+    assert asyncio.run(judge_drawing(ChartImage("Grafik 1", "", None, _png()), {}, model)) is None
+    assert model.messages == []
+
+
+def test_the_prompt_carries_the_data_and_the_judgement_parses():
+    reply = ('{"last_period_same": true, "series": [{"name": "SBT", "fits": "tidak", "off_periods": ["Q2 2026"],'
+             ' "note": "turun"}], "verdict": "perlu dicek", "reason": "Q2 2026 menyimpang"}')
+    model = _Model(reply)
+
+    judged = asyncio.run(judge_drawing(ChartImage("Grafik 1", "Kegiatan Usaha", None, _png()),
+                                       {"SBT": [("Q3 2025", 11.55), ("Q2 2026", 12.97)]}, model))
+
+    assert "Q2 2026 = 12,97" in model.messages[0][0].content[0]["text"]
+    assert isinstance(judged, DrawingJudgement)
+    assert (judged.verdict, judged.series[0].off_periods, judged.last_period_same) == ("perlu dicek", ["Q2 2026"], True)
