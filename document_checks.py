@@ -77,16 +77,43 @@ _NEGATIVE_WORD_RE = re.compile(r"\b(?:terkontraksi|kontraksi|minus|negatif)\b[^\
 _FALL_WORD_RE = re.compile(r"\b(?:turun|menurun|penurunan)\b(?:\s+sebesar)?\s*$", re.IGNORECASE)
 
 
+# "19 juta dolar AS, jauh lebih rendah dibandingkan … 1,5 miliar dolar AS" (NPI Tw III-2026): the
+# two figures are compared in one unit.
+_SCALE_RE = re.compile(r"\s*(ribu|juta|miliar|triliun)\b", re.IGNORECASE)
+_SCALES = {"ribu": 1e3, "juta": 1e6, "miliar": 1e9, "triliun": 1e12}
+# A figure a PDF text layer split with a space ("77, 6" for 77,6; "Rp10. 448 ,1"; "202 6" for
+# 2026): its parts are not figures of their own, so the comparison is left alone.
+_SPLIT_BEFORE_RE = re.compile(r"(?:(?:^|[^\d.,])\d{1,3}[.,]|\b(?:19|20)\d)\s+$")
+_SPLIT_AFTER_RE = re.compile(r"^\s+[.,]?\d")
+
+
+class _Figure(float):
+    """A figure as printed, with the scale of its unit word (1e9 for "miliar"), if any."""
+    scale: Optional[float] = None
+
+
+def _in_one_unit(a: float, b: float) -> Tuple[float, float]:
+    """The two figures to compare: scaled when both name a unit and the units differ."""
+    sa, sb = getattr(a, "scale", None), getattr(b, "scale", None)
+    if sa and sb and sa != sb:
+        return a * sa, b * sb
+    return float(a), float(b)
+
+
 def _plain_numbers(text: str) -> List[Tuple[float, bool]]:
     """(value, has_percent) of each figure in `text`, without the years ("2026"), the table and
-    chart numbers ("Tabel 3", "Grafik 2") and a bound ("(indeks >100)"). Raises _Unsure on a
-    figure only a fall word sizes."""
+    chart numbers ("Tabel 3", "Grafik 2") and a bound ("(indeks >100)"); "juta", "miliar" and
+    the like scale it. Raises _Unsure on a figure only a fall word sizes, and on a figure the text
+    layer split ("77, 6", "202 6")."""
     found: List[Tuple[float, bool]] = []
     for m in _NUMBER_RE.finditer(text):
         raw = m.group(0)
         if re.fullmatch(r"(19|20)\d\d", raw):
             continue
         before = text[max(0, m.start() - 30):m.start()]
+        after = text[m.end():m.end() + 12]
+        if _SPLIT_BEFORE_RE.search(before) or (_SPLIT_AFTER_RE.match(after) and not re.match(r"\s+\d+[.,]\d", after)):
+            raise _Unsure()
         if re.search(r"(tabel|grafik|gambar|lampiran|halaman|boks)\s*$", before, re.IGNORECASE):
             continue
         if re.search(r"[<>≤≥=]\s*$", before):
@@ -98,7 +125,10 @@ def _plain_numbers(text: str) -> List[Tuple[float, bool]]:
             raise _Unsure()
         if value > 0 and _NEGATIVE_WORD_RE.search(before):
             value = -value
-        found.append((value, text[m.end():m.end() + 2].lstrip().startswith("%")))
+        scale = _SCALE_RE.match(after)
+        figure = _Figure(value)
+        figure.scale = _SCALES[scale.group(1).lower()] if scale else None
+        found.append((figure, text[m.end():m.end() + 2].lstrip().startswith("%")))
     return found
 
 
@@ -150,8 +180,9 @@ def _wrong_comparisons(sentence: str) -> List[Tuple[float, float, str]]:
             # sizes of two contractions: between two negatives the words may mean either way.
             if a < 0 and b < 0:
                 continue
-            if a_pct == b_pct and a != b and (a > b) != higher:
-                wrong.append((a, b, m.group(1).lower()))
+            x, y = _in_one_unit(a, b)
+            if a_pct == b_pct and x != y and (x > y) != higher:
+                wrong.append((float(a), float(b), m.group(1).lower()))
     return wrong
 
 
@@ -182,23 +213,27 @@ def _wrong_directions(sentence: str) -> List[Tuple[float, float, str]]:
             into = _INTO_RE.search(tail)
             if into:
                 news = _plain_numbers(tail[into.end():into.end() + _AFTER_WINDOW])
-                old, new = olds[0], (news[0] if news else None)
+                pairs = [(news[0], olds[0])] if news else []
             else:
-                # The new figure is the last one of the same clause before the word.
+                # The new figure is the last one of the same clause before the word. "3,2 … dan 5,9 …,
+                # menurun dari 3,8 … dan 7,8" (NPI Tw III-2026) lists two of each: paired in order.
                 clause = re.split(_CLAUSE_END_RE, head)[-1]
                 before = _plain_numbers(clause)
-                old, new = olds[0], (before[-1] if before else None)
+                listed = _plain_numbers(tail) if re.search(r"\bdan\b", tail, re.IGNORECASE) else olds[:1]
+                if len(listed) >= 2:
+                    pairs = list(zip(before[-len(listed):], listed)) if len(before) >= len(listed) else []
+                else:
+                    pairs = [(before[-1], olds[0])] if before else []
         except _Unsure:
             continue
-        if new is None:
-            continue
-        (a, a_pct), (b, b_pct) = new, old
-        # A contraction on either side: the words may be about its size.
-        if a < 0 or b < 0 or a_pct != b_pct or a == b:
-            continue
         rise = m.group(1).lower() in _RISE
-        if (a > b) != rise:
-            wrong.append((a, b, m.group(1).lower()))
+        for (a, a_pct), (b, b_pct) in pairs:
+            # A contraction on either side: the words may be about its size.
+            x, y = _in_one_unit(a, b)
+            if a < 0 or b < 0 or a_pct != b_pct or x == y:
+                continue
+            if (x > y) != rise:
+                wrong.append((float(a), float(b), m.group(1).lower()))
     return wrong
 
 

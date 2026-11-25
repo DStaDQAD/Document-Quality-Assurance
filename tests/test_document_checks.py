@@ -340,3 +340,35 @@ def test_every_chart_pointer_with_a_caption_is_left_to_the_model():
 def test_a_pdf_has_no_chart_check_either():
     sentence = "Ekspor nonmigas tumbuh 10,5% (Grafik 12)."
     assert _findings(dc.check_document(_with_charts(sentence), [])) == []
+
+
+# --- NPI Tw III-2026 R0.1, She Asa's check of 2026-11-20 ----------------------------------------
+
+def test_two_figures_against_two_earlier_ones_are_paired_in_order():
+    # Not "3,8 → 5,9": crude oil 3,8 → 3,2 and refinery products 7,8 → 5,9, both falling.
+    sentence = ("Impor minyak mentah dan produk kilang pada triwulan III 2026 tercatat sebesar 3,2 miliar dolar AS "
+                "dan 5,9 miliar dolar AS, menurun dari 3,8 miliar dolar AS dan 7,8 miliar dolar AS pada triwulan II 2026.")
+    assert _findings(dc.check_document(_narrative(sentence), [])) == []
+
+
+def test_two_figures_paired_in_order_still_catch_a_wrong_direction():
+    sentence = ("Impor minyak mentah dan produk kilang pada triwulan III 2026 tercatat sebesar 3,2 miliar dolar AS "
+                "dan 8,9 miliar dolar AS, menurun dari 3,8 miliar dolar AS dan 7,8 miliar dolar AS pada triwulan II 2026.")
+    [found] = _findings(dc.check_document(_narrative(sentence), []))
+    assert "dari 7,8 ke 8,9" in found.reasoning
+
+
+def test_juta_and_miliar_are_compared_in_one_unit():
+    sentence = ("Di pasar surat utang, sisi kewajiban sektor swasta mencatat net inflow sebesar 19 juta dolar AS, "
+                "jauh lebih rendah dibandingkan dengan net inflow sebesar 1,5 miliar dolar AS pada triwulan II 2026.")
+    assert _findings(dc.check_document(_narrative(sentence), [])) == []
+
+
+def test_a_number_the_text_layer_split_is_not_judged():
+    # PDF text layers: "77, 6" for 77,6 and "202 6" for 2026, when the tidy step left the text as it was.
+    split_decimal = ("Secara nominal, ekspor nonmigas pada triwulan III 2026 tercatat sebesar 77, 6 miliar dolar AS, "
+                     "lebih tinggi dibandingkan dengan triwulan II 2026 sebesar 70,5 miliar dolar AS.")
+    split_year = ("Di sisi aset, arus keluar neto investasi langsung pada triwulan III 2026 tercatat sebesar 2,8 "
+                  "miliar dolar AS, lebih tinggi dibandingkan dengan triwulan II 202 6 sebesar 2,6 miliar dolar AS.")
+    assert _findings(dc.check_document(_narrative(split_decimal), [])) == []
+    assert _findings(dc.check_document(_narrative(split_year), [])) == []
