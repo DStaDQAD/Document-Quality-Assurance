@@ -4,9 +4,11 @@ PDFium makes up spaces where a justified line spreads its letters: UB Agustus 20
 "Rp10. 448 ,1", "Ju li", "Pertumb uhan"; SK Agustus 2026 as "202 6" and "12 3,8". The pattern
 depends on how each PDF was produced (UB April 2026, from the same team, is clean), so no rule
 written for the patterns seen so far covers the next PDF. The model tidies the whole page instead,
-and the program keeps its answer only when every paragraph is in the page letter for letter once
-spaces and line breaks are set aside: it can join "12 3,8" into "123,8" and never make it "12,38".
-A page whose answer is refused, leaves out prose, fails, or times out stays as it was.
+and the program keeps each paragraph of its answer only when it is in the page letter for letter
+once spaces and line breaks are set aside: it can join "12 3,8" into "123,8" and never make it
+"12,38". A paragraph it changed, and anything it left out, comes from the page's own text in its
+place, so every letter and digit of the page comes out exactly once (lock). A page whose call
+fails or times out stays as it was.
 
 Measured 2026-11-24 (Copilot Studio) against the Word text of the same reports: sentences with
 numbers that come through intact, UB Agustus 22 → 68 of 73, SK Agustus 11 → 36 of 36, UB April
@@ -26,7 +28,6 @@ logger = logging.getLogger("fact-checker")
 
 MAX_AT_ONCE = 4                   # pages with the model at once
 MIN_PAGE_CHARS = 200              # a page with less text (a chart page, a cover) is not sent
-MIN_COVER = 0.9                   # share of the page's prose lines the answer must keep
 
 TIDY_PROMPT = """Berikut teks satu halaman laporan Bank Indonesia yang diambil dari lapisan teks PDF. Teks
 ini bisa rusak: kata atau angka terbelah oleh spasi ("Ju li", "Rp10. 448 ,1", "202 6"), spasi
@@ -50,30 +51,48 @@ TEKS HALAMAN:
 # The line-end hyphen PDFs store as U+FFFE or as a soft hyphen reads as "-". A minus sign is never
 # folded away, so the model can neither drop nor add one.
 _HYPHEN_LIKE = {"￾": "-", "­": "-", "‐": "-", "‑": "-"}
-_WORD = re.compile(r"[A-Za-z]{3,}")
 
 
 def _letters(text: str) -> str:
     """The text with every space and line break removed and line-end hyphens read as "-"."""
-    return "".join(_HYPHEN_LIKE.get(ch, ch) for ch in re.sub(r"\s+", "", text))
+    return "".join(_HYPHEN_LIKE.get(ch, ch) for ch in text if not ch.isspace())
 
 
-def lock(page: str, answer: str) -> Optional[str]:
-    """The model's tidy page, one paragraph per line, when every paragraph is in `page` letter for
-    letter (spaces aside) and the paragraphs keep at least MIN_COVER of the page's prose lines;
-    None otherwise."""
+def lock(page: str, answer: str) -> str:
+    """The page with the model's tidy paragraphs where they match it letter for letter (spaces
+    aside), and the page's own text everywhere else, in the page's order.
+
+    A paragraph whose letters are not in the page (a digit, a minus sign or a word changed) is not
+    used; text the model left out or dropped (a footnote, a page number) comes back from the page
+    in its place. Every letter and digit of the page comes out exactly once."""
     original = _letters(page)
-    paragraphs = [" ".join(p.split()) for p in re.split(r"\n\s*\n", answer.strip())]
-    paragraphs = [p for p in paragraphs if p]
-    if not paragraphs or any(_letters(p) not in original for p in paragraphs):
-        return None
-    kept = _letters(" ".join(paragraphs))
-    # Prose lines: long, with words (chart labels and table rows are short or mostly numbers).
-    prose = [_letters(line) for line in page.splitlines()
-             if len(line.strip()) >= 60 and len(_WORD.findall(line)) >= 8]
-    if prose and sum(line[:25] in kept for line in prose) / len(prose) < MIN_COVER:
-        return None
-    return "\n".join(paragraphs)
+    where = [i for i, ch in enumerate(page) if not ch.isspace()]   # page index of each letter
+    covered = [False] * len(original)
+    pieces = []                                                    # (first letter, text)
+    for paragraph in (" ".join(p.split()) for p in re.split(r"\n\s*\n", answer.strip())):
+        letters = _letters(paragraph)
+        if not letters:
+            continue
+        start = original.find(letters)
+        while start >= 0 and any(covered[start:start + len(letters)]):
+            start = original.find(letters, start + 1)
+        if start < 0:
+            continue                                               # changed text: the page's own is used
+        covered[start:start + len(letters)] = [True] * len(letters)
+        pieces.append((start, paragraph))
+    if not pieces:
+        return page
+    k = 0
+    while k < len(original):
+        if covered[k]:
+            k += 1
+            continue
+        end = k
+        while end < len(original) and not covered[end]:
+            end += 1
+        pieces.append((k, page[where[k]:where[end - 1] + 1].strip()))
+        k = end
+    return "\n".join(text for _, text in sorted(pieces))
 
 
 def _content(message) -> str:
@@ -92,11 +111,7 @@ async def _tidy_page(page: str, llm: BaseChatModel, gate: asyncio.Semaphore, num
     except Exception as e:                          # the page as it was: the check goes on
         logger.warning("Halaman %s: teks PDF tidak dirapikan (%s)", number, e)
         return page
-    tidy = lock(page, answer)
-    if tidy is None:
-        logger.info("Halaman %s: rapian AI ditolak kunci, teks asli dipakai", number)
-        return page
-    return tidy
+    return lock(page, answer)
 
 
 async def tidy_text(text: str, llm: BaseChatModel) -> str:
