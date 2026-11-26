@@ -25,7 +25,7 @@ def test_shell_and_apis_open_when_credentials_unset(monkeypatch):
     client = _client()
     assert client.get("/").status_code == 200
     status = client.get("/api/auth-status").json()
-    assert status == {"auth_required": False, "authenticated": True}
+    assert status == {"auth_required": False, "authenticated": True, "settings": True}
 
 
 def test_shell_stays_open_when_auth_enabled(monkeypatch):
@@ -41,7 +41,7 @@ def test_auth_status_reports_locked_when_enabled_and_no_session(monkeypatch):
     monkeypatch.setenv("APP_PASSWORD", PASS)
 
     status = _client().get("/api/auth-status").json()
-    assert status == {"auth_required": True, "authenticated": False}
+    assert status == {"auth_required": True, "authenticated": False, "settings": False}
 
 
 def test_data_api_returns_401_without_session(monkeypatch):

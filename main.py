@@ -116,6 +116,7 @@ from schemas import (
     VerifyDocumentResponse,
 )
 from translation_llm import check_translation_llm
+import app_users
 from chart_images import pdf_charts, word_charts
 from table_typos import TableWords, check_table_typos, merge_typos, pdf_table_words, word_table_words
 from typo_checker import check_typos
@@ -222,26 +223,41 @@ def _session_secret() -> bytes:
     return hashlib.sha256(seed.encode()).digest()
 
 
-def _issue_session() -> str:
-    payload = f"{os.getenv('APP_USERNAME', '')}:{int(time.time())}"
+def _issue_session(user: str) -> str:
+    payload = f"{user}:{int(time.time())}"
     sig = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
     return f"{payload}.{sig}"
 
 
-def _valid_session(cookie: str) -> bool:
+def _is_main_user(user: Optional[str]) -> bool:
+    return user is not None and user == os.getenv("APP_USERNAME", "")
+
+
+def _session_user(cookie: str) -> Optional[str]:
+    """The account a session cookie was issued to: the main account or a guest still listed in
+    APP_USERS (app_users), within SESSION_MAX_AGE; None otherwise."""
     payload, sep, sig = cookie.rpartition(".")
     if not sep:
-        return False
+        return None
     expected = hmac.new(_session_secret(), payload.encode(), hashlib.sha256).hexdigest()
     if not secrets.compare_digest(sig, expected):
-        return False
+        return None
     user, sep, issued = payload.partition(":")
-    if not sep or user != os.getenv("APP_USERNAME", ""):
-        return False
+    if not sep or not (_is_main_user(user) or user in app_users.guest_users()):
+        return None
     try:
-        return (time.time() - int(issued)) < SESSION_MAX_AGE
+        return user if (time.time() - int(issued)) < SESSION_MAX_AGE else None
     except ValueError:
-        return False
+        return None
+
+
+def _valid_session(cookie: str) -> bool:
+    return _session_user(cookie) is not None
+
+
+def _may_open_settings(user: Optional[str]) -> bool:
+    """Pengaturan is the main account's: guests (APP_USERS) use every other page."""
+    return not _auth_enabled() or _is_main_user(user)
 
 
 @app.middleware("http")
@@ -251,9 +267,15 @@ async def auth_middleware(request: Request, call_next):
     # and the auth endpoints). Only gate /api/* that isn't an auth endpoint.
     if not _auth_enabled() or not path.startswith("/api/") or path in _OPEN_API_PATHS:
         return await call_next(request)
-    if _valid_session(request.cookies.get(SESSION_COOKIE, "")):
-        return await call_next(request)
-    return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    user = _session_user(request.cookies.get(SESSION_COOKIE, ""))
+    if user is None:
+        return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+    # A guest reads GET /api/settings (the Quality Assurance page shows its publications, upload
+    # hints and checker names from it) but changes nothing and reads no history of changes.
+    reads_page_data = request.method == "GET" and path == "/api/settings"
+    if path.startswith("/api/settings") and not reads_page_data and not _may_open_settings(user):
+        return JSONResponse({"detail": "Akun ini tidak bisa membuka Pengaturan."}, status_code=403)
+    return await call_next(request)
 # --------------------------------------------------------------------------
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -294,8 +316,10 @@ async def favicon() -> FileResponse:
 @app.get("/api/auth-status")
 async def auth_status(request: Request) -> dict:
     """Lets the shell decide whether to show the login overlay. Open endpoint."""
-    authed = (not _auth_enabled()) or _valid_session(request.cookies.get(SESSION_COOKIE, ""))
-    return {"auth_required": _auth_enabled(), "authenticated": authed}
+    user = _session_user(request.cookies.get(SESSION_COOKIE, ""))
+    authed = (not _auth_enabled()) or user is not None
+    return {"auth_required": _auth_enabled(), "authenticated": authed,
+            "settings": authed and _may_open_settings(user)}
 
 
 @app.post("/api/login")
@@ -304,11 +328,13 @@ async def api_login(
     username: str = Form(...),
     password: str = Form(...),
 ):
-    ok = (
+    main_ok = (
         _auth_enabled()
         and secrets.compare_digest(username, os.getenv("APP_USERNAME", ""))
         and secrets.compare_digest(password, os.getenv("APP_PASSWORD", ""))
     )
+    stored = app_users.guest_users().get(username) if _auth_enabled() and not main_ok else None
+    ok = main_ok or (stored is not None and app_users.verify_password(password, stored))
     if not ok:
         return JSONResponse({"ok": False, "detail": "Invalid credentials"}, status_code=401)
 
@@ -322,7 +348,7 @@ async def api_login(
     resp = JSONResponse({"ok": True})
     resp.set_cookie(
         SESSION_COOKIE,
-        _issue_session(),
+        _issue_session(username),
         max_age=SESSION_MAX_AGE,
         httponly=True,
         samesite="none" if is_https else "lax",

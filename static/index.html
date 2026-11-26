@@ -1625,7 +1625,11 @@ body.auth-locked .app {
   const PANEL_TITLES = { paired: "Quality Assurance", translation: "Cek Terjemahan", history: "History", settings: "Settings", data: "Lihat Data" };
 
   // Also called from code (opening a history entry, its back button), not only from the nav.
+  // A guest account (APP_USERS) has no Pengaturan: its menu item is hidden (applyAccount) and the
+  // server refuses its changes too.
+  let canOpenSettings = true;
   function showTab(tab) {
+    if (tab === "settings" && !canOpenSettings) tab = "paired";
     highlightNav(tab);
     document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
     document.getElementById(`panel-${tab}`).classList.add("active");
@@ -4464,6 +4468,11 @@ body.auth-locked .app {
     const userEl = document.getElementById("auth-username");
     const passEl = document.getElementById("auth-password");
 
+    function applyAccount(status) {
+      canOpenSettings = status.settings !== false;
+      const item = document.querySelector('.nav-item[data-tab="settings"]');
+      if (item) item.hidden = !canOpenSettings;
+    }
     function unlock() {
       document.body.classList.remove("auth-locked");
       document.querySelector(".app").inert = false;
@@ -4485,7 +4494,14 @@ body.auth-locked .app {
       try {
         const body = new URLSearchParams({ username: userEl.value, password: passEl.value });
         const resp = await fetch("/api/login", { method: "POST", body });
-        if (resp.ok) { unlock(); return; }
+        if (resp.ok) {
+          try {
+            const r = await fetch("/api/auth-status", { headers: { accept: "application/json" } });
+            applyAccount(await r.json());
+          } catch (_) { /* the server still refuses a guest's changes */ }
+          unlock();
+          return;
+        }
       } catch (_) { /* fall through to error */ }
       errorEl.classList.add("show");
       passEl.value = "";
@@ -4501,6 +4517,7 @@ body.auth-locked .app {
       } catch (_) {
         status = { auth_required: false, authenticated: true };
       }
+      applyAccount(status);
       if (!status.auth_required || status.authenticated) unlock();
       else showForm();
     })();
