@@ -1199,6 +1199,10 @@ table.data-table tbody tr:hover { background: var(--blue-50); }
   transition: transform 0.22s cubic-bezier(0.4,0,0.2,1);
 }
 .sidebar.collapsed .sidebar-collapse-btn .material-symbols-outlined { transform: rotate(180deg); }
+.sidebar.collapsed .sidebar-logout-btn .material-symbols-outlined { transform: none; }
+/* A guest account has no Settings, and Logout shows only behind a login: their display: flex
+   would otherwise win over the hidden attribute. */
+.nav-item[hidden], .sidebar-collapse-btn[hidden] { display: none; }
 
 /* ══ Login gate: the real app renders blurred behind a login card ══ */
 .app { transition: filter .55s ease, transform .55s ease; }
@@ -1318,6 +1322,10 @@ body.auth-locked .app {
   </nav>
 
   <div class="sidebar-footer">
+    <button type="button" class="sidebar-collapse-btn sidebar-logout-btn" id="logout-btn" title="Logout" hidden>
+      <span class="material-symbols-outlined">logout</span>
+      <span class="nav-text">Logout</span>
+    </button>
     <button class="sidebar-collapse-btn" id="sidebar-toggle" title="Tutup panel">
       <span class="material-symbols-outlined">chevron_left</span>
       <span class="nav-text">Tutup Panel</span>
@@ -4472,7 +4480,14 @@ body.auth-locked .app {
       canOpenSettings = status.settings !== false;
       const item = document.querySelector('.nav-item[data-tab="settings"]');
       if (item) item.hidden = !canOpenSettings;
+      // Logout only where there is a login to end.
+      document.getElementById("logout-btn").hidden = !(status.auth_required && status.authenticated);
     }
+    document.getElementById("logout-btn").addEventListener("click", async () => {
+      try { await fetch("/api/logout", { method: "POST" }); } catch (_) { /* the reload asks again */ }
+      window.location.hash = "";
+      window.location.reload();
+    });
     function unlock() {
       document.body.classList.remove("auth-locked");
       document.querySelector(".app").inert = false;
